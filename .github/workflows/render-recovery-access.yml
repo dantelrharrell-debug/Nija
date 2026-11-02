@@ -10,7 +10,11 @@ concurrency:
   group: render-recovery-access
   cancel-in-progress: false
 jobs:
+  baseline:
+    uses: ./.github/workflows/render-production-baseline.yml
+    secrets: inherit
   network:
+    needs: baseline
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -33,7 +37,7 @@ jobs:
           print('RENDER_SSH_TCP_OK')
           PY
   authenticated-access:
-    needs: network
+    needs: [baseline, network]
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -41,6 +45,7 @@ jobs:
         shell: bash
         env:
           RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+          APPROVED_COMMIT: ${{ needs.baseline.outputs.approved_commit }}
         run: |
           set -eu
           if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
@@ -68,7 +73,7 @@ jobs:
             -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
             -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
             srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
-            'command python -S -' <<'PY'
+            "env NIJA_APPROVED_RENDER_COMMIT=$APPROVED_COMMIT python -B -S -" <<'PY'
           import fcntl
           import hashlib
           import json
@@ -78,6 +83,10 @@ jobs:
           import tempfile
           import time
           from pathlib import Path
+
+          if (os.environ.get('RENDER_SERVICE_ID') != 'srv-d98dsr5aeets73fpbaqg'
+                  or os.environ.get('RENDER_GIT_COMMIT') != os.environ.get('NIJA_APPROVED_RENDER_COMMIT')):
+              raise SystemExit('BLOCKED: independently approved deployment changed')
 
           source = Path('/app/bot/kraken_sqlite_readonly_preflight_v488.py')
           expected = '480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452'
@@ -174,6 +183,7 @@ jobs:
           request_id = '0b59ce9b959041e7b0f2140fb177bb28'
           claim = root / (request_id + '.claimed.json')
           receipt = root / (request_id + '.evidence.json')
+          history_complete = False
           if receipt.exists():
               if receipt.is_symlink() or stat.S_IMODE(receipt.stat().st_mode) & 0o077:
                   raise SystemExit('BLOCKED: history receipt not private')
@@ -183,6 +193,7 @@ jobs:
                       or row.get('trading_authorized') is not False):
                   raise SystemExit('BLOCKED: probe receipt identity or outcome invalid')
               state = 'completed' if row['collection_succeeded'] else 'failed'
+              history_complete = row['collection_succeeded']
               print('NIJA_HISTORY_RECOVERY_' + state.upper())
               safe_codes = {
                   'api_failure', 'malformed_result', 'invalid_count', 'invalid_cursor',
@@ -228,4 +239,44 @@ jobs:
               # request. Any future collection needs its own separately
               # reviewed and explicitly authorized workflow and request ID.
               raise SystemExit('BLOCKED: no existing history request or receipt; no automatic submission')
+          if issues:
+              raise SystemExit('BLOCKED: required ledger/protective-order evidence unresolved')
+          if not history_complete:
+              raise SystemExit('BLOCKED: completed existing history evidence required')
           PY
+  outcomes:
+    if: always()
+    needs: [baseline, network, authenticated-access]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish diagnostic outcomes separately from certification
+        env:
+          BASELINE_RESULT: ${{ needs.baseline.result }}
+          NETWORK_RESULT: ${{ needs.network.result }}
+          ACCESS_RESULT: ${{ needs.authenticated-access.result }}
+        run: |
+          python -I - <<'PY'
+          import json, os
+          from pathlib import Path
+          baseline = os.environ["BASELINE_RESULT"] == "success"
+          success = baseline and os.environ["NETWORK_RESULT"] == "success" and os.environ["ACCESS_RESULT"] == "success"
+          report = {
+              "WORKFLOW_EXECUTION_SUCCESS": success,
+              "DEPLOYMENT_BASELINE_VERIFIED": baseline,
+              "SOURCE_INTEGRITY_VERIFIED": baseline,
+              "RUNTIME_ACCESS_VERIFIED": baseline,
+              "BROKER_EVIDENCE_VERIFIED": False,
+              "CERTIFICATION_COMPLETE": False,
+              "mode": "READ_ONLY_RECOVERY", "allow_new_orders": False,
+          }
+          Path("recovery-outcomes.json").write_text(json.dumps(report, sort_keys=True) + "\n")
+          print(json.dumps(report, sort_keys=True))
+          raise SystemExit(0 if success else 2)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: render-recovery-outcomes
+          path: recovery-outcomes.json
+          if-no-files-found: error

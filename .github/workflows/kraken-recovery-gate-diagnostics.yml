@@ -7,7 +7,7 @@ on:
         type: boolean
         default: false
       identity_compare:
-        description: Request ONE GetApiKeyInfo comparison via existing broker; never replay or authorize orders
+        description: Read the existing one-shot identity receipt only; never publish or replay requests
         type: boolean
         default: false
 permissions:
@@ -16,7 +16,11 @@ concurrency:
   group: kraken-recovery-gate-diagnostics
   cancel-in-progress: false
 jobs:
+  baseline:
+    uses: ./.github/workflows/render-production-baseline.yml
+    secrets: inherit
   inspect:
+    needs: baseline
     if: inputs.current_instance != true && inputs.identity_compare != true
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -25,6 +29,7 @@ jobs:
         shell: bash
         env:
           RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+          APPROVED_COMMIT: ${{ needs.baseline.outputs.approved_commit }}
         run: |
           set -eu
           if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
@@ -52,14 +57,19 @@ jobs:
             -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
             -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
             srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
-            'command python -S -' <<'PY'
+            "env NIJA_APPROVED_RENDER_COMMIT=$APPROVED_COMMIT python -B -S -" <<'PY'
           import hashlib
           import os
           import stat
           from pathlib import Path
 
+          if (os.environ.get('RENDER_SERVICE_ID') != 'srv-d98dsr5aeets73fpbaqg'
+                  or os.environ.get('RENDER_GIT_COMMIT') != os.environ.get('NIJA_APPROVED_RENDER_COMMIT')):
+              raise SystemExit('BLOCKED: independently approved deployment changed')
+
           def checked_file(label, path, expected):
               p = Path(path)
+              safe = False
               try:
                   info = p.lstat()
                   safe = stat.S_ISREG(info.st_mode) and not p.is_symlink()
@@ -115,19 +125,22 @@ jobs:
               raise SystemExit('BLOCKED: reviewed production prerequisites not verified')
           PY
   current-instance:
+    needs: baseline
     if: inputs.current_instance == true || inputs.identity_compare == true
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.baseline.outputs.verification_source_commit }}
           persist-credentials: false
-      - name: Inspect baseline and optionally request one existing-broker identity read
+      - name: Inspect baseline and optionally read the existing identity receipt
         id: instance
         shell: bash
         env:
           RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
           IDENTITY_COMPARE: ${{ inputs.identity_compare }}
+          APPROVED_COMMIT: ${{ needs.baseline.outputs.approved_commit }}
         run: |
           set -eu
           if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
@@ -155,35 +168,70 @@ jobs:
             -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
             -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
             srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
-            'command python -B -S -' < scripts/nija_kraken_instance_diagnostic.py)
+            "env NIJA_APPROVED_RENDER_COMMIT=$APPROVED_COMMIT python -B -S -" < scripts/nija_kraken_instance_diagnostic.py) || {
+              printf '%s\n' "$report"
+              exit 2
+          }
           printf '%s\n' "$report"
           instance=$(printf '%s\n' "$report" | jq -r '.instance_id // ""')
           if [[ "$instance" =~ ^[a-zA-Z0-9-]{1,100}$ ]]; then
             printf 'instance=%s\n' "$instance" >> "$GITHUB_OUTPUT"
           fi
           if [ "$IDENTITY_COMPARE" = 'true' ]; then
-            for attempt in $(seq 1 13); do
-              remote='command python -B -S - --identity-result'
-              if [ "$attempt" -eq 1 ]; then
-                remote='command python -B -S - --request-identity'
-              fi
-              identity=$(ssh -T -i "$recovery_dir/key" \
-                -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
-                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$recovery_dir/known_hosts" \
-                -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
-                -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
-                srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
-                "$remote" < scripts/nija_kraken_instance_diagnostic.py)
+            remote="env NIJA_APPROVED_RENDER_COMMIT=$APPROVED_COMMIT python -B -S - --identity-result"
+            identity=$(ssh -T -i "$recovery_dir/key" \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$recovery_dir/known_hosts" \
+              -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
+              -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
+              srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
+              "$remote" < scripts/nija_kraken_instance_diagnostic.py) || {
               printf '%s\n' "$identity"
-              status=$(printf '%s\n' "$identity" | jq -r '.status')
-              if [ "$status" != 'PENDING' ] && [ "$status" != 'CLAIMED' ]; then
-                break
-              fi
-              if [ "$attempt" -lt 13 ]; then sleep 10; fi
-            done
+              exit 2
+            }
+            printf '%s\n' "$identity"
           fi
       - name: Read current-instance Render logs and deployment metadata
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           EXPECTED_RENDER_INSTANCE: ${{ steps.instance.outputs.instance }}
+          NIJA_APPROVED_RENDER_COMMIT: ${{ needs.baseline.outputs.approved_commit }}
+          NIJA_APPROVED_RENDER_DEPLOYMENT_ID: ${{ needs.baseline.outputs.approved_deployment_id }}
         run: python -B -S scripts/nija_kraken_instance_diagnostic.py --render-api
+  outcomes:
+    if: always()
+    needs: [baseline, inspect, current-instance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish diagnostic outcomes separately from certification
+        env:
+          BASELINE_RESULT: ${{ needs.baseline.result }}
+          INSPECT_RESULT: ${{ needs.inspect.result }}
+          INSTANCE_RESULT: ${{ needs.current-instance.result }}
+        run: |
+          python -I - <<'PY'
+          import json, os
+          from pathlib import Path
+          baseline = os.environ["BASELINE_RESULT"] == "success"
+          jobs = [os.environ["INSPECT_RESULT"], os.environ["INSTANCE_RESULT"]]
+          success = baseline and sorted(jobs) == ["skipped", "success"]
+          report = {
+              "WORKFLOW_EXECUTION_SUCCESS": success,
+              "DEPLOYMENT_BASELINE_VERIFIED": baseline,
+              "SOURCE_INTEGRITY_VERIFIED": baseline,
+              "RUNTIME_ACCESS_VERIFIED": baseline,
+              "BROKER_EVIDENCE_VERIFIED": False,
+              "CERTIFICATION_COMPLETE": False,
+              "mode": "READ_ONLY_RECOVERY", "allow_new_orders": False,
+          }
+          Path("recovery-outcomes.json").write_text(json.dumps(report, sort_keys=True) + "\n")
+          print(json.dumps(report, sort_keys=True))
+          raise SystemExit(0 if success else 2)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kraken-recovery-outcomes
+          path: recovery-outcomes.json
+          if-no-files-found: error

@@ -22,7 +22,17 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 SERVICE = "srv-d98dsr5aeets73fpbaqg"
-BASELINE = "00be8a441a78bdd9043b8744d4591ed804a58182"
+BASELINE = os.environ.get("NIJA_APPROVED_RENDER_COMMIT", "")
+RELEASE_BRANCH = "release/justcall-handoff-only-20261017"
+SOURCE_PATHS = (
+    "bot/kraken_sqlite_readonly_preflight_v488.py",
+    "bot/kraken_live_history_recovery.py",
+    "bot/universal_broker_exit_supervisor_patch.py",
+    "bot/kraken_identity_request_recovery_v491.py",
+    "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py",
+    "bot/broker_manager.py", "bot/canonical_broker_startup_convergence_v24.py",
+    "scripts/render_entrypoint.sh", "scripts/production_bootstrap.sh", "start.sh",
+)
 MAX_BYTES = 4 * 1024 * 1024
 # Keep the consumed one-shot request stable when the approved baseline advances.
 IDENTITY_REQUEST = "85c2521edd9754d6f6f7df677f8d6231"
@@ -113,8 +123,11 @@ def inspect_instance() -> dict:
     if os.environ.get("RENDER_SERVICE_ID") != SERVICE:
         return {"status": "BLOCKED", "reason": "service_identity_mismatch"}
     commit = os.environ.get("RENDER_GIT_COMMIT", "")
-    if commit != BASELINE:
-        return {"status": "BLOCKED", "reason": "baseline_commit_mismatch"}
+    if not re.fullmatch(r"[0-9a-f]{40}", BASELINE) or commit != BASELINE:
+        return {
+            "status": "BLOCKED", "reason": "baseline_commit_mismatch",
+            "observed_commit": commit if re.fullmatch(r"[0-9a-f]{40}", commit) else None,
+        }
     result = {
         "status": "DIAGNOSTIC_ONLY", "service_id": SERVICE, "commit": commit,
         "observed_at_epoch": time.time(), "broker_requests": False,
@@ -173,10 +186,7 @@ def inspect_instance() -> dict:
             result["failures"].append("current_process_log_evidence_unavailable")
     else:
         result["failures"].append("canonical_runtime_process_not_found")
-    for relative in (
-        "bot/broker_manager.py", "bot/canonical_broker_startup_convergence_v24.py",
-        "scripts/render_entrypoint.sh", "scripts/production_bootstrap.sh", "start.sh",
-    ):
+    for relative in SOURCE_PATHS:
         try:
             result["source_sha256"][relative] = hashlib.sha256(
                 _read_regular(Path("/app") / relative, MAX_BYTES)
@@ -186,7 +196,7 @@ def inspect_instance() -> dict:
     return result
 
 
-def inspect_render_api() -> dict:
+def inspect_render_api(*, deployment_only: bool = False) -> dict:
     """Fetch sanitized live-deploy metadata and exact-instance logs from Render."""
     result = {
         "status": "BLOCKED", "broker_requests": False, "allow_new_orders": False,
@@ -197,10 +207,6 @@ def inspect_render_api() -> dict:
     if not token:
         result["failures"].append("render_api_credential_unavailable")
         return result
-    if not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", instance):
-        result["failures"].append("current_instance_identity_unavailable")
-        return result
-
     def get(path: str) -> object:
         request = Request("https://api.render.com/v1/" + path, headers={
             "Authorization": "Bearer " + token, "Accept": "application/json",
@@ -215,9 +221,6 @@ def inspect_render_api() -> dict:
         service = get("services/" + SERVICE)
         if not isinstance(service, dict) or service.get("id") != SERVICE:
             raise ValueError("render_service_response_invalid")
-        owner = service.get("ownerId")
-        if not isinstance(owner, str) or not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", owner):
-            raise ValueError("render_owner_identity_unavailable")
         deployments = get("services/" + SERVICE + "/deploys?limit=5")
         if not isinstance(deployments, list):
             raise ValueError("render_deploy_response_invalid")
@@ -226,13 +229,31 @@ def inspect_render_api() -> dict:
             if isinstance(row, dict) and isinstance(row.get("deploy"), dict)
             and row["deploy"].get("status") == "live"
             and isinstance(row["deploy"].get("commit"), dict)
-            and row["deploy"]["commit"].get("id") == BASELINE
         ]
-        if len(live) != 1 or not re.fullmatch(r"dep-[a-zA-Z0-9]+", live[0].get("id", "")):
+        if (len(live) != 1 or not re.fullmatch(r"dep-[a-zA-Z0-9]+", live[0].get("id", ""))
+                or not re.fullmatch(r"[0-9a-f]{40}", live[0]["commit"].get("id", ""))):
             raise ValueError("expected_live_deployment_unverified")
         result["deployment_id"] = live[0]["id"]
-        result["commit"] = BASELINE
+        result["commit"] = live[0]["commit"]["id"]
+        branch = service.get("branch")
+        result["release_branch_verified"] = branch == RELEASE_BRANCH
+        result["branch"] = branch if branch in (RELEASE_BRANCH, "main") else "unverified_branch"
         result["deployment_status"] = "live"
+        result["service_id"] = SERVICE
+        result["observed_at_epoch"] = time.time()
+        if deployment_only:
+            result["status"] = "DIAGNOSTIC_ONLY"
+            return result
+        if (not re.fullmatch(r"[0-9a-f]{40}", BASELINE) or result["commit"] != BASELINE
+                or result["deployment_id"] != os.environ.get("NIJA_APPROVED_RENDER_DEPLOYMENT_ID")
+                or not result["release_branch_verified"]):
+            raise ValueError("approved_deployment_mismatch")
+        if not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", instance):
+            result["failures"].append("current_instance_identity_unavailable")
+            return result
+        owner = service.get("ownerId")
+        if not isinstance(owner, str) or not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", owner):
+            raise ValueError("render_owner_identity_unavailable")
         counts: Counter[str] = Counter()
         seen: set[str] = set()
         observed_instances: set[str] = set()
@@ -311,6 +332,7 @@ def identity_probe(*, publish: bool = False) -> dict:
         "request_created": False,
     }
     if (os.environ.get("RENDER_SERVICE_ID") != SERVICE
+            or not re.fullmatch(r"[0-9a-f]{40}", BASELINE)
             or os.environ.get("RENDER_GIT_COMMIT") != BASELINE):
         return {**result, "reason": "baseline_instance_unverified"}
     root = RECOVERY_ROOT
@@ -419,12 +441,24 @@ def identity_probe(*, publish: bool = False) -> dict:
         return {**result, "reason": "identity_probe_failed_closed"}
 
 
+def report_succeeded(report: dict) -> bool:
+    """Distinguish diagnostic execution from verified evidence; never authorize trading."""
+    if report.get("status") == "IDENTITY_RECEIPT":
+        return report.get("configured_account_key_match") is True and report.get("fresh") is True
+    return report.get("status") == "DIAGNOSTIC_ONLY" and report.get("failures") == []
+
+
 if __name__ == "__main__":
     import sys
     if sys.argv[1:] == ["--render-api"]:
         report = inspect_render_api()
+    elif sys.argv[1:] == ["--render-deployment"]:
+        report = inspect_render_api(deployment_only=True)
     elif sys.argv[1:] in (["--request-identity"], ["--identity-result"]):
         report = identity_probe(publish=sys.argv[1:] == ["--request-identity"])
-    else:
+    elif not sys.argv[1:]:
         report = inspect_instance()
+    else:
+        report = {"status": "BLOCKED", "reason": "unsupported_diagnostic_mode"}
     print(json.dumps(report, sort_keys=True))
+    raise SystemExit(0 if report_succeeded(report) else 2)
