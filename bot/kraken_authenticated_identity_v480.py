@@ -25,6 +25,34 @@ MAX_READ_SECONDS = 60.0
 class KrakenIdentityDenied(ValueError):
     """Fixed, non-sensitive refusal; never attach raw API data."""
 
+    def __init__(self, reason: str, *, response_shape: Mapping[str, str] | None = None) -> None:
+        super().__init__(reason)
+        # Only fixed field names and fixed classifications may cross this boundary.
+        fields = {"apiKey", "iban", "validUntil", "permissions"}
+        states = {"missing", "null", "empty_string", "string", "list", "other"}
+        self.response_shape = ({k: v for k, v in response_shape.items()
+                                if k in fields and isinstance(v, str) and v in states}
+                               if isinstance(response_shape, Mapping) else {})
+
+
+def _identity_response_shape(row: Mapping[str, Any]) -> dict[str, str]:
+    """Describe documented fields without returning values or arbitrary API keys."""
+    shape = {}
+    for field in ("apiKey", "iban", "validUntil", "permissions"):
+        value = row.get(field)
+        if field not in row:
+            state = "missing"
+        elif value is None:
+            state = "null"
+        elif isinstance(value, str):
+            state = "string" if value else "empty_string"
+        elif isinstance(value, list):
+            state = "list"
+        else:
+            state = "other"
+        shape[field] = state
+    return shape
+
 
 def _canonical_scope(scope: Any) -> bool:
     if not isinstance(scope, str) or not scope or scope != scope.strip():
@@ -130,7 +158,8 @@ def make_kraken_account_identity_provider(
         row = response["result"]
         api_key = row.get("apiKey")
         if not isinstance(api_key, str) or not api_key or len(api_key) > 512:
-            raise KrakenIdentityDenied("authenticated_api_key_identity_missing")
+            raise KrakenIdentityDenied("authenticated_api_key_identity_missing",
+                                       response_shape=_identity_response_shape(row))
         if not hmac.compare_digest(hashlib.sha256(api_key.encode("utf-8")).hexdigest(), key_pin):
             raise KrakenIdentityDenied("approved_api_key_identity_mismatch")
         if not hmac.compare_digest(_fingerprint_iban(row.get("iban")), account_pin):

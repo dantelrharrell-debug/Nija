@@ -162,3 +162,16 @@ def test_runtime_configured_lifetime_is_not_widened(setup, monkeypatch):
     args["broker"]._nija_authoritative_position_snapshot_at_wall_v285 = NOW - 16
     with pytest.raises(KrakenPositionSyncDenied, match="runtime_snapshot_stale"):
         make_kraken_position_sync_provider(**args)()
+
+
+def test_runtime_lifetime_change_during_collection_denies(setup, monkeypatch):
+    args, _, _, _ = setup
+    original = args["broker"]._kraken_private_call
+    def read(endpoint, params, *, category):
+        result = original(endpoint, params, category=category)
+        if endpoint == "Balance":
+            monkeypatch.setenv("NIJA_AUTHORITATIVE_POSITION_SNAPSHOT_MAX_AGE_S", "15")
+        return result
+    args["broker"]._kraken_private_call = read
+    with pytest.raises(KrakenPositionSyncDenied, match="position_sources_changed"):
+        make_kraken_position_sync_provider(**args)()
