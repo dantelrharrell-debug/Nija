@@ -169,16 +169,22 @@ def quick_toggle_trading():
     if "enabled" not in data or not isinstance(data["enabled"], bool):
         return jsonify({"error": "enabled must be a boolean"}), 400
 
-    user_id = _authenticated_user()
-    enabled = data["enabled"]
-    logger.info("Mobile trading toggle requested user_id=%s enabled=%s", user_id, enabled)
-    send_push_notification(
-        user_id,
-        "Trading Enabled" if enabled else "Trading Disabled",
-        "NIJA is now actively monitoring markets and executing trades" if enabled else "NIJA has stopped monitoring markets",
-        {"type": "trading_status", "enabled": enabled},
+    # The mobile companion does not own the trading admission controller.
+    # Never treat a UI request as a confirmed state transition. Both enable
+    # and disable requests must fail closed until an authenticated,
+    # account-scoped controller API can return authoritative confirmation.
+    logger.warning(
+        "Mobile trading toggle denied: no authoritative controller binding user_id=%s requested_enabled=%s",
+        _authenticated_user(),
+        data["enabled"],
     )
-    return jsonify({"success": True, "trading_enabled": enabled})
+    return jsonify({
+        "success": False,
+        "trading_enabled": False,
+        "state_verified": False,
+        "error": "Trading controls are unavailable from the mobile app",
+        "reason": "authoritative_controller_not_connected",
+    }), 503
 
 
 @mobile_api.route("/positions/lightweight", methods=["GET"])
