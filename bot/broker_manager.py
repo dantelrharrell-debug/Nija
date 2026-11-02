@@ -9580,7 +9580,11 @@ class KrakenBroker(BaseBroker):
                     assert_mutation_deadline(method)
                 # Suppress pykrakenapi's print() statements that flood the console
                 with suppress_pykrakenapi_prints():
-                    result = self.api.query_private(method, params)
+                    if method == "GetApiKeyInfo":
+                        from bot.kraken_identity_read_timing import query_identity_with_timing
+                        result = query_identity_with_timing(self.api, params)
+                    else:
+                        result = self.api.query_private(method, params)
             finally:
                 # Compatibility: DistributedNonceManager does not expose end_request().
                 # Never hard-fail private calls on legacy nonce lifecycle hooks.
