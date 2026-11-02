@@ -69,7 +69,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
 
     def test_api_logs_must_match_the_current_instance(self) -> None:
         for observed_instance, accepted in (
-            ("wrong-instance", False), ("zsc58", True),
+            ("wrong-instance", False), ("zsc58", False), (SERVICE + "-zsc58", True),
             (SERVICE + "-7d458c8976-zsc58", True), ("58", False),
         ):
             with self.subTest(instance=observed_instance):

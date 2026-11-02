@@ -48,6 +48,7 @@ SIGNALS = {
     "RECOVERY_WAITING_FOR_WRITER": ("kraken_authenticated_recovery_waiting",),
     "RECOVERY_PERMANENT_FAILURE": ("kraken_authenticated_recovery_perm_failure",),
     "CONNECTION_INITIALIZATION_FAILED": ("connection_initialization_failed",),
+    "INITIALIZATION_BLOCKED": ("kraken_initialization_blocked",),
     "CLOCK_NOT_READY": ("kraken_clock_not_ready",),
 }
 STAMP = re.compile(r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)")
@@ -241,19 +242,14 @@ def inspect_render_api() -> dict:
                     label.get("value") for label in labels
                     if isinstance(label, dict) and label.get("name") == "instance"
                 ]
-                # Render logs use the short instance suffix, not the full
-                # RENDER_INSTANCE_ID (which the logs endpoint rejects).
+                # The API's observed label omits the Kubernetes ReplicaSet
+                # component present in RENDER_INSTANCE_ID.
                 if len(identifiers) != 1 or not isinstance(identifiers[0], str):
                     continue
                 observed_instance = identifiers[0]
                 if re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance):
                     observed_instances.add(observed_instance)
-                if not (
-                    observed_instance == instance or (
-                        re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance)
-                        and instance.endswith("-" + observed_instance)
-                    )
-                ):
+                if observed_instance not in {instance, SERVICE + "-" + instance.rsplit("-", 1)[-1]}:
                     continue
                 identity = hashlib.sha256((stamp + "\0" + message).encode()).hexdigest()
                 if identity in seen:
