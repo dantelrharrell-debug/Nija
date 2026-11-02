@@ -153,6 +153,8 @@ jobs:
           COINBASE_PEM_CONTENT: ""
         run: |
           python -m pytest -q \
+            tests/test_kraken_authenticated_identity_v480.py \
+            tests/test_kraken_identity_read_timing.py \
             bot/tests/test_canonical_kraken_recovery_deferral.py \
             bot/tests/test_production_readiness_regression_20261017.py \
             bot/tests/test_production_runtime_convergence_v88.py \
