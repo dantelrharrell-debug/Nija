@@ -164,6 +164,7 @@ def make_kraken_writer_nonce_providers(
                     or _broker_account_scope(broker) != account_scope
                     or getattr(broker, "_nonce_lease_version", first[1]) != first[1]
                     or getattr(manager, "lease_version", None) != first[1]
+                    or getattr(broker, "api", None) is not api
                     or getattr(api, "key", None) != key
                     or getattr(api, "_nonce", None) is not generator):
                 raise KrakenWriterEvidenceDenied("writer_evidence_changed_or_stale")

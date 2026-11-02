@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any
 
 REQUIRED = (
@@ -47,6 +47,14 @@ PROOF_BY_SOURCE = {
 }
 
 _MAX_AGE_S = 60.0
+
+
+class IndependentEvidenceRejected(ValueError):
+    """Expose only canonical field names when reviewed observations are rejected."""
+
+    def __init__(self, failed_fields: Collection[str]) -> None:
+        super().__init__("independent_pretrade_provenance_unverified")
+        self.failed_fields = tuple(field for field in REQUIRED if field in failed_fields)
 
 
 def _denied() -> dict[str, Any]:

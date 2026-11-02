@@ -112,7 +112,9 @@ def test_failed_provider_does_not_install_authority(monkeypatch):
     assert "secret-canary" not in str(exc.value)
     monkeypatch.setattr(inspector, "_COLLECTOR", collector)
     output = inspector.inspect_authenticated_attestations(ACCOUNT)
-    assert output["producer_status"] == "collector_exception"
+    assert output["producer_status"] == "independent_evidence_rejected"
+    assert output["failed_fields"] == ["broker_balances"]
+    assert "secret-canary" not in str(output)
     assert not any(output["checks"].values())
 
 

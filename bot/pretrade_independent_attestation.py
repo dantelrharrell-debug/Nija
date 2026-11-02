@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from bot.pretrade_attestation_validation_v452 import REQUIRED
+from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED
 
 FIELDS = REQUIRED
 
@@ -88,6 +88,10 @@ def inspect_authenticated_attestations(
             "checks_passed_diagnostic_only" if all(accepted.values()) else "checks_incomplete",
             accepted,
         )
+    except IndependentEvidenceRejected as exc:
+        result = report("independent_evidence_rejected")
+        result["failed_fields"] = list(exc.failed_fields)
+        return result
     except Exception:
         return report("collector_exception")
 

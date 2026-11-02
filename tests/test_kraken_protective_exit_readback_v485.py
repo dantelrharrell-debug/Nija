@@ -55,7 +55,7 @@ class Broker:
                 "apiKey": KEY, "iban": IBAN, "validUntil": "0",
             }}
         if method == "OpenOrders":
-            assert params == {"with_cursor": True, "limit": 50, "trades": True}
+            assert params == {"with_cursor": "true", "limit": 50, "trades": "true"}
             return {"error": [], "result": {
                 "open": copy.deepcopy(self.orders), "cursor": {},
             }}

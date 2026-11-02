@@ -32,39 +32,7 @@ export NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED=true
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-_promote_secret_alias() {
-    local canonical="$1"
-    shift
-
-    if [[ -n "${!canonical:-}" ]]; then
-        return 0
-    fi
-
-    local alias
-    for alias in "$@"; do
-        if [[ -n "${!alias:-}" ]]; then
-            export "${canonical}=${!alias}"
-            echo "🔑 Render secret alias normalized: ${canonical}<-${alias}"
-            return 0
-        fi
-    done
-
-    return 0
-}
-
-_promote_secret_alias KRAKEN_PLATFORM_API_KEY \
-    KRAKEN_API_KEY \
-    KRAKEN_MASTER_API_KEY \
-    KRAKEN_MASTER_KEY \
-    KRAKEN_PLATFORM_KEY
-
-_promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
-    KRAKEN_API_SECRET \
-    KRAKEN_PRIVATE_KEY \
-    KRAKEN_SECRET_KEY \
-    KRAKEN_MASTER_API_SECRET \
-    KRAKEN_MASTER_SECRET \
-    KRAKEN_PLATFORM_SECRET
+source "${ROOT_DIR}/scripts/kraken_credential_aliases.sh"
 
 # Apply every startup-order repair before any normal Python interpreter can load
 # NIJA runtime hooks. All patchers are idempotent and fail closed.
