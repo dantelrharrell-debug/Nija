@@ -8693,6 +8693,66 @@ class KrakenIncompleteValuation(RuntimeError):
     """Authenticated balance exists, but total equity is not yet provable."""
 
 
+def _kraken_connection_lifecycle(connect: Callable[..., bool]) -> Callable[..., bool]:
+    """Serialize native Kraken handshakes and discard failed connection state."""
+    @functools.wraps(connect)
+    def guarded(self: "KrakenBroker") -> bool:
+        with self._connect_lock:
+            has_transport = self.api is not None or (
+                self._gateway_only_mode and bool(self._gateway_url)
+            )
+            startup_connected = (
+                _KRAKEN_STARTUP_FSM.is_connected
+                if self.account_type == AccountType.PLATFORM else self._connection_already_complete
+            )
+            if self.connected and startup_connected and has_transport:
+                return True
+            self._discard_connection_clients()
+            self._connection_stage = "credentials"
+            self.last_connection_error = ""
+            succeeded = False
+            try:
+                succeeded = connect(self) is True and self.connected is True
+                if succeeded and not (
+                    self.api is not None
+                    or (self._gateway_only_mode and bool(self._gateway_url))
+                ):
+                    succeeded = False
+                    self.last_connection_error = "AUTHENTICATED_TRANSPORT_MISSING"
+                if succeeded:
+                    self._connection_generation += 1
+                    self._connection_stage = "connected"
+                    self._connection_already_complete = True
+                    self._is_available = True
+                    self._balance_fetch_errors = 0
+                    self.kraken_health = "OK"
+                    self.last_connection_error = ""
+                return succeeded
+            except Exception:
+                self.last_connection_error = "CONNECTION_INITIALIZATION_FAILED"
+                logger.error("KRAKEN_INITIALIZATION_FAILED stage=%s", self._connection_stage)
+                return False
+            finally:
+                if not succeeded:
+                    failed_stage = self._connection_stage
+                    self._discard_connection_clients()
+                    if self.account_type == AccountType.PLATFORM:
+                        _KRAKEN_STARTUP_FSM.mark_failed()
+                    reason = _kraken_canonical_auth_reason_from_str(self.last_connection_error)
+                    if self.last_connection_error in {
+                        "CREDENTIAL_PAIR_MISSING_OR_INCOMPLETE", "INVALID_SECRET_ENCODING",
+                        "AUTHENTICATED_TRANSPORT_MISSING", "CONNECTION_INITIALIZATION_FAILED",
+                    }:
+                        reason = self.last_connection_error
+                    logger.error(
+                        "KRAKEN_INITIALIZATION_BLOCKED stage=%s reason=%s "
+                        "authenticated=false collector_eligible=false",
+                        failed_stage, reason or "CHECK_CONNECTION_STAGE_AND_CONFIGURATION",
+                    )
+
+    return guarded
+
+
 class KrakenBroker(BaseBroker):
     """
     Kraken Pro Exchange integration for cryptocurrency spot trading.
@@ -8777,6 +8837,10 @@ class KrakenBroker(BaseBroker):
 
         self.api = None
         self.kraken_api = None
+        self._connect_lock = threading.RLock()
+        self._connection_generation = 0
+        self._connection_stage = "not_started"
+        self._initializing_api = None
 
         # Balance tracking for fail-closed behavior (Fix 3)
         # When balance fetch fails, preserve last known balance instead of returning 0
@@ -8955,6 +9019,40 @@ class KrakenBroker(BaseBroker):
         ).strip().lower() in {"1", "true", "yes", "on"}
         self._hard_stopped: bool = False
         self._hard_stop_reason: str = ""
+
+    def _discard_connection_clients(self) -> None:
+        """Invalidate local transport/cache bindings without releasing another owner's lease."""
+        self.connected = False
+        self._connection_already_complete = False
+        old_api, initializing_api = self.api, self._initializing_api
+        self.api = None
+        self._initializing_api = None
+        self.kraken_api = None
+        self._session_request = None
+        self.nonce_manager = None
+        self._kraken_private_call_nonce = None
+        self.api_key_id = ""
+        self._record_nonce_error = lambda: None
+        self._record_nonce_success = lambda: None
+        self._has_balance_payload = False
+        self._balance_last_updated = None
+        self._available_cash_last_updated = None
+        self.balance_cache.clear()
+        self._entry_price_cache.clear()
+        self._bulk_entry_prices_cache.clear()
+        self._bulk_entry_prices_cache_time = None
+        self._is_available = False
+        self.kraken_health = "UNKNOWN"
+        clients = [old_api]
+        if initializing_api is not old_api:
+            clients.append(initializing_api)
+        for client in clients:
+            close = getattr(getattr(client, "session", None), "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    logger.warning("KRAKEN_CLIENT_CLOSE_FAILED transport_discarded=true")
 
     def _trigger_hard_stop(self, reason: str) -> None:
         """Fail closed and permanently block Kraken activity for this instance."""
@@ -9651,6 +9749,7 @@ class KrakenBroker(BaseBroker):
             f"❌ Kraken connection test failed after {retries} attempts ({self.account_identifier})"
         )
 
+    @_kraken_connection_lifecycle
     def connect(self) -> bool:
         """
         Connect to Kraken Pro API with retry logic.
@@ -9876,79 +9975,28 @@ class KrakenBroker(BaseBroker):
             pykraken_logger = logging.getLogger('pykrakenapi')
             pykraken_logger.setLevel(logging.WARNING)
 
-            # Get credentials based on account type
-            # Enhanced credential detection to identify "set but invalid" variables
+            # Select one credential namespace atomically. Never combine a key
+            # from one account/alias with a secret from a different namespace.
             if self.account_type == AccountType.PLATFORM:
-                key_name = "KRAKEN_PLATFORM_API_KEY"
-                secret_name = "KRAKEN_PLATFORM_API_SECRET"
-                api_key_raw = os.getenv(key_name, "")
-                api_secret_raw = os.getenv(secret_name, "")
-
-                # Log when master credentials are found
-                if api_key_raw and api_secret_raw:
-                    logger.info("   ✅ Using KRAKEN_PLATFORM_API_KEY and KRAKEN_PLATFORM_API_SECRET for platform account")
-
-                # Fallback to legacy credentials if master credentials not set
-                # This provides backward compatibility for deployments using KRAKEN_API_KEY
-                if not api_key_raw:
-                    legacy_key = os.getenv("KRAKEN_API_KEY", "")
-                    if legacy_key:
-                        api_key_raw = legacy_key
-                        key_name = "KRAKEN_API_KEY (legacy)"
-                        logger.info("   Using legacy KRAKEN_API_KEY for platform account")
-
-                if not api_secret_raw:
-                    legacy_secret = os.getenv("KRAKEN_API_SECRET", "")
-                    if legacy_secret:
-                        api_secret_raw = legacy_secret
-                        secret_name = "KRAKEN_API_SECRET (legacy)"
-                        logger.info("   Using legacy KRAKEN_API_SECRET for platform account")
-
-                api_key = api_key_raw.strip()
-                api_secret = api_secret_raw.strip()
+                prefixes = ("KRAKEN_PLATFORM", "KRAKEN")
                 cred_label = "PLATFORM"
             else:
-                # User account - construct env var name from user_id
-                # Convert user_id to uppercase for env var
-                # For user_id like 'daivon_frazier', extracts 'DAIVON' for KRAKEN_USER_DAIVON_API_KEY
-                # For user_id like 'john', uses 'JOHN' for KRAKEN_USER_JOHN_API_KEY
                 user_id = self.user_id or ""
                 user_env_name, full_env_name = _user_env_prefix(user_id)
                 raw_full_env_name = user_id.upper().replace('-', '_')
-                key_name = f"KRAKEN_USER_{user_env_name}_API_KEY"
-                secret_name = f"KRAKEN_USER_{user_env_name}_API_SECRET"
+                prefixes = tuple(dict.fromkeys(
+                    f"KRAKEN_USER_{name}" for name in (user_env_name, full_env_name, raw_full_env_name)
+                ))
+                cred_label = f"USER:{self.user_id}"
+            key_name, secret_name = f"{prefixes[0]}_API_KEY", f"{prefixes[0]}_API_SECRET"
+            api_key_raw = api_secret_raw = ""
+            for prefix in prefixes:
+                key_name, secret_name = f"{prefix}_API_KEY", f"{prefix}_API_SECRET"
                 api_key_raw = os.getenv(key_name, "")
                 api_secret_raw = os.getenv(secret_name, "")
-                # Fallback: also try the full user_id in uppercase
-                # e.g. KRAKEN_USER_TANIA_GILBERT_API_KEY for user_id='tania_gilbert'
-                # This fixes the contradiction where PAL discovers credentials via the full
-                # env var name but KrakenBroker only looks at the first word of user_id.
-                if not api_key_raw or not api_secret_raw:
-                    if full_env_name != user_env_name:
-                        full_key_name = f"KRAKEN_USER_{full_env_name}_API_KEY"
-                        full_secret_name = f"KRAKEN_USER_{full_env_name}_API_SECRET"
-                        if not api_key_raw:
-                            api_key_raw = os.getenv(full_key_name, "")
-                            if api_key_raw:
-                                key_name = full_key_name
-                        if not api_secret_raw:
-                            api_secret_raw = os.getenv(full_secret_name, "")
-                            if api_secret_raw:
-                                secret_name = full_secret_name
-                if (not api_key_raw or not api_secret_raw) and raw_full_env_name not in {user_env_name, full_env_name}:
-                    raw_key_name = f"KRAKEN_USER_{raw_full_env_name}_API_KEY"
-                    raw_secret_name = f"KRAKEN_USER_{raw_full_env_name}_API_SECRET"
-                    if not api_key_raw:
-                        api_key_raw = os.getenv(raw_key_name, "")
-                        if api_key_raw:
-                            key_name = raw_key_name
-                    if not api_secret_raw:
-                        api_secret_raw = os.getenv(raw_secret_name, "")
-                        if api_secret_raw:
-                            secret_name = raw_secret_name
-                api_key = api_key_raw.strip()
-                api_secret = api_secret_raw.strip()
-                cred_label = f"USER:{self.user_id}"
+                if api_key_raw or api_secret_raw:
+                    break
+            api_key, api_secret = api_key_raw.strip(), api_secret_raw.strip()
 
             # Enhanced validation: detect if variables are set but contain only whitespace
             key_is_set = api_key_raw != ""
@@ -9984,7 +10032,7 @@ class KrakenBroker(BaseBroker):
                 self.last_connection_error = "Credentials appear to be unfilled placeholder values"
                 logger.warning(f"⚠️  Kraken credentials appear to be PLACEHOLDER VALUES for {cred_label}")
                 if key_is_placeholder:
-                    logger.warning(f"   {key_name}: '{api_key}' looks like a template placeholder")
+                    logger.warning(f"   {key_name}: value looks like a template placeholder")
                 if secret_is_placeholder:
                     logger.warning(f"   {secret_name}: value looks like a template placeholder")
                 logger.warning("   🔧 FIX: Replace the placeholder with your real Kraken Classic API credentials:")
@@ -10011,6 +10059,11 @@ class KrakenBroker(BaseBroker):
             if not api_key or not api_secret:
                 # Mark that credentials were not configured (not an error, just not set up)
                 self.credentials_configured = False
+                self.last_connection_error = "CREDENTIAL_PAIR_MISSING_OR_INCOMPLETE"
+                logger.error(
+                    "KRAKEN_CREDENTIAL_PAIR_REQUIRED key_variable=%s secret_variable=%s",
+                    key_name, secret_name,
+                )
                 # Silently skip - Kraken is optional, no need for scary error messages
                 logger.info(f"⚠️  Kraken credentials not configured for {cred_label} (skipping)")
                 if self.account_type == AccountType.PLATFORM:
@@ -10035,11 +10088,21 @@ class KrakenBroker(BaseBroker):
                     logger.info("   📖 Setup guide: KRAKEN_QUICK_START.md")
                 return False
 
+            try:
+                if not base64.b64decode(api_secret, validate=True):
+                    raise ValueError("empty_secret")
+            except ValueError:
+                self.credentials_configured = False
+                self.last_connection_error = "INVALID_SECRET_ENCODING"
+                logger.error("KRAKEN_CREDENTIALS_INVALID reason=INVALID_SECRET_ENCODING")
+                return False
+
             # Direct authenticated Kraken I/O must not proceed on an
             # unverified or out-of-tolerance host clock.  UDP NTP may be
             # unavailable on managed hosts; check_ntp_sync safely falls back
             # to Kraken's public HTTPS time endpoint.  This gate does not
             # fabricate connection success or bypass nonce safety.
+            self._connection_stage = "clock_verification"
             clock_ready, clock_reason, clock_status = _kraken_clock_readiness()
             if not clock_ready:
                 self.credentials_configured = True
@@ -10068,14 +10131,16 @@ class KrakenBroker(BaseBroker):
             #
             # SOLUTION: Use milliseconds + tracking to ensure each nonce is strictly greater
             # than the previous one, even if requests happen in the same millisecond.
-            self.api = krakenex.API(key=api_key, secret=api_secret)
+            self._connection_stage = "client_creation"
+            api = krakenex.API(key=api_key, secret=api_secret)
+            self._initializing_api = api
 
             # CRITICAL FIX (Jan 17, 2026): Set timeout on HTTP requests to prevent hanging
             # krakenex doesn't set a default timeout, causing indefinite hangs if API is slow.
             # We use functools.partial to patch the session (standard pattern for krakenex).
             # Per-instance modification - no global state affected. Degrades gracefully if session changes.
             try:
-                _session_request = getattr(self.api.session, 'request', None)
+                _session_request = getattr(api.session, 'request', None)
                 if callable(_session_request):
                     self._session_request = functools.partial(_session_request, timeout=self.API_TIMEOUT_SECONDS)
                 logger.debug(f"✅ HTTP timeout configured ({self.API_TIMEOUT_SECONDS}s) for {cred_label}")
@@ -10093,7 +10158,7 @@ class KrakenBroker(BaseBroker):
             # and order submissions without exhausting TCP resources.
             try:
                 if self._connection_stability_manager is not None:
-                    self._connection_stability_manager.apply_connection_pool(self.api.session)
+                    self._connection_stability_manager.apply_connection_pool(api.session)
                     logger.debug(f"✅ HTTP connection pool applied via ConnectionStabilityManager for {cred_label}")
                 else:
                     import requests
@@ -10104,8 +10169,8 @@ class KrakenBroker(BaseBroker):
                         pool_maxsize=10,      # Aligned with ConnectionPoolConfig defaults
                         max_retries=0,  # Retry logic is handled by our own retry loop
                     )
-                    self.api.session.mount("https://", _kraken_adapter)
-                    self.api.session.mount("http://", _kraken_adapter)
+                    api.session.mount("https://", _kraken_adapter)
+                    api.session.mount("http://", _kraken_adapter)
                     logger.debug(f"✅ HTTP keep-alive adapter configured for {cred_label} (prevents RemoteDisconnected)")
             except Exception as e:
                 logger.debug(f"⚠️  Could not configure keep-alive adapter: {e}")
@@ -10116,6 +10181,7 @@ class KrakenBroker(BaseBroker):
             # Prove the exact canonical process writer before constructing or
             # inspecting per-key nonce state.  A failed proof is retryable but
             # this connection attempt performs no private Kraken I/O.
+            self._connection_stage = "writer_authority"
             if not self._initialize_nonce_manager():
                 return False
 
@@ -10145,6 +10211,7 @@ class KrakenBroker(BaseBroker):
                         make_api_key_id as _make_key_id,
                     )
 
+                self._connection_stage = "nonce_ownership"
                 self.api_key_id = _make_key_id(api_key)
                 _dnm = _get_dnm()
                 _kid = self.api_key_id  # captured in closures below
@@ -10161,7 +10228,7 @@ class KrakenBroker(BaseBroker):
                     _kid, _dnm.get_last_nonce(_kid)
                 )
 
-                self.api._nonce = self._kraken_private_call_nonce  # type: ignore[assignment]
+                api._nonce = self._kraken_private_call_nonce  # type: ignore[assignment]
                 _backend = "redis" if _dnm._redis is not None else "file/fcntl"
                 logger.info(
                     "   ✅ Nonce: DistributedNonceManager  backend=%-10s  "
@@ -10195,7 +10262,9 @@ class KrakenBroker(BaseBroker):
                 )
                 return False
 
-            self.kraken_api = KrakenAPI(self.api)
+            self.kraken_api = KrakenAPI(api)
+            self.api = api
+            self._initializing_api = None
 
             # DistributedNonceManager anchors each key's startup nonce to
             # Kraken server time inside _init() — no additional reset needed here.
@@ -10265,17 +10334,12 @@ class KrakenBroker(BaseBroker):
                     # CRITICAL: Use _kraken_private_call() wrapper to serialize API calls
                     # Use MONITORING category for balance checks (conservative rate limiting)
                     balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
+                    self._connection_stage = "authenticated_balance"
                     balance = self._kraken_private_call('Balance', category=balance_category)
 
                     if balance and 'error' in balance:
                         if balance['error']:
                             error_msgs = ', '.join(balance['error'])
-
-                            # Always log the exact raw Kraken response to expose the underlying auth error
-                            logger.error(
-                                "❌ Kraken Balance endpoint raw response [%s]: %s",
-                                cred_label, balance,
-                            )
 
                             # Resolve a canonical authentication failure reason from the Kraken error array.
                             # Kraken returns errors in the format ['EAPI:Invalid key', ...].
@@ -10441,7 +10505,9 @@ class KrakenBroker(BaseBroker):
                                     )
                                 return False
 
-                    if balance and 'result' in balance:
+                    if (isinstance(balance, dict) and balance.get('error') == []
+                            and isinstance(balance.get('result'), dict)):
+                        self._connection_stage = "balance_hydration"
                         self._has_balance_payload = True
                         # Avoid a transient connected/ready mismatch for PLATFORM:
                         # keep connected False until startup capital gate is ready.

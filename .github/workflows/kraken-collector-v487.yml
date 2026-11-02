@@ -8,6 +8,20 @@ on:
       - 'bot/kraken_collector_composition_v487.py'
       - 'bot/kraken_sqlite_readonly_preflight_v488.py'
       - 'bot/kraken_authenticated_ledger_gap_audit_v489.py'
+      - 'bot/broker_manager.py'
+      - 'bot/kraken_writer_nonce_evidence_v488.py'
+      - 'bot/pretrade_attestation_validation_v452.py'
+      - 'bot/pretrade_composition_bridge_v465.py'
+      - 'bot/pretrade_independent_attestation.py'
+      - 'bot/pretrade_multi_account_registration_v474.py'
+      - 'scripts/render_entrypoint.sh'
+      - 'scripts/production_bootstrap.sh'
+      - 'scripts/kraken_credential_aliases.sh'
+      - 'tests/test_kraken_native_runtime_connection.py'
+      - 'tests/test_kraken_writer_nonce_evidence_v488.py'
+      - 'tests/test_pretrade_multi_account_registration_v474.py'
+      - 'tests/test_pretrade_composition_bridge_v465.py'
+      - 'tests/test_execution_admission_acceptance_v468.py'
       - 'tests/test_kraken_collector_composition_v487.py'
       - 'tests/test_kraken_sqlite_readonly_preflight_v488.py'
       - 'tests/test_kraken_authenticated_ledger_gap_audit_v489.py'
@@ -34,3 +48,42 @@ jobs:
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_collector_composition_v487.py -v
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_sqlite_readonly_preflight_v488.py -v
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_authenticated_ledger_gap_audit_v489.py -v
+  native-runtime-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      KRAKEN_PLATFORM_API_KEY: ''
+      KRAKEN_PLATFORM_API_SECRET: ''
+      KRAKEN_API_KEY: ''
+      KRAKEN_API_SECRET: ''
+      REDIS_URL: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install existing pinned offline test dependencies
+        run: >-
+          python -m pip install pytest==8.2.2 requests==2.32.5 numpy==1.26.3
+          pandas==2.1.1 krakenex==2.2.2 pykrakenapi==0.3.2 redis==5.0.1
+      - name: Check both production front doors and shared credential normalization
+        run: |
+          bash -n scripts/render_entrypoint.sh
+          bash -n scripts/production_bootstrap.sh
+          bash -n scripts/kraken_credential_aliases.sh
+      - name: Verify native connection and fail-closed certification lifecycle
+        run: |
+          python -m pytest -q \
+            tests/test_kraken_native_runtime_connection.py \
+            tests/test_pretrade_multi_account_registration_v474.py \
+            tests/test_pretrade_composition_bridge_v465.py \
+            tests/test_kraken_writer_nonce_evidence_v488.py \
+            tests/test_execution_admission_acceptance_v468.py \
+            tests/test_kraken_authenticated_open_order_integration_v482.py \
+            tests/test_kraken_protective_exit_readback_v485.py \
+            bot/tests/test_kraken_writer_authority_gate_v91.py \
+            bot/tests/test_render_entrypoint_launcher_v26.py \
+            bot/tests/test_render_canonical_startup_v24.py
