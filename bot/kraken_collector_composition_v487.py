@@ -19,6 +19,10 @@ from bot.kraken_writer_nonce_evidence_v488 import (
 )
 from bot.pretrade_attestation_validation_v452 import REQUIRED
 from bot.pretrade_multi_account_registration_v474 import register_reviewed_account_registry
+from bot.kraken_kill_switch_evidence import (
+    ReviewedKillSwitchBinding, make_kraken_kill_switch_provider,
+)
+from bot.kraken_position_sync_evidence import make_kraken_position_sync_provider
 
 ACCOUNT = "platform:kraken"
 OTHER_FIELDS = (
@@ -39,12 +43,16 @@ def compose_reviewed_kraken_providers(
     independent_remaining: Mapping[str, Callable[[], Mapping[str, Any]]],
     monitoring_category: Any, independently_reviewed: bool = False,
     clock: Callable[[], float] | None = None,
+    kill_switch_binding: ReviewedKillSwitchBinding | None = None,
+    review_kill_switch_binding: Callable[[ReviewedKillSwitchBinding], bool] | None = None,
 ) -> Mapping[str, Callable[[], Mapping[str, Any]]]:
     """Compose complete 13-field *callable registry*, without reading or installing.
 
     Writer and nonce evidence use the existing read-only v488 providers.
-    Remaining providers must be externally implemented against their approved
-    independent sources. Validation here checks wiring, not truth of observations.
+    With a reviewed durable-clearance binding, construct kill-switch and spot
+    position-sync providers here; the remaining four retain their original
+    independent owners. Without it, preserve the original six-provider API.
+    Validation here checks wiring, not truth of observations.
     """
     if independently_reviewed is not True:
         raise KrakenCollectorBindingDenied("independent_review_required")
@@ -54,6 +62,34 @@ def compose_reviewed_kraken_providers(
                    for value in reviewed_provider_ids.values())
             or len(set(reviewed_provider_ids.values())) != len(REQUIRED)):
         raise KrakenCollectorBindingDenied("unique_complete_provider_registry_required")
+    options = {} if clock is None else {"clock": clock}
+    if kill_switch_binding is not None or review_kill_switch_binding is not None:
+        runtime_fields = {"kill_switch_clear", "position_sync"}
+        if (type(kill_switch_binding) is not ReviewedKillSwitchBinding
+                or not callable(review_kill_switch_binding)
+                or kill_switch_binding.account != ACCOUNT
+                or kill_switch_binding.api_key_sha256 != approved_api_key_sha256
+                or kill_switch_binding.provider_id != reviewed_provider_ids["kill_switch_clear"]
+                or not isinstance(independent_remaining, Mapping)
+                or set(independent_remaining) != OTHER_FIELDS - runtime_fields
+                or not callable(independent_positions)):
+            raise KrakenCollectorBindingDenied("runtime_source_binding_mismatch")
+        independent_remaining = dict(independent_remaining)
+        try:
+            independent_remaining["kill_switch_clear"] = make_kraken_kill_switch_provider(
+                kill_switch_binding, review_binding=review_kill_switch_binding, **options,
+            )
+            independent_remaining["position_sync"] = make_kraken_position_sync_provider(
+                broker, account_scope=ACCOUNT,
+                approved_api_key_sha256=approved_api_key_sha256,
+                approved_iban_sha256=approved_iban_sha256,
+                reviewed_provider_id=reviewed_provider_ids["position_sync"],
+                reviewed_ledger_provider_id=reviewed_provider_ids["position_ledger_reconciliation"],
+                independent_positions=independent_positions,
+                monitoring_category=monitoring_category, independently_reviewed=True, **options,
+            )
+        except Exception:
+            raise KrakenCollectorBindingDenied("reviewed_runtime_source_construction_failed") from None
     if (not isinstance(independent_remaining, Mapping)
             or set(independent_remaining) != OTHER_FIELDS
             or any(not callable(p) for p in independent_remaining.values())
@@ -62,7 +98,6 @@ def compose_reviewed_kraken_providers(
     if (len({id(p) for p in independent_remaining.values()})
             != len(independent_remaining)):
         raise KrakenCollectorBindingDenied("independent_sources_reused")
-    options = {} if clock is None else {"clock": clock}
     broker_ids = {field: reviewed_provider_ids[field] for field in BROKER_FIELDS}
     try:
         broker_providers = make_reviewed_kraken_producer_bundle(
