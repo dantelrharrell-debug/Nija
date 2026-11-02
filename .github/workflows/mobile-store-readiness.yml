@@ -7,6 +7,7 @@ on:
       - 'mobile/android/**'
       - 'scripts/validate_mobile_store_readiness.py'
       - 'mobile_api.py'
+      - 'tests/test_mobile_data_unavailable.py'
       - 'tests/test_mobile_toggle_fail_closed.py'
       - '.github/workflows/mobile-store-readiness.yml'
   push:
@@ -16,6 +17,7 @@ on:
       - 'mobile/android/**'
       - 'scripts/validate_mobile_store_readiness.py'
       - 'mobile_api.py'
+      - 'tests/test_mobile_data_unavailable.py'
       - 'tests/test_mobile_toggle_fail_closed.py'
 
 jobs:
@@ -28,5 +30,7 @@ jobs:
           python-version: '3.11'
       - name: Test mobile trading toggle fail-closed semantics
         run: python tests/test_mobile_toggle_fail_closed.py
+      - name: Test unavailable mobile account data semantics
+        run: python tests/test_mobile_data_unavailable.py
       - name: Validate available Android SDK configuration (pre-generation audit)
         run: python scripts/validate_mobile_store_readiness.py
