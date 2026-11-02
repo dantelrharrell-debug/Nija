@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from bot.kraken_authenticated_key_info_v477 import _sha256_fingerprint
+from bot.kraken_identity_read_timing import capture_identity_read
 from scripts.nija_kraken_readonly_history_collector_v441 import _broker_account_scope
 
 MAX_READ_SECONDS = 60.0
@@ -98,10 +99,21 @@ def make_kraken_account_identity_provider(
                 or not math.isfinite(started) or started <= 0):
             raise KrakenIdentityDenied("observation_clock_invalid")
         try:
-            response = read("GetApiKeyInfo", {}, category=monitoring_category)
+            api = getattr(broker, "api", None)
+            with capture_identity_read(api, clock) as timing:
+                response = read("GetApiKeyInfo", {}, category=monitoring_category)
         except Exception:
             raise KrakenIdentityDenied("authenticated_identity_read_failed") from None
         finished = clock()
+        if timing.attempts:
+            try:
+                # Measure freshness from the real transport, not the time spent
+                # waiting for rate admission. Never stamp a cached response now.
+                if getattr(broker, "api", None) is not api:
+                    raise ValueError("identity_transport_changed")
+                started = timing.observation_start(response, started, finished, MAX_READ_SECONDS)
+            except ValueError:
+                raise KrakenIdentityDenied("observation_clock_invalid_or_stale") from None
         if (isinstance(finished, bool) or not isinstance(finished, (int, float))
                 or not math.isfinite(finished) or finished < started
                 or finished - started > MAX_READ_SECONDS):
