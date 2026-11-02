@@ -134,6 +134,59 @@ def test_stale_or_future_clock_denied():
         make(broker, times=[1001.0, 1000.0])()
 
 
+
+def test_parsed_identity_field_presence_is_diagnostic_only():
+    for absent, expected in (
+        ((), (True, True)),
+        (("apiKey",), (False, True)),
+        (("validUntil",), (True, False)),
+        (("apiKey", "validUntil"), (False, False)),
+    ):
+        broker = Broker()
+        for field in absent:
+            broker.reply["result"].pop(field)
+        recorded = []
+        ticks = iter([1000.0, 1001.0])
+        observer = make_kraken_account_identity_provider(
+            broker, account_scope=SCOPE, approved_iban_sha256=ACCOUNT_PIN,
+            approved_api_key_sha256=KEY_PIN, reviewed_provider_id=PID,
+            monitoring_category=CATEGORY, clock=lambda: next(ticks),
+            parsed_field_observer=lambda fields: recorded.append(dict(fields)),
+        )
+        if absent:
+            with pytest.raises(KrakenIdentityDenied):
+                observer()
+        else:
+            assert observer()["verified"] is True
+        assert len(broker.calls) == 1
+        assert len(recorded) == 1
+        assert tuple(recorded[0][name] for name in ("apiKey", "validUntil")) == expected
+        assert all(type(value) is bool for value in recorded[0].values())
+        assert set(recorded[0]) == {"apiKey", "validUntil"}
+        assert PUBLIC_KEY_ID not in repr(recorded)
+        assert IIBAN not in repr(recorded)
+
+
+def test_broken_diagnostic_callback_does_not_override_broker_checks():
+    broker = Broker()
+    broker.reply["result"].pop("apiKey")
+    ticks = iter([1000.0, 1001.0])
+
+    def broken_callback(_fields):
+        raise RuntimeError("synthetic-diagnostic-error")
+
+    provider = make_kraken_account_identity_provider(
+        broker, account_scope=SCOPE, approved_iban_sha256=ACCOUNT_PIN,
+        approved_api_key_sha256=KEY_PIN, reviewed_provider_id=PID,
+        monitoring_category=CATEGORY, clock=lambda: next(ticks),
+        parsed_field_observer=broken_callback,
+    )
+    with pytest.raises(KrakenIdentityDenied, match="authenticated_api_key_identity_missing"):
+        provider()
+    assert broker.calls == ["GetApiKeyInfo"]
+
+
+
 def test_no_automatic_registration_or_trading_side_effects():
     from bot import pretrade_independent_attestation as att
     broker = Broker()
