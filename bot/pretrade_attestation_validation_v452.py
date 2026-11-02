@@ -55,7 +55,7 @@ FAILURE_REASONS = frozenset({
     "snapshot_incomplete", "source_proof_unverified", "pagination_incomplete",
     "observation_clock_invalid", "observation_future", "observation_stale",
     "evidence_identity_reused", "independent_provider_missing", "provider_result_invalid",
-    "provider_read_failed",
+    "provider_read_failed", "independent_evidence_rejected",
 })
 
 

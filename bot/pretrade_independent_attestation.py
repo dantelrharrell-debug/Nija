@@ -92,7 +92,7 @@ def inspect_authenticated_attestations(
     except IndependentEvidenceRejected as exc:
         result = report("independent_evidence_rejected")
         result["failed_fields"] = list(exc.failed_fields)
-        result["failure_reasons"] = dict(exc.failure_reasons)
+        result["failure_reasons"].update(exc.failure_reasons)
         return result
     except Exception:
         return report("collector_exception")

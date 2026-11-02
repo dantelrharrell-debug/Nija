@@ -1,8 +1,10 @@
 """Exercise production Redis nonce Lua against isolated synthetic ownership."""
 from concurrent.futures import ThreadPoolExecutor
+import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -76,13 +78,57 @@ class RedisNonceConcurrencyTests(unittest.TestCase):
 
     def test_concurrent_requests_have_unique_strictly_increasing_nonces(self) -> None:
         backends = [self.backend(), self.backend()]
+        high_water = int(time.time() * 1000) + 600000
+        self.client.set(_PerKeyRedisBackend._KEY_PREFIX + self.key, high_water)
         with ThreadPoolExecutor(max_workers=16) as pool:
             values = list(pool.map(lambda index: backends[index % 2].next_nonce(self.key), range(1000)))
         self.assertEqual(len(values), 1000)
         self.assertEqual(len(set(values)), 1000)
         ordered = sorted(values)
-        self.assertTrue(all(left < right for left, right in zip(ordered, ordered[1:])))
+        self.assertEqual(ordered, list(range(high_water + 1, high_water + 1001)))
         self.assertGreater(self.backend().next_nonce(self.key), ordered[-1])
+
+    def test_independent_processes_share_the_same_fenced_counter(self) -> None:
+        code = """
+import json
+import sys
+import redis
+from bot.distributed_nonce_manager import _PerKeyRedisBackend
+client = redis.Redis(unix_socket_path=sys.argv[1], decode_responses=True, socket_timeout=1)
+backend = _PerKeyRedisBackend.__new__(_PerKeyRedisBackend)
+backend._owner_id = "synthetic-owner"
+backend._next_with_fence_script = client.register_script(_PerKeyRedisBackend._NEXT_WITH_FENCE_LUA)
+backend._ensure_writer_lease = lambda key: 7
+print(json.dumps([backend.next_nonce(sys.argv[2]) for _ in range(100)]))
+client.close()
+"""
+        high_water = int(time.time() * 1000) + 600000
+        self.client.set(_PerKeyRedisBackend._KEY_PREFIX + self.key, high_water)
+        children = []
+        try:
+            for _ in range(4):
+                children.append(subprocess.Popen(
+                    [sys.executable, "-c", code, str(Path(self.directory.name) / "redis.sock"), self.key],
+                    cwd=Path(__file__).resolve().parents[1],
+                    env={"NIJA_DEFER_RUNTIME_SITE_HOOKS": "1", "PYTHONDONTWRITEBYTECODE": "1"},
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                ))
+            values = []
+            for child in children:
+                stdout, stderr = child.communicate(timeout=15)
+                self.assertEqual(child.returncode, 0, stderr)
+                values.extend(json.loads(stdout))
+            self.assertEqual(sorted(values), list(range(high_water + 1, high_water + 401)))
+            self.assertGreater(self.backend().next_nonce(self.key), high_water + 400)
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.terminate()
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.wait(timeout=5)
 
     def test_restart_and_writer_handoff_never_lower_the_high_water_mark(self) -> None:
         first = self.backend()

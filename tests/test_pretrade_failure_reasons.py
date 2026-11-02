@@ -121,7 +121,10 @@ class FailureReasonTests(unittest.TestCase):
         with patch("bot.pretrade_independent_attestation._COLLECTOR", collector):
             report = inspect_authenticated_attestations(self.account)
         self.assertFalse(any(report["checks"].values()))
-        self.assertEqual(report["failure_reasons"], {"operator_authorization": "observation_not_verified"})
+        self.assertEqual(report["failure_reasons"], {
+            field: "observation_not_verified" if field == "operator_authorization"
+            else "independent_evidence_rejected" for field in REQUIRED
+        })
         self.assertFalse(report["authorizes_orders"])
         exc = IndependentEvidenceRejected(["risk_limits"], {"risk_limits": "private-upstream-canary"})
         self.assertEqual(exc.failure_reasons, {"risk_limits": "certificate_context_unverified"})
