@@ -128,6 +128,19 @@ class TestWriterNonceEvidence(unittest.TestCase):
             with self.assertRaises(KrakenWriterEvidenceDenied):
                 build(Broker())["writer_lease"]()
 
+    def test_client_replacement_during_read_rejects_old_nonce_evidence(self):
+        broker = Broker()
+        original_status = broker._distributed_nonce_manager.get_writer_lease_status
+
+        def replace_client(key):
+            broker.api = types.SimpleNamespace(key=KEY, _nonce=broker._kraken_private_call_nonce)
+            return original_status(key)
+
+        broker._distributed_nonce_manager.get_writer_lease_status = replace_client
+        with patch("bot.execution_authority_context.assert_distributed_writer_authority"):
+            with self.assertRaisesRegex(KrakenWriterEvidenceDenied, "writer_evidence_changed_or_stale"):
+                build(broker)["writer_lease"]()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,14 +6,17 @@ Registration is diagnostic-only and never authorizes order submission.
 """
 from __future__ import annotations
 
+import logging
 import math
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from bot.pretrade_attestation_validation_v452 import REQUIRED, SOURCES
+from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED, SOURCES
 from bot.pretrade_composition_bridge_v465 import make_collector
 from bot.pretrade_independent_attestation import install_authenticated_collector
+
+logger = logging.getLogger(__name__)
 
 
 def register_reviewed_account_registry(
@@ -56,7 +59,14 @@ def register_reviewed_account_registry(
         providers_by_account, trusted_provider_ids=trusted_provider_ids
     )
     for account in providers_by_account:
-        result = collector(account)
+        try:
+            result = collector(account)
+        except IndependentEvidenceRejected as exc:
+            logger.error(
+                "PRETRADE_COLLECTOR_INSTALL_REJECTED failed_fields=%s collector_replaced=false",
+                ",".join(exc.failed_fields),
+            )
+            raise
         if not isinstance(result, Mapping):
             raise ValueError("fresh_independent_attestations_required")
         checks = result.get("checks")

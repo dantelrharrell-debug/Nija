@@ -158,3 +158,53 @@ def test_duplicate_provider_ids_fail_before_collector_replacement(monkeypatch):
         )
 
     assert calls == []
+
+
+@pytest.mark.parametrize("field", REQUIRED)
+@pytest.mark.parametrize("defect", ["false", "stale", "wrong_account", "wrong_provider", "exception"])
+def test_each_of_thirteen_fields_must_pass_before_install(monkeypatch, field, defect, caplog):
+    previous = lambda _account: {"previous": True}
+    monkeypatch.setattr(inspector, "_COLLECTOR", previous)
+    providers = _providers()
+
+    def rejected():
+        row = _observation("platform:kraken", field)
+        if defect == "false":
+            row["verified"] = False
+        elif defect == "stale":
+            row["observed_at_epoch"] = time.time() - 61
+        elif defect == "wrong_account":
+            row["account"] = "user:someone_else:kraken"
+        elif defect == "wrong_provider":
+            row["provider_id"] = "not-reviewed"
+        else:
+            raise RuntimeError("secret-canary-never-serialize")
+        return row
+
+    providers[field] = rejected
+    with pytest.raises(registration.IndependentEvidenceRejected) as exc:
+        registration.register_reviewed_account_registry(
+            providers_by_account={"platform:kraken": providers},
+            trusted_provider_ids=_identities(), independently_reviewed=True,
+        )
+    assert exc.value.failed_fields == (field,)
+    assert inspector._COLLECTOR is previous
+    assert "collector_replaced=false" in caplog.text
+    assert "secret-canary" not in caplog.text
+
+
+def test_platform_registration_can_preserve_separate_reviewed_member_accounts(monkeypatch):
+    monkeypatch.setattr(inspector, "_COLLECTOR", None)
+    accounts = ("platform:kraken", "user:member:kraken", "platform:okx")
+    registration.register_reviewed_account_registry(
+        providers_by_account={account: _providers(account) for account in accounts},
+        trusted_provider_ids=_identities(), independently_reviewed=True,
+    )
+    for account in accounts:
+        report = inspector.inspect_authenticated_attestations(account)
+        assert report["producer_status"] == "checks_passed_diagnostic_only"
+        assert report["collector_installed"] is True
+        assert report["authorizes_orders"] is False
+    unknown = inspector.inspect_authenticated_attestations("user:unregistered:kraken")
+    assert not any(unknown["checks"].values())
+    assert unknown["authorizes_orders"] is False

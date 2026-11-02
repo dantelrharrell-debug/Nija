@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from bot.pretrade_attestation_validation_v452 import REQUIRED, SOURCES
+from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED, SOURCES
 from bot.pretrade_authenticated_provider_adapter_v453 import collect_independent_pretrade_evidence
 from bot.pretrade_independent_attestation import FIELDS, install_authenticated_collector
 
@@ -93,7 +93,8 @@ def make_collector(
                 or not isinstance(observed, Mapping)
                 or any(field not in observed for field in REQUIRED)
                 or report.get("provider_errors")):
-            raise ValueError("independent_pretrade_provenance_unverified")
+            missing = result.get("missing", REQUIRED) if isinstance(result, Mapping) else REQUIRED
+            raise IndependentEvidenceRejected(missing)
         stamps = [observed[field].get("observed_at_epoch") for field in REQUIRED]
         if any(isinstance(t, bool) or not isinstance(t, (float, int))
                or not math.isfinite(t) for t in stamps):
