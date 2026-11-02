@@ -76,3 +76,9 @@ def test_missing_enabled_denied():
 def test_route_remains_jwt_protected():
     source = (ROOT / "mobile_api.py").read_text(encoding="utf-8")
     assert '@mobile_api.route("/trading/quick-toggle", methods=["POST"])\n@require_auth' in source
+
+if __name__ == "__main__":
+    for name, test in sorted(globals().items()):
+        if name.startswith("test_") and callable(test):
+            test()
+    print("mobile toggle fail-closed regressions: PASS")
