@@ -12068,7 +12068,21 @@ class KrakenBroker(BaseBroker):
         """
         try:
             if not self.api:
-                logger.error(f"❌ Price fetch failed for {symbol} — Kraken API not connected")
+                account_role = {
+                    AccountType.PLATFORM: "platform", AccountType.USER: "customer",
+                }.get(self.account_type, "unknown")
+                stage = getattr(self, "_connection_stage", "not_started")
+                if stage not in {
+                    "not_started", "credentials", "clock_verification", "client_creation",
+                    "writer_authority", "nonce_ownership", "authenticated_balance",
+                    "balance_hydration", "connected",
+                }:
+                    stage = "unknown"
+                logger.error(
+                    "❌ Price fetch failed for %s — Kraken API not connected; "
+                    "KRAKEN_MARKET_DATA_UNAVAILABLE account_role=%s lifecycle_stage=%s connected=%s",
+                    symbol, account_role, stage, self.connected is True,
+                )
                 return 0.0
 
             # Fast-path: skip symbols that previously returned "EQuery:Unknown asset pair"
