@@ -49,6 +49,13 @@ def main() -> int:
     text = gradle.read_text(encoding="utf-8")
     compile_sdk = extract_sdk(text, "compileSdk")
     target_sdk = extract_sdk(text, "targetSdk")
+    variables = gradle.parent.parent / "variables.gradle"
+    if variables.exists() and (compile_sdk is None or target_sdk is None):
+        variables_text = variables.read_text(encoding="utf-8")
+        if compile_sdk is None:
+            compile_sdk = extract_sdk(variables_text, "compileSdk")
+        if target_sdk is None:
+            target_sdk = extract_sdk(variables_text, "targetSdk")
 
     errors: list[str] = []
     if compile_sdk is None or compile_sdk < 36:
