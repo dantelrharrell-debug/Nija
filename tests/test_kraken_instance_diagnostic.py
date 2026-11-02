@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from scripts.nija_kraken_instance_diagnostic import _read_regular, classify_log
+from scripts.nija_kraken_instance_diagnostic import (
+    BASELINE, SERVICE, _read_regular, classify_log, inspect_instance, inspect_render_api,
+)
 
 
 class InstanceDiagnosticTests(unittest.TestCase):
@@ -37,3 +40,28 @@ class InstanceDiagnosticTests(unittest.TestCase):
             link.symlink_to(path)
             with self.assertRaises(OSError):
                 _read_regular(link, 20)
+
+    def test_wrong_service_or_commit_never_inspects_processes(self) -> None:
+        for environment, reason in (
+            ({}, "service_identity_mismatch"),
+            ({"RENDER_SERVICE_ID": SERVICE}, "baseline_commit_mismatch"),
+        ):
+            with patch.dict("os.environ", environment, clear=True), patch.object(Path, "iterdir") as scan:
+                self.assertEqual(inspect_instance(), {"status": "BLOCKED", "reason": reason})
+                scan.assert_not_called()
+
+    def test_api_missing_authorization_never_requests(self) -> None:
+        for environment, reason in (
+            ({}, "render_api_credential_unavailable"),
+            ({"RENDER_API_KEY": "synthetic-only"}, "current_instance_identity_unavailable"),
+        ):
+            with patch.dict("os.environ", environment, clear=True), patch(
+                "scripts.nija_kraken_instance_diagnostic.urlopen"
+            ) as request:
+                report = inspect_render_api()
+                self.assertEqual(report["failures"], [reason])
+                self.assertFalse(report["allow_new_orders"])
+                request.assert_not_called()
+
+    def test_baseline_is_an_exact_public_commit_pin(self) -> None:
+        self.assertRegex(BASELINE, r"^[0-9a-f]{40}$")

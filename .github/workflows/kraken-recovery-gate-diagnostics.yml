@@ -119,6 +119,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Inspect baseline Render process without broker calls or writes
+        id: instance
         shell: bash
         env:
           RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
@@ -143,10 +144,20 @@ jobs:
             echo 'BLOCKED: Render host fingerprint mismatch'
             exit 2
           fi
-          ssh -T -i "$recovery_dir/key" \
+          report=$(ssh -T -i "$recovery_dir/key" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$recovery_dir/known_hosts" \
             -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
             -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
             srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
-            'command python -B -S -' < scripts/nija_kraken_instance_diagnostic.py
+            'command python -B -S -' < scripts/nija_kraken_instance_diagnostic.py)
+          printf '%s\n' "$report"
+          instance=$(printf '%s\n' "$report" | jq -r '.instance_id // ""')
+          if [[ "$instance" =~ ^[a-zA-Z0-9-]{1,100}$ ]]; then
+            printf 'instance=%s\n' "$instance" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Read current-instance Render logs and deployment metadata
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          EXPECTED_RENDER_INSTANCE: ${{ steps.instance.outputs.instance }}
+        run: python -B -S scripts/nija_kraken_instance_diagnostic.py --render-api

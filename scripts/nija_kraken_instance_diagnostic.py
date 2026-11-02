@@ -14,6 +14,9 @@ from pathlib import Path
 import re
 import stat
 import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 SERVICE = "srv-d98dsr5aeets73fpbaqg"
 BASELINE = "cd174134ff4a61824322cecc042d1548bd938a34"
@@ -91,6 +94,9 @@ def inspect_instance() -> dict:
         "state_changed": False, "allow_new_orders": False,
         "processes": [], "log_signals": {}, "source_sha256": {}, "failures": [],
     }
+    instance = os.environ.get("RENDER_INSTANCE_ID", "")
+    if re.fullmatch(r"[a-zA-Z0-9-]{1,100}", instance):
+        result["instance_id"] = instance
     try:
         uptime = float(Path("/proc/uptime").read_text().split()[0])
         boot = time.time() - uptime
@@ -153,5 +159,85 @@ def inspect_instance() -> dict:
     return result
 
 
+def inspect_render_api() -> dict:
+    """Fetch sanitized live-deploy metadata and exact-instance logs from Render."""
+    result = {
+        "status": "BLOCKED", "broker_requests": False, "allow_new_orders": False,
+        "failures": [], "log_signals": {},
+    }
+    token = os.environ.get("RENDER_API_KEY", "")
+    instance = os.environ.get("EXPECTED_RENDER_INSTANCE", "")
+    if not token:
+        result["failures"].append("render_api_credential_unavailable")
+        return result
+    if not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", instance):
+        result["failures"].append("current_instance_identity_unavailable")
+        return result
+
+    def get(path: str) -> object:
+        request = Request("https://api.render.com/v1/" + path, headers={
+            "Authorization": "Bearer " + token, "Accept": "application/json",
+        })
+        with urlopen(request, timeout=20) as response:
+            data = response.read(MAX_BYTES + 1)
+            if len(data) > MAX_BYTES:
+                raise ValueError("render_response_budget_exceeded")
+            return json.loads(data)
+
+    try:
+        service = get("services/" + SERVICE)
+        if not isinstance(service, dict) or service.get("id") != SERVICE:
+            raise ValueError("render_service_response_invalid")
+        owner = service.get("ownerId")
+        if not isinstance(owner, str) or not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", owner):
+            raise ValueError("render_owner_identity_unavailable")
+        deployments = get("services/" + SERVICE + "/deploys?limit=5")
+        if not isinstance(deployments, list):
+            raise ValueError("render_deploy_response_invalid")
+        live = [
+            row["deploy"] for row in deployments
+            if isinstance(row, dict) and isinstance(row.get("deploy"), dict)
+            and row["deploy"].get("status") == "live"
+            and isinstance(row["deploy"].get("commit"), dict)
+            and row["deploy"]["commit"].get("id") == BASELINE
+        ]
+        if len(live) != 1 or not re.fullmatch(r"dep-[a-zA-Z0-9]+", live[0].get("id", "")):
+            raise ValueError("expected_live_deployment_unverified")
+        result["deployment_id"] = live[0]["id"]
+        result["commit"] = BASELINE
+        result["deployment_status"] = "live"
+        counts: Counter[str] = Counter()
+        # Fixed searches bound response size and avoid unrelated customer logs.
+        for text in ("KRAKEN_INITIALIZATION", "KRAKEN_NONCE_STARTUP", "PRETRADE_INDEPENDENT", "Kraken connection"):
+            query = urlencode({
+                "ownerId": owner, "resource": SERVICE, "instance": instance,
+                "text": text, "limit": 100, "direction": "backward",
+                "startTime": live[0]["createdAt"],
+            })
+            response = get("logs?" + query)
+            if not isinstance(response, dict) or not isinstance(response.get("logs"), list):
+                raise ValueError("render_log_response_invalid")
+            for row in response["logs"]:
+                if not isinstance(row, dict):
+                    raise ValueError("render_log_response_invalid")
+                message, stamp = row.get("message"), row.get("timestamp")
+                if not isinstance(message, str) or not isinstance(stamp, str):
+                    raise ValueError("render_log_response_invalid")
+                counts.update(classify_log(stamp + " " + message, since=0))
+        result["log_signals"] = dict(counts)
+        result["status"] = "DIAGNOSTIC_ONLY"
+        if not counts:
+            result["failures"].append("current_instance_api_log_evidence_unavailable")
+    except HTTPError as exc:
+        result["failures"].append("render_api_http_" + str(exc.code))
+    except (OSError, URLError):
+        result["failures"].append("render_api_transport_failed")
+    except (KeyError, TypeError, ValueError):
+        result["failures"].append("render_api_response_unverified")
+    return result
+
+
 if __name__ == "__main__":
-    print(json.dumps(inspect_instance(), sort_keys=True))
+    import sys
+    report = inspect_render_api() if sys.argv[1:] == ["--render-api"] else inspect_instance()
+    print(json.dumps(report, sort_keys=True))
