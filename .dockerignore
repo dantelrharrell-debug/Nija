@@ -117,6 +117,7 @@ scripts/*
 !scripts/nija_account_state_diagnostics.py
 !scripts/redis_connectivity_check.sh
 !scripts/credential_diagnostics.sh
+!scripts/kraken_credential_aliases.sh
 !scripts/debug_startup_safe_mode.sh
 !scripts/production_bootstrap.sh
 !scripts/three_venue_config_check.py

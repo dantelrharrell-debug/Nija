@@ -101,3 +101,59 @@ Finally inspect existing execution admission and current genuine order/fill
 evidence. Collector certification remains diagnostic-only: existing execution
 proof and authority gates are unchanged. No live test order is authorized by
 this procedure.
+
+## Post-3557 container startup repair
+
+The shared `scripts/kraken_credential_aliases.sh` added by PR #3557 was omitted
+from the Docker build context: `.dockerignore` excludes `scripts/*` and did not
+re-include this new runtime dependency. A successful image build did not detect
+the omission. Both production front doors source it under `set -e`.
+
+An actual Docker-filtered Python 3.11 image reproduced exit code 1:
+
+```text
+scripts/render_entrypoint.sh: line 35: /app/scripts/kraken_credential_aliases.sh: No such file or directory
+scripts/production_bootstrap.sh: line 14: /app/scripts/kraken_credential_aliases.sh: No such file or directory
+```
+
+This failure precedes the canonical Python launcher, native broker connection,
+writer/nonce initialization, persistent recovery reads and collector installation.
+The repair re-includes only this helper and adds production build-time presence
+and Bash syntax checks. No credential selection, broker lifecycle, trading
+strategy, order admission or safety guard is changed.
+
+The container regression uses the real `.dockerignore`, Python 3.11, a non-root
+user, synthetic credentials and `--network=none`. It runs each real shell front
+door, the Render patcher chain and early `/healthz` server, stopping before
+`start.sh` executes any Python trading runtime. It verifies restrictive runtime
+authority and writer state at that boundary. This proves shell startup and
+liveness, **not** full application startup, Kraken authentication or trading
+readiness. Run it explicitly (Docker must already be available):
+
+```bash
+NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_render_container_startup.py -v
+```
+
+Authenticated Render deployment events/logs remain required to establish the
+exact cause of `dep-dbjuc015efls73ef48g0`. In this repair session the Render API
+hostname did not resolve and no Render API credential was available. GitHub's
+Render integration associates that deployment with commit
+`851d41ad289edd7cb18e0c9f6ee3aae8db2b971f`, whereas the supplied failed release
+commit is `41b3e91691a59ace61d1591c9032ad127d3f6f58`. Resolve that discrepancy
+against authenticated Render metadata before attributing the reproduced failure
+to that specific deployment. Do not treat old live-instance logs as new-release
+evidence.
+
+Collector installation remains blocked independently of this packaging repair.
+The v490 six-source contract and v491 thirteen-source bridge validate wiring;
+neither supplies authoritative sources or registers at production startup.
+There is no production caller with a complete reviewed registry. Required
+dependencies remain: an account-bound reconciled ledger snapshot, a current
+writer-owned duplicate-order fence, independently approved operator authority,
+durable kill-switch clearance, current risk-governor limits, and a complete
+authenticated position-sync observation. Approved account/key pins, vetted
+provider identities and backup/restore plus broker/ledger/protection
+certification are also required before invoking the existing v474 registration
+boundary. No automatic provider, approval flag or fabricated observation is
+added. All thirteen checks and `READ_ONLY_RECOVERY allow_new_orders=false`
+must remain blocking until genuine account-specific evidence is available.
