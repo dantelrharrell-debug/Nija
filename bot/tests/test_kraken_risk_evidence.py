@@ -160,6 +160,44 @@ class KrakenRiskEvidenceTests(unittest.TestCase):
             with self.subTest(options=options), self.assertRaises(KrakenRiskEvidenceDenied):
                 self.provider(**options)
 
+    def test_source_age_is_not_reset_when_certification_is_observed(self):
+        for component in ("capital", "exposure"):
+            value = snapshot()
+            value[component]["observed_at_epoch"] = NOW - 59
+            read, _ = self.provider(value)
+            row = read()
+            self.assertEqual(row["observed_at_epoch"], NOW - 59)
+            self.assertEqual(row["expires_at_epoch"], NOW + 1)
+            providers = {field: f"reviewed-{field}" for field in REQUIRED}
+            providers["risk_limits"] = row["provider_id"]
+            for now, expected_reason in ((NOW, None), (NOW + 2, "observation_stale")):
+                verdict = evaluate_pretrade_certificate(
+                    {"risk_limits": row}, account=ACCOUNT,
+                    trusted_provider_ids=providers, now_epoch=now,
+                )
+                with self.subTest(component=component, now=now):
+                    self.assertEqual(verdict["failure_reasons"].get("risk_limits"), expected_reason)
+
+    def test_stricter_source_expiry_is_preserved_and_enforced_by_v452(self):
+        for component in (None, "capital", "exposure", "policy"):
+            value = snapshot()
+            record = value if component is None else value[component]
+            record["expires_at_epoch"] = NOW + 1
+            read, _ = self.provider(value)
+            row = read()
+            self.assertEqual(row["expires_at_epoch"], NOW + 1)
+            providers = {field: f"reviewed-{field}" for field in REQUIRED}
+            providers["risk_limits"] = row["provider_id"]
+            verdict = evaluate_pretrade_certificate(
+                {"risk_limits": row}, account=ACCOUNT,
+                trusted_provider_ids=providers, now_epoch=NOW + 2,
+            )
+            self.assertEqual(verdict["failure_reasons"]["risk_limits"], "observation_expired")
+            for invalid in (NOW, NOW - 11, float("nan"), float("inf"), True, "later", None):
+                record["expires_at_epoch"] = invalid
+                with self.subTest(component=component, invalid=invalid):
+                    self.assert_denied(value)
+
     def test_all_records_require_account_key_and_provenance(self):
         for component in (None, "capital", "exposure", "policy"):
             for key, invalid in (
@@ -407,6 +445,18 @@ class KrakenRiskEvidenceTests(unittest.TestCase):
         authority.get_raw_per_broker.return_value = 6000.0
         with self.assertRaises(KrakenRiskEvidenceDenied):
             read()
+
+    def test_existing_capital_registry_age_also_bounds_output_lifetime(self):
+        authority = self.capital_authority()
+        authority.get_snapshot.return_value["last_updated"] = datetime.fromtimestamp(
+            NOW - 59, timezone.utc,
+        ).isoformat()
+        read, _ = self.provider(
+            capital_authority=authority, reviewed_capital_broker_id="reviewed-kraken-account",
+        )
+        row = read()
+        self.assertEqual(row["observed_at_epoch"], NOW - 59)
+        self.assertEqual(row["expires_at_epoch"], NOW + 1)
 
     def test_capital_registry_failures_and_concurrent_change(self):
         for key in ("is_registered", "is_fresh", "is_brokers_complete"):

@@ -170,6 +170,20 @@ class OperatorAuthorizationTests(unittest.TestCase):
         ticks = iter([1000, 1010])
         self.assert_denied(self.provider(clock=lambda: next(ticks))())
 
+    def test_signed_status_freshness_is_not_restarted_by_collection(self):
+        self.status.update(observed_at_epoch=941, expires_at_epoch=1100)
+        self.resign()
+        row = self.provider()()
+        self.assertTrue(row["verified"])
+        self.assertEqual(row["expires_at_epoch"], 1001)
+        ids = {field: field for field in REQUIRED}
+        ids["operator_authorization"] = self.binding.provider_id
+        result = evaluate_pretrade_certificate(
+            {"operator_authorization": row}, account=self.binding.account,
+            trusted_provider_ids=ids, now_epoch=1002,
+        )
+        self.assertEqual(result["failure_reasons"]["operator_authorization"], "observation_expired")
+
     def test_provider_exception_does_not_leak_details(self):
         def broken():
             raise RuntimeError("sensitive-example-not-a-credential")
