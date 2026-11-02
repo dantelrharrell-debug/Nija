@@ -115,3 +115,24 @@ def test_duplicate_provider_identity_or_evidence_is_rejected():
 def test_max_age_cannot_be_extended():
     rows = valid(900)
     assert not check(rows, max_age_s=3600)["certified"]
+
+
+def test_signed_source_expiry_is_not_extended_by_observation_freshness():
+    rows = valid()
+    rows["operator_authorization"]["expires_at_epoch"] = 1001
+    result = evaluate_pretrade_certificate(
+        rows, account=ACCOUNT, trusted_provider_ids=TRUSTED, now_epoch=1005,
+    )
+    assert result["missing"] == ["operator_authorization"]
+    assert result["failure_reasons"]["operator_authorization"] == "observation_expired"
+    assert result["authorizes_orders"] is False
+
+
+def test_source_expiry_equality_and_malformed_values_deny():
+    for expiry in (1000, 999, True, None, "1001", float("nan"), float("inf")):
+        rows = valid()
+        rows["operator_authorization"]["expires_at_epoch"] = expiry
+        assert not check(rows)["certified"]
+    rows = valid()
+    rows["operator_authorization"]["expires_at_epoch"] = 1001
+    assert check(rows)["certified"]
