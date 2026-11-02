@@ -1,5 +1,6 @@
 """Synthetic log fixtures; never import trading runtime or use credentials."""
 from datetime import datetime, timezone
+import hashlib
 import io
 import json
 import os
@@ -68,7 +69,22 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 request.assert_not_called()
 
     def test_baseline_is_an_exact_public_commit_pin(self) -> None:
+        self.assertEqual(BASELINE, "00be8a441a78bdd9043b8744d4591ed804a58182")
         self.assertRegex(BASELINE, r"^[0-9a-f]{40}$")
+
+    def test_consumed_identity_request_id_survives_baseline_update(self) -> None:
+        self.assertEqual(IDENTITY_REQUEST, "85c2521edd9754d6f6f7df677f8d6231")
+
+    def test_recovery_workflows_pin_the_checked_out_history_source(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        source = repository / "bot/kraken_live_history_recovery.py"
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        for path in (
+            ".github/workflows/render-recovery-access.yml",
+            ".github/workflows/kraken-recovery-gate-diagnostics.yml",
+        ):
+            with self.subTest(workflow=path):
+                self.assertIn(digest, (repository / path).read_text())
 
     def test_api_logs_must_match_the_current_instance(self) -> None:
         for observed_instance, accepted in (

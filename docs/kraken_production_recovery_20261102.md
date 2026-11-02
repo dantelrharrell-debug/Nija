@@ -6,10 +6,38 @@ Production is **not independently certified**. This change improves denial
 diagnostics and safe investigation; it does not supply missing authorities,
 install a collector, enable orders, merge, or deploy.
 
-The inspected Render service is `srv-d98dsr5aeets73fpbaqg`, live deployment
+### Baseline reconciliation follow-up
+
+The release branch head is `00be8a441a78bdd9043b8744d4591ed804a58182`.
+The operator supplied the same commit as the last independently verified
+production commit and identified deployment `dep-dbk235e417fc73bfsg90`; this
+session did not independently verify the current Render deployment ID or SHA.
+The diagnostic script still expected `cd174134ff4a61824322cecc042d1548bd938a34`,
+so it could not certify that the current process matches the supplied baseline.
+
+Recovery run `41391845949` successfully reached the fixed Render service and
+reported SQLite integrity as true, with only
+`exchange_protective_order_id_mapping_missing` and
+`pending_kraken_closes_require_reconciliation`. It failed before
+`NIJA_REPAIR_SOURCE_HASHES_VERIFIED`: both recovery workflows expected history
+source digest
+`0e04bf20802abde51f78c4ecbf14cbd57cb4a881833760942c4460cfdc9d6a31`, while the
+source at the release branch head hashes to
+`02d382407fe6f71fd8cb36190c5c87fcdb0f79e6ef4f62d597e633343e99e4df`. The
+prepared review change aligns those two exact pins and the diagnostic baseline;
+it does not weaken any comparison. The consumed identity request ID remains
+`85c2521edd9754d6f6f7df677f8d6231` and is not replayed or replaced.
+
+Until that review change is approved and the existing diagnostic is rerun,
+current Render deployment identity and source hashes remain unverified. The
+ledger blockers above remain unresolved; no authenticated order/trade read,
+ledger mutation, collector installation, or order authorization occurred.
+
+The earlier inspection recorded Render deployment
 `dep-dbk18d6417fc73bf4alg`, commit
-`cd174134ff4a61824322cecc042d1548bd938a34`. The canonical process remained on
-instance `srv-d98dsr5aeets73fpbaqg-7d458c8976-zsc58` throughout inspection.
+`cd174134ff4a61824322cecc042d1548bd938a34`, and instance
+`srv-d98dsr5aeets73fpbaqg-7d458c8976-zsc58`. Those values are historical; they
+are not evidence of the current deployment after the release branch advanced.
 No Docker/startup repair was repeated.
 
 ## Authenticated current-instance evidence
