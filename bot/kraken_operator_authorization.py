@@ -187,12 +187,13 @@ def make_general_operator_authorization_provider(
             if _canonical(read_records()) != _canonical(records):
                 raise OperatorAuthorizationDenied("authorization_changed_during_read")
             finished = clock()
+            evidence_expires = min(expires, status_expires, observed + 60)
             if (not _timestamp(finished) or not 0 <= finished - stamp <= 60
-                    or finished >= min(expires, status_expires) or finished - observed > 60):
+                    or finished >= evidence_expires):
                 raise OperatorAuthorizationDenied("authorization_expired_during_read")
             row.update(verified=True, scope_verified=True, approval_sha256=approval_digest,
                        approval_id=approval["approval_id"], status_generation=status["generation"],
-                       expires_at_epoch=min(expires, status_expires))
+                       expires_at_epoch=evidence_expires)
             row["provenance"].update(
                 account_scope_verified=True, snapshot_complete=True, operator_approval_verified=True,
                 signature_algorithm="Ed25519", approval_contract="nija.general-live-approval.v1",

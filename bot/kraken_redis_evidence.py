@@ -31,6 +31,9 @@ deny certification; this design does not silently reconstruct their history.
 Coverage signs the complete inventory digest: every subsequent inventory change
 requires fresh independent snapshot review/signing, not just revision updates.
 The Lua plans have NOT been activated or integrated with submission dispatch.
+Every row expires at read-start plus the minimum lease PTTL across both reads,
+capped at 60 seconds. Duplicate evidence additionally expires with the earliest
+expiring existing reservation fence; persistent fences cannot extend a lease.
 No evidence produced here grants authority or replaces any execution safeguard.
 """
 from __future__ import annotations
@@ -197,7 +200,9 @@ class RedisEvidenceReader:
             ("get", "nija:kraken:nonce:" + key_id),
         ]
 
-    def _snapshot(self) -> tuple[list[Any], dict[str, Any], list[dict[str, Any]], list[str], list[int]]:
+    def _snapshot(self) -> tuple[
+        list[Any], dict[str, Any], list[dict[str, Any]], list[str], list[int], list[int],
+    ]:
         manifest_key, members_key, record_prefix = inventory_keys(self._binding.expected_scope.account)
         first_manifest, first_members = self._transaction([("get", manifest_key), ("smembers", members_key)])
         _require(first_manifest is not None and isinstance(first_members, (set, list, tuple)), "inventory_absent")
@@ -215,6 +220,7 @@ class RedisEvidenceReader:
         operations += [("pttl", record_prefix + member) for member in members]
         # Each member is the exact digest from decision_context.build_key().
         operations += [("get", _FENCE_PREFIX + member) for member in members]
+        operations += [("pttl", _FENCE_PREFIX + member) for member in members]
         result = self._transaction(operations)
         _require(result[11:13] == [-1, -1], "nonce_counters_not_durable")
         manifest_raw, membership, manifest_ttl, membership_ttl = result[13:17]
@@ -228,7 +234,8 @@ class RedisEvidenceReader:
         records = [json.loads(_decode(item)) for item in result[17:17 + count]]
         record_ttls = result[17 + count:17 + 2 * count]
         _require(all(ttl == -1 for ttl in record_ttls), "inventory_not_durable")
-        fences = [_decode(item) for item in result[17 + 2 * count:]]
+        fences = [_decode(item) for item in result[17 + 2 * count:17 + 3 * count]]
+        fence_ttls = result[17 + 3 * count:]
         manifest = json.loads(_decode(manifest_raw))
         _require(isinstance(manifest, dict) and all(isinstance(row, dict) for row in records), "inventory_invalid")
         _require(
@@ -237,7 +244,7 @@ class RedisEvidenceReader:
         )
         for member, row in zip(members, records):
             _require(row.get("intent_digest") == member, "inventory_record_mismatch")
-        return result[:7], manifest, records, fences, result[7:11]
+        return result[:7], manifest, records, fences, result[7:11], fence_ttls
 
     def _coverage(self, manifest: dict[str, Any], rows: list[dict[str, Any]], now: float) -> None:
         binding = self._binding
@@ -283,7 +290,7 @@ class RedisEvidenceReader:
         _require(_positive(manifest.get("revision")), "inventory_revision_invalid")
 
     def _validate_snapshot(self, snapshot: tuple, started: float, elapsed_ms: float) -> int:
-        controls, manifest, rows, fences, ttls = snapshot
+        controls, manifest, rows, fences, ttls, fence_ttls = snapshot
         scope = self._binding.expected_scope
         decoded = [_decode(value) for value in controls]
         expected = [
@@ -292,6 +299,10 @@ class RedisEvidenceReader:
         ]
         _require(decoded[:6] == expected, "writer_ownership_or_generation_conflict")
         _require(all(type(ttl) is int and ttl > elapsed_ms + 1000 for ttl in ttls), "writer_lease_expired")
+        _require(
+            all(type(ttl) is int and (ttl == -1 or ttl > elapsed_ms + 1000) for ttl in fence_ttls),
+            "intent_fence_expired",
+        )
         _require(decoded[6].isdigit() and int(decoded[6]) > 0, "nonce_missing_or_invalid")
         self._coverage(manifest, rows, started)
         attempts: set[tuple[str, int]] = set()
@@ -351,6 +362,17 @@ class RedisEvidenceReader:
                 all(ttl > (returned_at - started) * 1000 + 1000 for ttl in first[4] + second[4]),
                 "writer_lease_expired",
             )
+            fence_ttls = first[5] + second[5]
+            _require(
+                all(ttl == -1 or ttl > (returned_at - started) * 1000 + 1000 for ttl in fence_ttls),
+                "intent_fence_expired",
+            )
+            # Anchor ALL deadlines to read-start, never the later read/return
+            # time. Both lineages fence every field; duplicate history also
+            # depends on every existing expiring reservation remaining present.
+            lease_lifetime = min(60.0, min(first[4] + second[4]) / 1000)
+            expiring_fences = [ttl / 1000 for ttl in fence_ttls if ttl > 0]
+            duplicate_lifetime = min([lease_lifetime] + expiring_fences)
             collection_id = uuid.uuid4().hex
             return {
                 field: {
@@ -358,6 +380,9 @@ class RedisEvidenceReader:
                     "provider_id": provider, "evidence_id": collection_id + ":" + field,
                     "verified": True, "read_only": True, "scope_verified": True,
                     "observed_at_epoch": started, "authorizes_orders": False,
+                    "expires_at_epoch": started + (
+                        duplicate_lifetime if field == "duplicate_order_fence" else lease_lifetime
+                    ),
                     "provenance": {
                         "account_scope_verified": True, "collector_identity_verified": True,
                         "snapshot_complete": True, "writer_fencing_verified": True,

@@ -13,6 +13,8 @@ Snapshot contract:
   api_key_sha256, source_id, revision, observed_at_epoch, verified, read_only,
   scope_verified and the four PROVENANCE flags. Each record has its own pinned
   source identity and independent observation timestamp. Percentages use 0..100.
+  Optional expires_at_epoch values must be future finite timestamps later than
+  their record observation; stricter source expiries are preserved in output.
 * Capital supplies hydrated/registered/is_real, real_capital, usable_capital.
 * Exposure supplies hydrated, positions, total_gross_exposure_usd, total_risk_usd.
   Positions include pending orders/reservations, without netting short exposure.
@@ -235,9 +237,10 @@ def make_kraken_risk_limits_provider(
     if capital_authority is not None:
         _require(_identifier(reviewed_capital_broker_id), "capital_account_binding_required")
 
-    def validate(snapshot: Any, now: float) -> float:
+    def validate(snapshot: Any, now: float) -> tuple[float, float]:
         _require(isinstance(snapshot, Mapping), "account_snapshot_missing")
         stamps = []
+        expiries = []
         for key in (None, *_RECORDS):
             row = snapshot if key is None else snapshot.get(key)
             _require(isinstance(row, Mapping), "account_record_missing")
@@ -253,9 +256,15 @@ def make_kraken_risk_limits_provider(
             _require(isinstance(provenance, Mapping)
                      and all(provenance.get(flag) is True for flag in PROVENANCE),
                      "source_provenance_unverified")
-            stamps.append(_stamp(row.get("observed_at_epoch"), now))
+            stamp = _stamp(row.get("observed_at_epoch"), now)
+            stamps.append(stamp)
+            expiries.append(stamp + _MAX_AGE_S)
+            if "expires_at_epoch" in row:
+                expiry = _number(row["expires_at_epoch"], positive=True)
+                _require(expiry > stamp and now < expiry, "risk_source_expired_or_invalid")
+                expiries.append(expiry)
         _validate_risk(snapshot)
-        return min(stamps)
+        return min(stamps), min(expiries)
 
     def local_capital(snapshot: Mapping[str, Any], now: float) -> Any:
         if capital_authority is None:
@@ -300,17 +309,20 @@ def make_kraken_risk_limits_provider(
             second = copy.deepcopy(snapshot_source.read_snapshot(account_scope, approved_api_key_sha256))
             finished = _number(clock(), positive=True)
             _require(0 <= finished - started <= _MAX_AGE_S, "risk_read_clock_changed")
-            observed = validate(second, finished)
+            observed, expires = validate(second, finished)
             _require(first == second and capital_before == capital_after
                      and governor_before == governor_after, "concurrent_risk_change")
             if capital_after is not None:
                 _stamp(capital_after[0], finished)
+                observed = min(observed, capital_after[0])
+                expires = min(expires, capital_after[0] + _MAX_AGE_S)
             # Verification is preserved only after all supplied proofs have been
             # checked; no report-generation timestamp replaces observation age.
             return {
                 "account": account_scope, "api_key_sha256": approved_api_key_sha256,
                 "source": "risk_governor", "provider_id": reviewed_provider_id,
                 "evidence_id": uuid.uuid4().hex, "observed_at_epoch": observed,
+                "expires_at_epoch": expires,
                 "snapshot_source_id": reviewed_snapshot_source_id,
                 "snapshot_revision": second["revision"],
                 "record_revisions": {key: second[key]["revision"] for key in _RECORDS},
