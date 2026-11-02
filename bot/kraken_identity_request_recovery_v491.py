@@ -153,11 +153,15 @@ def collect_requested_identity(
         }
         try:
             binding, digest, binding_identity = _binding(root, stamp)
+            parsed_presence = {}
+            def record_parsed_presence(fields):
+                parsed_presence.update(fields)
             provider = make_kraken_account_identity_provider(
                 selected[0], account_scope="platform:kraken",
                 approved_api_key_sha256=binding["approved_api_key_sha256"],
                 approved_iban_sha256=binding["approved_account_iiban_sha256"],
                 reviewed_provider_id=PROVIDER_ID, monitoring_category=monitoring_category,
+                parsed_field_observer=record_parsed_presence,
             )
             observation = provider()
             # Detect replacement of approved inputs during the authenticated read.
@@ -173,6 +177,8 @@ def collect_requested_identity(
             if type(exc) is KrakenIdentityDenied and str(exc) in _IDENTITY_DENIALS:
                 code = str(exc)
             receipt.update({"collection_succeeded": False, "failure_code": code})
+            if "parsed_presence" in locals() and parsed_presence:
+                receipt["parsed_identity_field_presence"] = dict(parsed_presence)
         write_recovery_state(output, receipt)
         LOGGER.info(
             "KRAKEN_IDENTITY_RECOVERY_FINISHED succeeded=%s diagnostic_only=true trading_authorized=false",
