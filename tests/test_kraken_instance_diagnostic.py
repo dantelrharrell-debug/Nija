@@ -85,7 +85,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
                         "message": "EAPI:Invalid signature private-canary",
                         "labels": [{"name": "instance", "value": observed_instance}],
                     }],
-                }] * 4
+                }] * 7
                 with patch.dict("os.environ", {
                     "RENDER_API_KEY": "synthetic-only",
                     "EXPECTED_RENDER_INSTANCE": SERVICE + "-7d458c8976-zsc58",

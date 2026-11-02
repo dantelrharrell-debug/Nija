@@ -50,6 +50,15 @@ SIGNALS = {
     "CONNECTION_INITIALIZATION_FAILED": ("connection_initialization_failed",),
     "INITIALIZATION_BLOCKED": ("kraken_initialization_blocked",),
     "CLOCK_NOT_READY": ("kraken_clock_not_ready",),
+    "PLATFORM_CREDENTIALS_MISSING": ("credentials not configured for platform",),
+    "CUSTOMER_CREDENTIALS_MISSING": ("credentials not configured for user:",),
+    "MISSING_CANONICAL_NAMESPACE": ("kraken_credential_pair_required key_variable=kraken_platform_api_key",),
+    "MISSING_LEGACY_NAMESPACE": ("kraken_credential_pair_required key_variable=kraken_api_key",),
+    "MISSING_CUSTOMER_NAMESPACE": ("kraken_credential_pair_required key_variable=kraken_user_",),
+    "CLOCK_GATE_BLOCKED": ("kraken_clock_gate_blocked",),
+    "CLOCK_GATE_VERIFIED": ("kraken_clock_gate_verified",),
+    "AUTHENTICATED_RECOVERY_ATTEMPTED": ("kraken_authenticated_recovery_attempt",),
+    "AUTHENTICATED_RECOVERY_SUCCEEDED": ("kraken_authenticated_recovery_ready",),
 }
 STAMP = re.compile(r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)")
 
@@ -219,7 +228,11 @@ def inspect_render_api() -> dict:
         observed_instances: set[str] = set()
         result["log_rows_returned"] = 0
         # Fixed searches bound response size and avoid unrelated customer logs.
-        for text in ("KRAKEN_INITIALIZATION", "KRAKEN_NONCE_STARTUP", "PRETRADE_INDEPENDENT", "Kraken"):
+        for text in (
+            "KRAKEN_INITIALIZATION", "KRAKEN_NONCE_STARTUP", "PRETRADE_INDEPENDENT",
+            "KRAKEN_CREDENTIAL_PAIR_REQUIRED", "credentials not configured for",
+            "KRAKEN_CLOCK_GATE", "KRAKEN_AUTHENTICATED_RECOVERY",
+        ):
             query = urlencode({
                 "ownerId": owner, "resource": SERVICE,
                 "text": text, "limit": 100, "direction": "backward",
