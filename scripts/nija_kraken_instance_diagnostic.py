@@ -22,9 +22,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 SERVICE = "srv-d98dsr5aeets73fpbaqg"
-BASELINE = "cd174134ff4a61824322cecc042d1548bd938a34"
+BASELINE = "00be8a441a78bdd9043b8744d4591ed804a58182"
 MAX_BYTES = 4 * 1024 * 1024
-IDENTITY_REQUEST = hashlib.sha256((SERVICE + BASELINE + "20261102identity").encode()).hexdigest()[:32]
+# Keep the consumed one-shot request stable when the approved baseline advances.
+IDENTITY_REQUEST = "85c2521edd9754d6f6f7df677f8d6231"
 RECOVERY_ROOT = Path("/data/kraken-history-recovery")
 APP_ROOT = Path("/app")
 SIGNALS = {
