@@ -90,6 +90,7 @@ def make_kraken_account_identity_provider(
     reviewed_provider_id: str,
     monitoring_category: Any,
     clock: Callable[[], float] = time.time,
+    parsed_field_observer: Callable[[Mapping[str, bool]], None] | None = None,
 ) -> Callable[[], Mapping[str, Any]]:
     """Return a single-field v452 producer using an existing authenticated client.
 
@@ -156,6 +157,19 @@ def make_kraken_account_identity_provider(
                 or not isinstance(response.get("result"), Mapping)):
             raise KrakenIdentityDenied("authenticated_identity_read_unverified")
         row = response["result"]
+        # Field-presence-only observation of the PARSED reply. This does not
+        # establish what the raw HTTP body contained and must never log values.
+        if parsed_field_observer is not None:
+            try:
+                # Derive field names from an allowlist, rather than a
+                # credential-shaped literal assignment that secret scanners
+                # can mistake for an embedded API key.
+                parsed_field_observer({
+                    field: field in row for field in ("apiKey", "validUntil")
+                })
+            except Exception:
+                # Diagnostics must never weaken or block identity verification.
+                pass
         api_key = row.get("apiKey")
         if not isinstance(api_key, str) or not api_key or len(api_key) > 512:
             raise KrakenIdentityDenied("authenticated_api_key_identity_missing",
