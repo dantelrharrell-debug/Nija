@@ -19,14 +19,14 @@ This repository contains a real mobile foundation, but it is not yet a productio
 
 | Area | Status | Current evidence |
 |---|---|---|
-| Capacitor mobile wrapper | Implemented | `package.json`, `capacitor.config.json`, `ios/`, and `android/` |
-| Shared web interface | Implemented/prototype | `frontend/` is the current Capacitor web asset source |
-| Mobile setup and build guides | Implemented | `setup-mobile.sh` and `mobile/BUILD_GUIDE.md` |
-| Mobile backend routes | Prototype | `mobile_api.py` provides mobile-oriented endpoints |
-| Native store projects | Generated | Native iOS and Android projects are present |
+| Capacitor mobile wrapper | Configured | `package.json` and `capacitor.config.json`; native projects are not checked in |
+| Shared web interface | Buildable prototype | `scripts/build_mobile_web.py` generates `frontend/index.html` from the checked-in template |
+| Mobile setup and build guides | Implemented | `mobile/BUILD_GUIDE.md` and the npm scripts in `package.json` |
+| Mobile backend routes | Partial | `mobile_api.py` authenticates user-scoped routes; account data stays unavailable until an authoritative source is connected |
+| Native store projects | Not generated | `mobile/ios/` and `mobile/android/` contain templates and guidance, not native projects |
 | Official black-and-gold mobile design | Defined; integration incomplete | Legacy dark-blue/purple values still need replacement |
 | Five-tab mobile experience | Defined; implementation incomplete | Home, Signals, Trades, Risk, and Profile |
-| Production authentication | Blocked | Mobile routes still contain authentication TODOs |
+| Production authentication | Partially implemented; not release-verified | JWT-protected routes exist; native session storage and device verification remain |
 | Secure token and secret storage | Blocked | Must be implemented and verified on both platforms |
 | Push notifications and biometrics | Dependencies/plans only | End-to-end production behavior is not yet verified |
 | Automated mobile testing | Blocked | Unit, integration, accessibility, and end-to-end suites remain |
@@ -86,23 +86,20 @@ The current Capacitor configuration still contains legacy dark-blue and purple U
 Nija/
 ├── package.json                 # Capacitor dependencies and native commands
 ├── capacitor.config.json        # Current native wrapper configuration
-├── setup-mobile.sh              # Mobile setup helper
-├── ios/                         # Generated iOS project
-├── android/                     # Generated Android project
 ├── frontend/                    # Current web interface bundled by Capacitor
 ├── mobile/
 │   ├── README.md                # This mobile source of truth
 │   ├── BUILD_GUIDE.md           # Native build instructions
 │   ├── PRIVACY_POLICY.md        # Draft policy requiring legal review
 │   ├── TERMS_OF_SERVICE.md      # Draft terms requiring legal review
-│   ├── ios/                     # iOS-specific guidance
-│   ├── android/                 # Android-specific guidance
+│   ├── ios/                     # iOS templates and guidance
+│   ├── android/                 # Android templates and guidance
 │   └── assets/                  # Mobile brand and store assets
 ├── mobile_api.py                # Prototype mobile API blueprint
 └── api_server.py                # Backend API integration
 ```
 
-The current bundle identifier is `com.nija.trading`. The planned Expo package identifier previously defined for both platforms is `com.nijaaitrading.app`. One identifier must be selected and locked before signing, deep-link configuration, push certificates, or store records are finalized.
+`capacitor.config.json` currently specifies `com.nijaaitrading.app`. Its availability and ownership in Apple and Google consoles have not been verified; do not change it without owner approval.
 
 ---
 
@@ -351,4 +348,3 @@ Privacy, terms, disclosures, pricing, and store declarations require qualified l
 ## Risk Disclosure
 
 NIJA AI Trading is software, not financial, investment, tax, or legal advice. Cryptocurrency trading involves substantial risk and may result in partial or total loss. Users remain responsible for their accounts, permissions, risk choices, and trading outcomes.
-

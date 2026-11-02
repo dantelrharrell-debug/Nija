@@ -41,6 +41,16 @@ def _reject_cross_user(payload: Dict) -> Optional[tuple]:
     return None
 
 
+def _unavailable_mobile_data(resource: str) -> tuple:
+    return jsonify({
+        "success": False,
+        "status": "unavailable",
+        "resource": resource,
+        "error": "Authoritative mobile data is not connected",
+        "reason": "authoritative_data_source_not_connected",
+    }), 503
+
+
 @mobile_api.route("/status", methods=["GET"])
 def get_mobile_status():
     return jsonify({"status": "ok", "service": "mobile_api", "timestamp": _utcnow()})
@@ -147,16 +157,7 @@ def get_dashboard_summary():
     supplied = request.args.get("user_id")
     if supplied and supplied != _authenticated_user():
         return jsonify({"error": "Cannot access another user's dashboard"}), 403
-    return jsonify({
-        "success": True,
-        "data": {
-            "user_id": _authenticated_user(),
-            "trading_active": False,
-            "stats": {"total_pnl": 0.0, "win_rate": 0.0, "total_trades": 0, "active_positions": 0},
-            "account": {"balance": 0.0, "tier": "basic", "max_position_size": 100.0},
-            "last_updated": _utcnow(),
-        },
-    })
+    return _unavailable_mobile_data("dashboard")
 
 
 @mobile_api.route("/trading/quick-toggle", methods=["POST"])
@@ -193,7 +194,7 @@ def get_lightweight_positions():
     supplied = request.args.get("user_id")
     if supplied and supplied != _authenticated_user():
         return jsonify({"error": "Cannot access another user's positions"}), 403
-    return jsonify({"success": True, "positions": [], "count": 0, "last_updated": _utcnow()})
+    return _unavailable_mobile_data("positions")
 
 
 @mobile_api.route("/trades/recent", methods=["GET"])
@@ -208,7 +209,7 @@ def get_recent_trades():
         return jsonify({"error": "limit must be an integer"}), 400
     if not 1 <= limit <= 50:
         return jsonify({"error": "limit must be between 1 and 50"}), 400
-    return jsonify({"success": True, "trades": [], "count": 0, "limit": limit, "last_updated": _utcnow()})
+    return _unavailable_mobile_data("trades")
 
 
 @mobile_api.route("/config", methods=["GET"])
@@ -220,13 +221,13 @@ def get_mobile_config():
             "api_version": "1.1.0",
             "min_app_version": "1.0.0",
             "features": {
-                "push_notifications": True,
-                "biometric_auth": True,
-                "real_time_updates": True,
-                "multi_exchange": True,
+                "push_notifications": False,
+                "biometric_auth": False,
+                "real_time_updates": False,
+                "multi_exchange": False,
             },
             "refresh_intervals": {"dashboard": 30, "positions": 10, "trades": 60},
-            "supported_exchanges": ["coinbase", "kraken", "binance", "okx", "alpaca"],
+            "supported_exchanges": [],
         },
     })
 
