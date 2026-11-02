@@ -132,7 +132,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: release/justcall-handoff-only-20261017
+          ref: ${{ needs.baseline.outputs.verification_source_commit }}
           persist-credentials: false
       - name: Inspect baseline and optionally read the existing identity receipt
         id: instance

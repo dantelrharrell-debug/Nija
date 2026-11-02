@@ -48,7 +48,9 @@ review the transformed digest independently rather than accepting it automatical
 Evidence records distinguish `workflow_source_commit`,
 `verification_source_commit`, `inspected_source_commit`, and the independently
 observed `render_commit`/`render_deployment_id`. The SSH fingerprint and fixed
-service target are unchanged. Only public provenance, fixed failure labels and
+service target are unchanged. Downstream script checkout uses the verified
+control-code SHA, not another moving release-branch lookup between jobs.
+Only public provenance, fixed failure labels and
 explicit booleans are retained as Actions artifacts. Identity comparison reads
 the existing immutable receipt only; it never publishes another request.
 

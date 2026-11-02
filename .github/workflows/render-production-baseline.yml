@@ -6,6 +6,8 @@ on:
         value: ${{ jobs.verify.outputs.approved_commit }}
       approved_deployment_id:
         value: ${{ jobs.verify.outputs.approved_deployment_id }}
+      verification_source_commit:
+        value: ${{ jobs.verify.outputs.verification_source_commit }}
 permissions:
   contents: read
 jobs:
@@ -15,6 +17,7 @@ jobs:
     outputs:
       approved_commit: ${{ steps.baseline.outputs.approved_commit }}
       approved_deployment_id: ${{ steps.baseline.outputs.approved_deployment_id }}
+      verification_source_commit: ${{ steps.baseline.outputs.verification_source_commit }}
     steps:
       - name: Checkout verification control code from the production release only
         uses: actions/checkout@v4

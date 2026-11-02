@@ -169,6 +169,7 @@ def run_verification() -> dict:
             with open(output, "a", encoding="utf-8") as stream:
                 stream.write("approved_commit=" + commit + "\n")
                 stream.write("approved_deployment_id=" + approval["deployment_id"] + "\n")
+                stream.write("verification_source_commit=" + result["verification_source_commit"] + "\n")
     except VerificationDenied as exc:
         result["failures"].append(str(exc))
         # Partial/before-redeploy observations never leave a verified baseline.

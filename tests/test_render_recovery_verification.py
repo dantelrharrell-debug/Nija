@@ -134,7 +134,10 @@ class RecoveryVerificationTests(unittest.TestCase):
         self.assertFalse(report["allow_new_orders"])
 
     def test_incomplete_collector_cannot_be_inferred_from_logs(self) -> None:
-        runtime = {**self.runtime, "collector_installed": True, "log_signals": {"AUTHENTICATED_CONNECTION_SUCCEEDED": 9}}
+        runtime = {
+            **self.runtime, "collector_installed": True,
+            "log_signals": {"AUTHENTICATED_CONNECTION_SUCCEEDED": 9},
+        }
         report = self.run_synthetic(runtime=runtime)
         self.assertFalse(report["BROKER_EVIDENCE_VERIFIED"])
         self.assertFalse(report["CERTIFICATION_COMPLETE"])
@@ -215,3 +218,5 @@ class RecoveryVerificationTests(unittest.TestCase):
         source = Path(".github/workflows/render-production-baseline.yml").read_text()
         self.assertIn("ref: " + RELEASE_BRANCH, source)
         self.assertIn("if-no-files-found: error", source)
+        source = Path(".github/workflows/kraken-recovery-gate-diagnostics.yml").read_text()
+        self.assertIn("ref: ${{ needs.baseline.outputs.verification_source_commit }}", source)
