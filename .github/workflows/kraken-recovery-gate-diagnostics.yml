@@ -1,6 +1,11 @@
 name: Kraken recovery gate diagnostics (read-only)
 on:
   workflow_dispatch:
+    inputs:
+      current_instance:
+        description: Inspect current baseline process and sanitized runtime log signals only
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -8,6 +13,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   inspect:
+    if: inputs.current_instance != true
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -104,3 +110,43 @@ jobs:
           if not all_sources_ok or not private_root:
               raise SystemExit('BLOCKED: reviewed production prerequisites not verified')
           PY
+  current-instance:
+    if: inputs.current_instance == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect baseline Render process without broker calls or writes
+        shell: bash
+        env:
+          RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+        run: |
+          set -eu
+          if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
+            echo 'BLOCKED: dedicated recovery SSH secret missing'
+            exit 2
+          fi
+          umask 077
+          recovery_dir=$(mktemp -d)
+          trap 'rm -f "$recovery_dir/key" "$recovery_dir/known_hosts"; rmdir "$recovery_dir"' EXIT
+          printf '%s\n' "$RENDER_RECOVERY_SSH_KEY" > "$recovery_dir/key"
+          unset RENDER_RECOVERY_SSH_KEY
+          ssh-keygen -y -P '' -f "$recovery_dir/key" >/dev/null 2>&1 || {
+            echo 'BLOCKED: recovery SSH key invalid'
+            exit 2
+          }
+          ssh-keyscan -t ed25519 -T 15 ssh.oregon.render.com > "$recovery_dir/known_hosts" 2>/dev/null
+          observed=$(ssh-keygen -lf "$recovery_dir/known_hosts" -E sha256 | awk '{print $2}' | sort -u)
+          if [ "$observed" != 'SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM' ]; then
+            echo 'BLOCKED: Render host fingerprint mismatch'
+            exit 2
+          fi
+          ssh -T -i "$recovery_dir/key" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$recovery_dir/known_hosts" \
+            -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
+            -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
+            srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
+            'command python -B -S -' < scripts/nija_kraken_instance_diagnostic.py
