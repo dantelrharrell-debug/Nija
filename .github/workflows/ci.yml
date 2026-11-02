@@ -198,6 +198,11 @@ jobs:
             bot/tests/test_nija_offline_kraken_csv_audit_v440.py \
             bot/tests/test_nija_kraken_readonly_history_collector_v441.py \
             bot/tests/test_kraken_production_source_diagnostics_v494.py \
+            bot/tests/test_kraken_ledger_evidence.py \
+            bot/tests/test_kraken_redis_evidence.py \
+            bot/tests/test_kraken_operator_authorization.py \
+            bot/tests/test_kraken_risk_evidence.py \
+            bot/tests/test_pretrade_attestation_validation_v452.py \
             bot/tests/test_startup_position_sync_outcomes.py \
             tests/test_runtime_registered_platform_capital_completeness_v270.py \
             tests/test_runtime_capital_refresh_ownership_v166.py \

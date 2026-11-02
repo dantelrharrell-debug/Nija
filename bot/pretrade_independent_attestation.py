@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED
+from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED, evidence_expiry_failure
 
 FIELDS = REQUIRED
 
@@ -63,6 +63,9 @@ def inspect_authenticated_attestations(
                 or not math.isfinite(stamp) or not math.isfinite(current)
                 or not 0 <= current - stamp <= 60):
             return report("observation_missing_future_or_stale")
+        expiry_failure = evidence_expiry_failure(raw, now_epoch=current)
+        if expiry_failure is not None:
+            return report(expiry_failure)
         if raw.get("account") != account:
             return report("account_scope_mismatch")
         if raw.get("source") != "authenticated_independent":

@@ -12,7 +12,9 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED, SOURCES
+from bot.pretrade_attestation_validation_v452 import (
+    IndependentEvidenceRejected, REQUIRED, SOURCES, evidence_expiry_failure,
+)
 from bot.pretrade_composition_bridge_v465 import make_collector
 from bot.pretrade_independent_attestation import install_authenticated_collector
 
@@ -92,6 +94,7 @@ def register_reviewed_account_registry(
                 or isinstance(stamp, bool)
                 or not isinstance(stamp, (int, float))
                 or not math.isfinite(stamp)
-                or not 0 <= now - stamp <= 60):
+                or not 0 <= now - stamp <= 60
+                or evidence_expiry_failure(result, now_epoch=now) is not None):
             raise ValueError("fresh_independent_attestations_required")
     install_authenticated_collector(collector)

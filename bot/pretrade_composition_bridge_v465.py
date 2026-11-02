@@ -13,7 +13,9 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED, SOURCES
+from bot.pretrade_attestation_validation_v452 import (
+    IndependentEvidenceRejected, REQUIRED, SOURCES, evidence_expiry_failure,
+)
 from bot.pretrade_authenticated_provider_adapter_v453 import collect_independent_pretrade_evidence
 from bot.pretrade_independent_attestation import FIELDS, install_authenticated_collector
 
@@ -104,9 +106,16 @@ def make_collector(
         now = time.time()
         if earliest > now or now - earliest > 60:
             raise ValueError("independent_observation_stale")
+        expiring = {field: row for field, row in observed.items() if "expires_at_epoch" in row}
+        failures = {
+            field: reason for field, row in expiring.items()
+            if (reason := evidence_expiry_failure(row, now_epoch=now)) is not None
+        }
+        if failures:
+            raise IndependentEvidenceRejected(failures, failures)
         # These positive claims are *derived from accepted v452 inputs*, never
         # from a generic caller's true/ready switch. v16 still denies authority.
-        return {
+        collected = {
             "account": account,
             "source": "authenticated_independent",
             "observed_at_epoch": earliest,
@@ -122,6 +131,9 @@ def make_collector(
             "checks": {field: observed[field].get("verified") is True for field in FIELDS},
             "authorizes_orders": False,
         }
+        if expiring:
+            collected["expires_at_epoch"] = min(row["expires_at_epoch"] for row in expiring.values())
+        return collected
 
     return collect
 
