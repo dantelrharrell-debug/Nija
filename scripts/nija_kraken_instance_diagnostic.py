@@ -230,6 +230,11 @@ def inspect_render_api() -> dict:
             result["failures"].append("current_instance_api_log_evidence_unavailable")
     except HTTPError as exc:
         result["failures"].append("render_api_http_" + str(exc.code))
+        if exc.code == 400:
+            detail = exc.read(4096).decode("utf-8", errors="replace").lower()
+            for parameter in ("ownerid", "resource", "instance", "text", "starttime", "limit", "direction"):
+                if parameter in detail:
+                    result["failures"].append("render_api_rejected_parameter_" + parameter)
     except (OSError, URLError):
         result["failures"].append("render_api_transport_failed")
     except (KeyError, TypeError, ValueError):
