@@ -215,8 +215,10 @@ def inspect_render_api() -> dict:
         result["deployment_status"] = "live"
         counts: Counter[str] = Counter()
         seen: set[str] = set()
+        observed_instances: set[str] = set()
+        result["log_rows_returned"] = 0
         # Fixed searches bound response size and avoid unrelated customer logs.
-        for text in ("KRAKEN_INITIALIZATION", "KRAKEN_NONCE_STARTUP", "PRETRADE_INDEPENDENT", "Kraken connection"):
+        for text in ("KRAKEN_INITIALIZATION", "KRAKEN_NONCE_STARTUP", "PRETRADE_INDEPENDENT", "Kraken"):
             query = urlencode({
                 "ownerId": owner, "resource": SERVICE,
                 "text": text, "limit": 100, "direction": "backward",
@@ -225,6 +227,7 @@ def inspect_render_api() -> dict:
             response = get("logs?" + query)
             if not isinstance(response, dict) or not isinstance(response.get("logs"), list):
                 raise ValueError("render_log_response_invalid")
+            result["log_rows_returned"] += len(response["logs"])
             for row in response["logs"]:
                 if not isinstance(row, dict):
                     raise ValueError("render_log_response_invalid")
@@ -243,6 +246,8 @@ def inspect_render_api() -> dict:
                 if len(identifiers) != 1 or not isinstance(identifiers[0], str):
                     continue
                 observed_instance = identifiers[0]
+                if re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance):
+                    observed_instances.add(observed_instance)
                 if not (
                     observed_instance == instance or (
                         re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance)
@@ -256,6 +261,7 @@ def inspect_render_api() -> dict:
                 seen.add(identity)
                 counts.update(classify_log(stamp + " " + message, since=0))
         result["log_signals"] = dict(counts)
+        result["observed_log_instances"] = sorted(observed_instances)
         result["status"] = "DIAGNOSTIC_ONLY"
         if not counts:
             result["failures"].append("current_instance_api_log_evidence_unavailable")

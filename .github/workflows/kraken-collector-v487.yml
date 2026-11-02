@@ -25,6 +25,7 @@ on:
       - 'tests/test_kraken_instance_diagnostic.py'
       - 'tests/test_pretrade_failure_reasons.py'
       - 'bot/pretrade_authenticated_provider_adapter_v453.py'
+      - 'preactivation_readiness_convergence_v16_patch.py'
       - 'tests/test_kraken_writer_nonce_evidence_v488.py'
       - 'tests/test_pretrade_multi_account_registration_v474.py'
       - 'tests/test_pretrade_composition_bridge_v465.py'

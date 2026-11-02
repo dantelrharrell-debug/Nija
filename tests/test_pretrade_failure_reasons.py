@@ -131,3 +131,25 @@ class FailureReasonTests(unittest.TestCase):
             report = inspect_authenticated_attestations(self.account)
         self.assertEqual(report["failure_reasons"], {field: "collector_missing" for field in REQUIRED})
         self.assertFalse(report["collector_installed"])
+
+    def test_runtime_logs_only_allowlisted_field_reasons(self) -> None:
+        import preactivation_readiness_convergence_v16_patch as runtime
+
+        report = {
+            "checks": {field: False for field in REQUIRED},
+            "collector_installed": True, "producer_status": "independent_evidence_rejected",
+            "failure_reasons": {
+                "risk_limits": "observation_stale",
+                "operator_authorization": "private-upstream-canary",
+                "private-upstream-canary": "provider_read_failed",
+            },
+        }
+        with patch.dict("os.environ", {"NIJA_PREFLIGHT_ACCOUNT_SCOPE": self.account}), patch(
+            "bot.pretrade_independent_attestation.inspect_authenticated_attestations", return_value=report,
+        ), self.assertLogs("nija.preactivation_readiness_convergence_v16", level="INFO") as logs:
+            ready, missing = runtime._independent_pretrade_certificate()
+        self.assertFalse(ready)
+        self.assertEqual(missing, list(REQUIRED))
+        self.assertIn("risk_limits:observation_stale", str(logs.output))
+        self.assertIn("producer_status=independent_evidence_rejected", str(logs.output))
+        self.assertNotIn("private-upstream-canary", str(logs.output))
