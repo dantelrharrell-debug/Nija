@@ -172,6 +172,11 @@ def collect_requested_identity(
             code = "identity_comparison_failed"
             if type(exc) is KrakenIdentityDenied and str(exc) in _IDENTITY_DENIALS:
                 code = str(exc)
+                if code == "authenticated_api_key_identity_missing":
+                    # Revalidate the whitelist at serialization; never persist raw responses.
+                    safe = KrakenIdentityDenied(code, response_shape=exc.response_shape)
+                    if safe.response_shape:
+                        receipt["identity_response_shape"] = safe.response_shape
             receipt.update({"collection_succeeded": False, "failure_code": code})
         write_recovery_state(output, receipt)
         LOGGER.info(

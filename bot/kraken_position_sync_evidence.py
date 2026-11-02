@@ -144,7 +144,7 @@ OpenPositions are both queried; any unsupported nonzero holding denies.
             pair, quantity = _pair(row.get("symbol")), _quantity(row.get("quantity"))
             _require(pair not in totals and quantity > 0, "runtime_position_duplicate_or_invalid")
             totals[pair] = quantity
-        return (generation, wall, mono, rows), totals, stamp, stamp + max_age
+        return (generation, wall, mono, rows, max_age), totals, stamp, stamp + max_age
 
     def exchange() -> dict[str, Decimal]:
         results = []

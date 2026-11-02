@@ -18,6 +18,7 @@ import math
 import time
 from typing import Any
 
+from bot.kraken_identity_read_timing import capture_identity_read
 from scripts.nija_kraken_readonly_history_collector_v441 import _broker_account_scope
 
 # Exact permissions needed for read-only account, order and ledger provenance.
@@ -106,10 +107,19 @@ def make_kraken_key_permission_provider(
         try:
             # Never instantiate credentials or a second nonce writer. The
             # existing Kraken client signs this one private read.
-            reply = caller("GetApiKeyInfo", {}, category=monitoring_category)
+            api = getattr(broker, "api", None)
+            with capture_identity_read(api, clock) as timing:
+                reply = caller("GetApiKeyInfo", {}, category=monitoring_category)
         except Exception:
             raise KeyInfoEvidenceDenied("authenticated_key_read_failed") from None
         finished = clock()
+        if timing.attempts:
+            try:
+                if getattr(broker, "api", None) is not api:
+                    raise ValueError("identity_transport_changed")
+                started = timing.observation_start(reply, started, finished, MAX_OBSERVATION_AGE_S)
+            except ValueError:
+                raise KeyInfoEvidenceDenied("observation_clock_invalid_or_stale") from None
         if (isinstance(finished, bool) or not isinstance(finished, (int, float))
                 or not math.isfinite(finished) or finished < started
                 or finished - started > MAX_OBSERVATION_AGE_S):
