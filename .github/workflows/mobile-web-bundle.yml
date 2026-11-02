@@ -1,0 +1,30 @@
+name: NIJA Mobile Web Bundle Preflight
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/templates/index.html'
+      - 'frontend/static/**'
+      - 'package.json'
+      - 'scripts/build_mobile_web.py'
+      - 'tests/test_mobile_web_bundle.py'
+      - '.github/workflows/mobile-web-bundle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-web-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test asset path rewriting and missing-asset rejection
+        run: python3 tests/test_mobile_web_bundle.py
+      - name: Generate Capacitor entrypoint
+        run: python3 scripts/build_mobile_web.py
+      - name: Confirm entrypoint is generated and nonempty
+        run: test -s frontend/index.html
