@@ -56,6 +56,7 @@ FAILURE_REASONS = frozenset({
     "observation_clock_invalid", "observation_future", "observation_stale",
     "evidence_identity_reused", "independent_provider_missing", "provider_result_invalid",
     "provider_read_failed", "independent_evidence_rejected",
+    "observation_expired", "observation_expiry_invalid",
 })
 
 
@@ -93,6 +94,20 @@ def _valid_identifier(value: Any) -> bool:
         and value == value.strip()
         and not any(char.isspace() for char in value)
     )
+
+
+def evidence_expiry_failure(observation: Mapping[str, Any], *, now_epoch: float) -> str | None:
+    """Honor stricter signed-source lifetimes without widening the 60s limit."""
+    if "expires_at_epoch" not in observation:
+        return None
+    expires = observation["expires_at_epoch"]
+    stamp = observation.get("observed_at_epoch")
+    if (isinstance(expires, bool) or not isinstance(expires, (int, float))
+            or not math.isfinite(expires) or expires <= 0
+            or isinstance(stamp, bool) or not isinstance(stamp, (int, float))
+            or not math.isfinite(stamp) or expires <= stamp):
+        return "observation_expiry_invalid"
+    return "observation_expired" if now_epoch >= expires else None
 
 
 def evaluate_pretrade_certificate(
@@ -199,6 +214,11 @@ def evaluate_pretrade_certificate(
         if age_s < 0 or age_s > max_age_s:
             missing.append(field)
             reasons[field] = "observation_future" if age_s < 0 else "observation_stale"
+            continue
+        expiry_failure = evidence_expiry_failure(row, now_epoch=now)
+        if expiry_failure is not None:
+            missing.append(field)
+            reasons[field] = expiry_failure
 
     for fields in evidence_fields.values():
         if len(fields) > 1:
