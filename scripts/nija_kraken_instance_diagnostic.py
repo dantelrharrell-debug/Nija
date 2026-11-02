@@ -1,12 +1,15 @@
-"""Bounded stdin-only Render inspection; no imports of NIJA or broker requests.
+"""Bounded stdin-only Render inspection; no imports of NIJA or broker clients.
 
 Run with python -B -S on the authorized service. Only fixed diagnostic labels,
 credential-presence booleans and public source/deployment digests leave it.
+The explicit identity-request mode publishes one immutable diagnostic request
+for the existing broker; default inspection and result reads never write state.
 """
 from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import os
@@ -21,6 +24,9 @@ from urllib.request import Request, urlopen
 SERVICE = "srv-d98dsr5aeets73fpbaqg"
 BASELINE = "cd174134ff4a61824322cecc042d1548bd938a34"
 MAX_BYTES = 4 * 1024 * 1024
+IDENTITY_REQUEST = hashlib.sha256((SERVICE + BASELINE + "20261102identity").encode()).hexdigest()[:32]
+RECOVERY_ROOT = Path("/data/kraken-history-recovery")
+APP_ROOT = Path("/app")
 SIGNALS = {
     "INVALID_API_KEY": (
         "eapi:invalid key",
@@ -43,6 +49,8 @@ SIGNALS = {
     "TRANSPORT_DISCONNECTED": ("remotedisconnected", "connection aborted"),
     "COLLECTOR_MISSING": ("collector_installed=false", "producer_status=collector_missing"),
     "PRICE_CLIENT_DISCONNECTED": ("kraken api not connected",),
+    "PRICE_CLIENT_PLATFORM_DISCONNECTED": ("kraken_market_data_unavailable account_role=platform",),
+    "PRICE_CLIENT_CUSTOMER_DISCONNECTED": ("kraken_market_data_unavailable account_role=customer",),
     "AUTHENTICATED_BALANCE_FAILED": ("kraken connection test failed",),
     "AUTHENTICATED_CONNECTION_SUCCEEDED": ("successfully connected to kraken",),
     "RECOVERY_WAITING_FOR_WRITER": ("kraken_authenticated_recovery_waiting",),
@@ -59,6 +67,7 @@ SIGNALS = {
     "CLOCK_GATE_VERIFIED": ("kraken_clock_gate_verified",),
     "AUTHENTICATED_RECOVERY_ATTEMPTED": ("kraken_authenticated_recovery_attempt",),
     "AUTHENTICATED_RECOVERY_SUCCEEDED": ("kraken_authenticated_recovery_ready",),
+    "PLATFORM_AUTHENTICATED_BALANCE_SUCCEEDED": ("platform kraken connected",),
 }
 STAMP = re.compile(r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)")
 
@@ -231,7 +240,8 @@ def inspect_render_api() -> dict:
         for text in (
             "KRAKEN_INITIALIZATION", "KRAKEN_NONCE_STARTUP", "PRETRADE_INDEPENDENT",
             "KRAKEN_CREDENTIAL_PAIR_REQUIRED", "credentials not configured for",
-            "KRAKEN_CLOCK_GATE", "KRAKEN_AUTHENTICATED_RECOVERY",
+            "KRAKEN_CLOCK_GATE", "KRAKEN_AUTHENTICATED_RECOVERY", "PLATFORM KRAKEN CONNECTED",
+            "Price fetch failed",
         ):
             query = urlencode({
                 "ownerId": owner, "resource": SERVICE,
@@ -288,7 +298,132 @@ def inspect_render_api() -> dict:
     return result
 
 
+def identity_probe(*, publish: bool = False) -> dict:
+    """Request once or read the existing consumer's sanitized identity receipt.
+
+    Never construct a broker, import runtime hooks, acquire writer authority,
+    generate a nonce, change bindings, replay a consumed request or enable orders.
+    """
+    result = {
+        "status": "BLOCKED", "request_id": IDENTITY_REQUEST,
+        "allow_new_orders": False, "independent_certification_complete": False,
+        "request_created": False,
+    }
+    if (os.environ.get("RENDER_SERVICE_ID") != SERVICE
+            or os.environ.get("RENDER_GIT_COMMIT") != BASELINE):
+        return {**result, "reason": "baseline_instance_unverified"}
+    root = RECOVERY_ROOT
+    if os.environ.get("NIJA_KRAKEN_HISTORY_RECOVERY_DIR") != str(root):
+        return {**result, "reason": "identity_request_consumer_directory_unverified"}
+    try:
+        info = root.lstat()
+        if (root.is_symlink() or root.resolve() != root or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077):
+            return {**result, "reason": "private_recovery_directory_required"}
+        output = root / (IDENTITY_REQUEST + ".identity.evidence.json")
+        if output.exists() or output.is_symlink():
+            output_info = output.lstat()
+            if (output.is_symlink() or output_info.st_uid != os.geteuid()
+                    or stat.S_IMODE(output_info.st_mode) & 0o077 or output_info.st_nlink != 1):
+                return {**result, "reason": "private_identity_receipt_required"}
+            row = json.loads(_read_regular(output, 8192))
+            if (not isinstance(row, dict) or row.get("request_id") != IDENTITY_REQUEST
+                    or row.get("account_scope") != "platform:kraken"
+                    or row.get("trading_authorized") is not False or row.get("diagnostic_only") is not True
+                    or row.get("independent_certification_complete") is not False
+                    or row.get("collector_installed") is not False):
+                return {**result, "reason": "identity_receipt_invalid"}
+            observation = row.get("observation")
+            stamp = observation.get("observed_at_epoch") if isinstance(observation, dict) else None
+            fresh = type(stamp) in (float, int) and 0 <= time.time() - stamp <= 60
+            matched = (row.get("collection_succeeded") is True
+                       and row.get("configured_account_and_key_match") is True
+                       and isinstance(observation, dict) and observation.get("verified") is True
+                       and observation.get("read_only") is True
+                       and observation.get("scope_verified") is True
+                       and observation.get("account") == "platform:kraken"
+                       and observation.get("source") == "authenticated_broker"
+                       and observation.get("provider_id") == "kraken-account-identity-v480-private-recovery-v491"
+                       and fresh)
+            failure = row.get("failure_code")
+            failure = failure if isinstance(failure, str) and failure in {
+                "authenticated_client_unavailable", "broker_scope_mismatch", "broker_scope_changed",
+                "authenticated_identity_read_failed", "authenticated_identity_read_unverified",
+                "authenticated_api_key_identity_missing", "approved_api_key_identity_mismatch",
+                "approved_broker_account_mismatch", "key_expiry_unverified", "key_expired",
+                "authenticated_account_identifier_invalid", "observation_clock_invalid",
+                "observation_clock_invalid_or_stale", "identity_comparison_failed",
+            } else "identity_comparison_unverified"
+            return {
+                **result, "status": "IDENTITY_RECEIPT", "configured_account_key_match": matched,
+                "fresh": fresh, "reason": "saved_binding_match" if matched else failure,
+            }
+        claim = root / (IDENTITY_REQUEST + ".identity.claimed.json")
+        if claim.exists() or claim.is_symlink():
+            return {**result, "status": "CLAIMED", "reason": "consumed_request_never_replayed"}
+        if not publish:
+            return {**result, "status": "PENDING", "reason": "identity_receipt_not_available"}
+        for relative, expected in {
+            "bot/kraken_identity_request_recovery_v491.py":
+                "4a129bd110b6aeb8fba96ee24fdf11f32c69346e9c5c5716adaedf7642d6f62c",
+            "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py":
+                "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
+        }.items():
+            if hashlib.sha256(_read_regular(APP_ROOT / relative, MAX_BYTES)).hexdigest() != expected:
+                return {**result, "reason": "identity_consumer_source_changed"}
+        binding = root / "approved-binding-platform-20261028.json"
+        binding_info = binding.lstat()
+        if (binding.is_symlink() or binding_info.st_uid != os.geteuid()
+                or stat.S_IMODE(binding_info.st_mode) & 0o077 or binding_info.st_nlink != 1):
+            return {**result, "reason": "private_saved_binding_required"}
+        # The consumer validates the saved inventory and performs the comparison.
+        # Its presence is NOT independent operator approval.
+        _read_regular(binding, 4096)
+        fd = os.open(root / "collector.lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            lock_info = os.fstat(fd)
+            if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
+                    or stat.S_IMODE(lock_info.st_mode) & 0o077 or lock_info.st_nlink != 1):
+                return {**result, "reason": "private_collector_lock_required"}
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if any(path.exists() or path.is_symlink() for path in (claim, output)):
+                return {**result, "reason": "consumed_request_never_replayed"}
+            for name in ("request.json", "exact_request.json", "identity_request.json"):
+                if (root / name).exists() or (root / name).is_symlink():
+                    return {**result, "reason": "existing_recovery_request_preserved"}
+            request = {
+                "request_id": IDENTITY_REQUEST, "account_scope": "platform:kraken",
+                "created_at": time.time(), "max_pages": 1,
+            }
+            target = root / "identity_request.json"
+            out = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(out, "w") as stream:
+                json.dump(request, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            os.close(fd)
+        return {**result, "status": "PENDING", "reason": "existing_broker_identity_read_requested",
+                "request_created": True}
+    except FileNotFoundError:
+        return {**result, "reason": "required_identity_recovery_file_missing"}
+    except BlockingIOError:
+        return {**result, "reason": "existing_collector_busy"}
+    except (OSError, ValueError, TypeError):
+        return {**result, "reason": "identity_probe_failed_closed"}
+
+
 if __name__ == "__main__":
     import sys
-    report = inspect_render_api() if sys.argv[1:] == ["--render-api"] else inspect_instance()
+    if sys.argv[1:] == ["--render-api"]:
+        report = inspect_render_api()
+    elif sys.argv[1:] in (["--request-identity"], ["--identity-result"]):
+        report = identity_probe(publish=sys.argv[1:] == ["--request-identity"])
+    else:
+        report = inspect_instance()
     print(json.dumps(report, sort_keys=True))

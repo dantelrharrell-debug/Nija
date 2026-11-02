@@ -192,6 +192,30 @@ def test_native_missing_client_cannot_reuse_connected_startup_latch(runtime):
     assert broker.api is runtime.clients[0]
 
 
+@pytest.mark.parametrize("account_type,expected", [
+    (bm.AccountType.PLATFORM, "platform"), (bm.AccountType.USER, "customer"),
+])
+def test_missing_price_transport_reports_role_without_account_material(runtime, caplog, account_type, expected):
+    broker = bm.KrakenBroker(account_type=account_type, user_id="private-account-canary")
+    broker._connection_stage = "nonce_ownership"
+    assert broker.get_current_price("BTC-USD") == 0.0
+    assert f"KRAKEN_MARKET_DATA_UNAVAILABLE account_role={expected}" in caplog.text
+    assert "lifecycle_stage=nonce_ownership" in caplog.text
+    assert "private-account-canary" not in "\n".join(
+        record.message for record in caplog.records
+        if "KRAKEN_MARKET_DATA_UNAVAILABLE" in record.message
+    )
+    assert runtime.clients == []
+
+
+def test_price_diagnostic_never_exports_arbitrary_lifecycle_text(runtime, caplog):
+    broker = bm.KrakenBroker()
+    broker._connection_stage = "private-error-canary"
+    assert broker.get_current_price("ETH-USD") == 0.0
+    assert "lifecycle_stage=unknown" in caplog.text
+    assert "private-error-canary" not in caplog.text
+
+
 def test_native_reconnect_failure_and_recovery_use_new_transport(runtime):
     broker = bm.KrakenBroker()
     assert broker.connect()

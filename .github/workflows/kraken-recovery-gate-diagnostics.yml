@@ -6,6 +6,10 @@ on:
         description: Inspect current baseline process and sanitized runtime log signals only
         type: boolean
         default: false
+      identity_compare:
+        description: Request ONE GetApiKeyInfo comparison via existing broker; never replay or authorize orders
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -13,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   inspect:
-    if: inputs.current_instance != true
+    if: inputs.current_instance != true && inputs.identity_compare != true
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -111,18 +115,19 @@ jobs:
               raise SystemExit('BLOCKED: reviewed production prerequisites not verified')
           PY
   current-instance:
-    if: inputs.current_instance == true
+    if: inputs.current_instance == true || inputs.identity_compare == true
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Inspect baseline Render process without broker calls or writes
+      - name: Inspect baseline and optionally request one existing-broker identity read
         id: instance
         shell: bash
         env:
           RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+          IDENTITY_COMPARE: ${{ inputs.identity_compare }}
         run: |
           set -eu
           if [ -z "$RENDER_RECOVERY_SSH_KEY" ]; then
@@ -155,6 +160,27 @@ jobs:
           instance=$(printf '%s\n' "$report" | jq -r '.instance_id // ""')
           if [[ "$instance" =~ ^[a-zA-Z0-9-]{1,100}$ ]]; then
             printf 'instance=%s\n' "$instance" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$IDENTITY_COMPARE" = 'true' ]; then
+            for attempt in $(seq 1 13); do
+              remote='command python -B -S - --identity-result'
+              if [ "$attempt" -eq 1 ]; then
+                remote='command python -B -S - --request-identity'
+              fi
+              identity=$(ssh -T -i "$recovery_dir/key" \
+                -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$recovery_dir/known_hosts" \
+                -o HostKeyAlgorithms=ssh-ed25519 -o ConnectTimeout=15 \
+                -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=1 \
+                srv-d98dsr5aeets73fpbaqg@ssh.oregon.render.com \
+                "$remote" < scripts/nija_kraken_instance_diagnostic.py)
+              printf '%s\n' "$identity"
+              status=$(printf '%s\n' "$identity" | jq -r '.status')
+              if [ "$status" != 'PENDING' ] && [ "$status" != 'CLAIMED' ]; then
+                break
+              fi
+              if [ "$attempt" -lt 13 ]; then sleep 10; fi
+            done
           fi
       - name: Read current-instance Render logs and deployment metadata
         env:

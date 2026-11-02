@@ -2,13 +2,16 @@
 from datetime import datetime, timezone
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from scripts.nija_kraken_instance_diagnostic import (
-    BASELINE, SERVICE, _read_regular, classify_log, inspect_instance, inspect_render_api,
+    BASELINE, SERVICE, IDENTITY_REQUEST, _read_regular, classify_log, identity_probe,
+    inspect_instance, inspect_render_api,
 )
 
 
@@ -85,7 +88,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
                         "message": "EAPI:Invalid signature private-canary",
                         "labels": [{"name": "instance", "value": observed_instance}],
                     }],
-                }] * 7
+                }] * 9
                 with patch.dict("os.environ", {
                     "RENDER_API_KEY": "synthetic-only",
                     "EXPECTED_RENDER_INSTANCE": SERVICE + "-7d458c8976-zsc58",
@@ -98,3 +101,117 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 self.assertNotIn("private-canary", json.dumps(report))
                 self.assertNotIn("synthetic-only", json.dumps(report))
                 self.assertFalse(report["allow_new_orders"])
+
+
+class IdentityProbeTests(unittest.TestCase):
+    """Only the existing broker may consume one immutable diagnostic request."""
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve()
+        self.environment = patch.dict(os.environ, {
+            "RENDER_SERVICE_ID": SERVICE, "RENDER_GIT_COMMIT": BASELINE,
+            "NIJA_KRAKEN_HISTORY_RECOVERY_DIR": str(self.root),
+        }, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        for name, value in (
+            ("RECOVERY_ROOT", self.root), ("APP_ROOT", Path(__file__).resolve().parents[1]),
+        ):
+            change = patch("scripts.nija_kraken_instance_diagnostic." + name, value)
+            change.start()
+            self.addCleanup(change.stop)
+        self.write("collector.lock", b"")
+        self.write("approved-binding-platform-20261028.json", b"{}")
+
+    def write(self, name: str, raw: bytes) -> Path:
+        """Create a private synthetic recovery file."""
+        path = self.root / name
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        return path
+
+    def receipt(self, **overrides) -> None:
+        """Write a synthetic receipt containing no account material."""
+        row = {
+            "request_id": IDENTITY_REQUEST, "account_scope": "platform:kraken",
+            "trading_authorized": False, "diagnostic_only": True, "collector_installed": False,
+            "independent_certification_complete": False,
+            "collection_succeeded": True, "configured_account_and_key_match": True,
+            "observation": {
+                "verified": True, "read_only": True, "scope_verified": True,
+                "observed_at_epoch": time.time(), "account": "platform:kraken",
+                "source": "authenticated_broker",
+                "provider_id": "kraken-account-identity-v480-private-recovery-v491",
+            },
+            "private_canary": "never-export-account-data",
+        }
+        row.update(overrides)
+        self.write(IDENTITY_REQUEST + ".identity.evidence.json", json.dumps(row).encode())
+
+    def test_publishes_once_without_overwriting_other_modes_or_bindings(self) -> None:
+        before = (self.root / "approved-binding-platform-20261028.json").read_bytes()
+        report = identity_probe(publish=True)
+        self.assertTrue(report["request_created"])
+        request = json.loads((self.root / "identity_request.json").read_bytes())
+        self.assertEqual(set(request), {"request_id", "account_scope", "created_at", "max_pages"})
+        self.assertEqual(request["request_id"], IDENTITY_REQUEST)
+        self.assertEqual(request["account_scope"], "platform:kraken")
+        self.assertEqual(request["max_pages"], 1)
+        self.assertEqual(
+            (self.root / "approved-binding-platform-20261028.json").read_bytes(), before,
+        )
+        self.assertEqual(identity_probe(publish=True)["reason"], "existing_recovery_request_preserved")
+        self.assertFalse(identity_probe()["allow_new_orders"])
+
+    def test_existing_request_or_claim_is_never_replaced_or_replayed(self) -> None:
+        for name in ("request.json", "exact_request.json", "identity_request.json",
+                     IDENTITY_REQUEST + ".identity.claimed.json"):
+            with self.subTest(name=name):
+                path = self.write(name, b"preserve-original")
+                report = identity_probe(publish=True)
+                self.assertFalse(report["request_created"])
+                self.assertEqual(path.read_bytes(), b"preserve-original")
+                path.unlink()
+
+    def test_only_fresh_matching_diagnostic_receipt_counts_as_comparison(self) -> None:
+        self.receipt()
+        report = identity_probe()
+        self.assertTrue(report["configured_account_key_match"])
+        self.assertFalse(report["independent_certification_complete"])
+        self.assertFalse(report["allow_new_orders"])
+        self.assertNotIn("never-export-account-data", json.dumps(report))
+        for observation in (
+            {}, {"observed_at_epoch": time.time() - 61},
+            {"observed_at_epoch": time.time() + 10},
+            {"observed_at_epoch": True},
+        ):
+            self.receipt(observation=observation)
+            self.assertFalse(identity_probe()["configured_account_key_match"])
+
+    def test_unsafe_receipt_scope_and_source_fail_closed(self) -> None:
+        self.receipt(trading_authorized=True)
+        self.assertEqual(identity_probe()["reason"], "identity_receipt_invalid")
+        self.receipt()
+        path = self.root / (IDENTITY_REQUEST + ".identity.evidence.json")
+        path.chmod(0o644)
+        self.assertEqual(identity_probe()["reason"], "private_identity_receipt_required")
+        path.unlink()
+        path.symlink_to(self.root / "collector.lock")
+        self.assertEqual(identity_probe()["reason"], "private_identity_receipt_required")
+
+    def test_missing_binding_or_wrong_environment_never_publishes(self) -> None:
+        (self.root / "approved-binding-platform-20261028.json").unlink()
+        self.assertEqual(identity_probe(publish=True)["reason"], "required_identity_recovery_file_missing")
+        self.assertFalse((self.root / "identity_request.json").exists())
+        with patch.dict(os.environ, {"RENDER_GIT_COMMIT": "wrong"}):
+            self.assertEqual(identity_probe(publish=True)["reason"], "baseline_instance_unverified")
+        with patch.dict(os.environ, {"NIJA_KRAKEN_HISTORY_RECOVERY_DIR": "/wrong"}):
+            self.assertEqual(identity_probe(publish=True)["reason"], "identity_request_consumer_directory_unverified")
+
+    def test_failure_messages_are_fixed_and_never_export_provider_text(self) -> None:
+        self.receipt(collection_succeeded=False, failure_code="approved_api_key_identity_mismatch")
+        self.assertEqual(identity_probe()["reason"], "approved_api_key_identity_mismatch")
+        self.receipt(collection_succeeded=False, failure_code="private-credential-canary")
+        self.assertEqual(identity_probe()["reason"], "identity_comparison_unverified")
