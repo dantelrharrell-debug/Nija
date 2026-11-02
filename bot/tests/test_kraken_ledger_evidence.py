@@ -444,6 +444,23 @@ class KrakenLedgerEvidenceTests(unittest.TestCase):
         self.update("ledger_evidence_state", "observed_at_epoch", NOW - 60)
         self.assertEqual(self.provider()()["observed_at_epoch"], NOW - 60)
 
+    def test_v452_does_not_refresh_fifty_nine_second_old_source(self):
+        self.update("ledger_evidence_state", "observed_at_epoch", NOW - 59)
+        evidence = self.provider()()
+        self.assertEqual(evidence["observed_at_epoch"], NOW - 59)
+        field = "position_ledger_reconciliation"
+        trusted = {name: "external-" + name for name in REQUIRED}
+        trusted[field] = self.binding.provider_id
+        initially = evaluate_pretrade_certificate(
+            {field: evidence}, account=SCOPE, trusted_provider_ids=trusted, now_epoch=NOW,
+        )
+        self.assertNotIn(field, initially["missing"])
+        later = evaluate_pretrade_certificate(
+            {field: evidence}, account=SCOPE, trusted_provider_ids=trusted, now_epoch=NOW + 2,
+        )
+        self.assertIn(field, later["missing"])
+        self.assertEqual(later["failure_reasons"][field], "observation_stale")
+
     def test_missing_genesis_and_unresolved_submissions(self):
         for field, value in (("history_from_genesis", 0), ("unresolved_submission_count", 1),
                              ("schema_version", 2), ("revision", "")):

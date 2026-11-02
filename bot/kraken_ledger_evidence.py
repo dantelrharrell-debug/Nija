@@ -295,6 +295,12 @@ def _identity(read: Callable, binding: ReviewedLedgerBinding, now: float) -> Non
     _require(isinstance(key, str) and 0 < len(key) <= 512
              and isinstance(iban, str) and 0 < len(iban) <= 128
              and all(32 <= ord(char) < 127 for char in iban), "authenticated_identity_invalid")
+    # Account-registry protocol: SHA-256 fingerprints a high-entropy Kraken API
+    # key for constant-time identity pin comparison; this is NOT password
+    # storage or a password-derived authentication verifier. Preserve the digest
+    # protocol shared with the existing v477/v480 reviewed identity providers.
+    # CodeQL py/weak-sensitive-data-hashing requires external false-positive
+    # review here; do not hide the alert or substitute a different hash scheme.
     key_hash = hashlib.sha256(key.encode()).hexdigest()
     account_hash = hashlib.sha256(("kraken\0" + iban.strip().upper()).encode()).hexdigest()
     _require(hmac.compare_digest(key_hash, binding.api_key_sha256)

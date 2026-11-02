@@ -84,6 +84,9 @@ and generation, and distributed nonce owner/version/fingerprint/counter keys
 using read-only transactional pipelines. Nonce lineage is explicitly distinct
 from process generation. Ownership, expiry, generation, fingerprint or scope
 changes, missing fences, unresolved outcomes and connection errors deny.
+All three observations expire conservatively at read-start plus the shortest
+relevant observed lease/fence PTTL, never later than 60 seconds. A cached fresh
+observation cannot outlive the distributed lease it describes.
 
 The legacy TTL/deleted fences and local retry records are not an enumerable
 historical inventory. The compatible opt-in design uses durable manifest,
@@ -131,6 +134,8 @@ envelope contains exactly `payload` and `signature`.
 
 The status must positively attest active membership of the exact digest,
 be no more than 60 seconds old, and remain unexpired through collection.
+Evidence lifetime is bounded by the original status timestamp plus 60 seconds
+as well as both signed expirations; collection never renews status freshness.
 Absence from a revocation list does not imply authorization. Two reads reject
 record replacement during collection; unavailable, forged, revoked, expired,
 wrong-account/key/mode/scope/release or startup-only approvals deny.
@@ -149,6 +154,8 @@ and `policy` records. Each record requires exact account/key/broker/source
 identity, positive revision, complete provenance and original timestamp.
 The maximum age is 60 seconds; partial hydration and nonfinite or ambiguous
 numeric values deny. Two reads reject account/revision/content changes.
+The oldest original record timestamp and stricter source expirations are
+preserved through certification; reading a snapshot never extends its TTL.
 The source must monotonically advance revisions on every change, including
 changes later reverted.
 
@@ -234,20 +241,20 @@ and `NIJA_DEFER_RUNTIME_SITE_HOOKS=1`. No dependency manifest changed.
 NIJA_DEFER_RUNTIME_SITE_HOOKS=1 /tmp/nija-evidence-venv/bin/python -u scripts/run_unittest_partitioned.py --baseline .github/ci_known_test_failures.txt --preload-module requests --preload-module bot --traceback-after 120 --max-files 25 --min-tests 2554
 ```
 
-Result: baseline ratchet passed; **2,814 tests run, zero unexpected failures**,
+Result: baseline ratchet passed; **2,823 tests run, zero unexpected failures**,
 31 isolated processes. The existing known-failure baseline was not changed;
 this is not a claim that every legacy test passes individually.
 
 The exact mandatory fail-closed selectors from `.github/workflows/ci.yml`
-were executed with the same Python 3.11 interpreter: **803 passed**.
-The four new provider files alone passed **136 tests** with:
+were executed with the same Python 3.11 interpreter: **812 passed**.
+The four new provider files alone passed **145 tests** with:
 
 ```bash
 NIJA_DEFER_RUNTIME_SITE_HOOKS=1 /tmp/nija-evidence-venv/bin/python -m pytest -q bot/tests/test_kraken_ledger_evidence.py bot/tests/test_kraken_redis_evidence.py bot/tests/test_kraken_risk_evidence.py bot/tests/test_kraken_operator_authorization.py
 ```
 
 The expanded provider/source registration, composition, expiration, admission
-and backup regression selection passed **292 tests**.
+and backup regression selection passed **301 tests**.
 The Redis tests include a real private, ephemeral Redis 7.0.15 Unix-socket
 subprocess with port 0 and persistence disabled; no shared Redis was accessed.
 
@@ -260,5 +267,13 @@ constants and account values remain parameter-bound.
 The named `runtime-tools-secret_scanning` and `codeql_checker` tools were not
 available locally. Existing hosted CodeQL/security workflows must pass on the
 new pull request; results for older drafts are not evidence for this commit.
+Hosted CI/security checks passed for the initial implementation head except
+one CodeQL HIGH finding, `py/weak-sensitive-data-hashing`, at the API-key
+SHA-256 fingerprint comparison. This is identity fingerprinting of a
+high-entropy Kraken API key, not password storage; changing the algorithm
+would break independently pinned identity compatibility. The site explains
+the distinction. The alert was **not suppressed or dismissed** and requires
+external false-positive review before merge. Later head statuses must be
+checked separately.
 Human independent infrastructure, accounting, authorization and risk review
 remains required even after CI succeeds.

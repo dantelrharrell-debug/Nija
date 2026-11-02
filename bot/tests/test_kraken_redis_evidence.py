@@ -32,6 +32,13 @@ inventory_keys = _MODULE.inventory_keys
 offline_manifest = _MODULE.offline_manifest
 plan_offline_inventory_record = _MODULE.plan_offline_inventory_record
 
+_VALIDATOR_SPEC = importlib.util.spec_from_file_location(
+    "_offline_pretrade_validator_redis_tests",
+    Path(__file__).resolve().parents[1] / "pretrade_attestation_validation_v452.py",
+)
+_VALIDATOR = importlib.util.module_from_spec(_VALIDATOR_SPEC)
+_VALIDATOR_SPEC.loader.exec_module(_VALIDATOR)
+
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -191,6 +198,70 @@ class RedisEvidenceTests(unittest.TestCase):
         self.assertTrue(all(command in {"get", "smembers", "pttl"} for command, _ in self.redis.commands))
         again = self.reader().collect()
         self.assertTrue(all(rows[field]["evidence_id"] != again[field]["evidence_id"] for field in FIELDS))
+
+    def evaluate_rows(self, redis_rows, now):
+        trusted = {field: "trusted-" + field for field in _VALIDATOR.REQUIRED}
+        trusted.update(dict(zip(FIELDS, self.binding.provider_ids)))
+        observations = {
+            field: {
+                "account": self.scope.account, "verified": True, "read_only": True, "scope_verified": True,
+                "source": _VALIDATOR.SOURCES[field], "provider_id": trusted[field],
+                "evidence_id": "unrelated-fixture:" + field, "observed_at_epoch": 1000,
+                "provenance": {
+                    "account_scope_verified": True, "collector_identity_verified": True,
+                    "snapshot_complete": True, "complete_pagination_verified": True,
+                    _VALIDATOR.PROOF_BY_SOURCE[_VALIDATOR.SOURCES[field]]: True,
+                },
+            }
+            for field in _VALIDATOR.REQUIRED
+        }
+        observations.update(redis_rows)
+        return _VALIDATOR.evaluate_pretrade_certificate(
+            observations, account=self.scope.account, trusted_provider_ids=trusted, now_epoch=now,
+        )
+
+    def test_v452_rejects_all_redis_evidence_after_source_lease_expiry(self):
+        self.redis.ttls[self.binding.process_lock_key] = 1500
+        rows = self.reader().collect()
+        self.assertTrue(all(row["expires_at_epoch"] == 1001.5 for row in rows.values()))
+        self.assertTrue(self.evaluate_rows(rows, 1001)["certified"])
+        for now in (1001.5, 1005):
+            with self.subTest(now=now):
+                result = self.evaluate_rows(rows, now)
+                self.assertEqual(set(result["missing"]), set(FIELDS))
+                self.assertTrue(all(
+                    result["failure_reasons"][field] == "observation_expired" for field in FIELDS
+                ))
+
+    def test_duplicate_fence_expiry_is_stricter_than_lease_and_capped_by_sixty_seconds(self):
+        fence = "nija:control:v2:idempotency:" + "1" * 64
+        self.redis.ttls[fence] = 2000
+        for index in (0, 2, 3, 5):
+            self.redis.ttls[self.reader()._controls()[index][1]] = 90000
+        rows = self.reader().collect()
+        self.assertEqual(rows["duplicate_order_fence"]["expires_at_epoch"], 1002)
+        self.assertEqual(rows["writer_lease"]["expires_at_epoch"], 1060)
+        self.assertEqual(rows["nonce_sequence"]["expires_at_epoch"], 1060)
+        result = self.evaluate_rows(rows, 1005)
+        self.assertEqual(result["missing"], ["duplicate_order_fence"])
+        self.assertEqual(result["failure_reasons"]["duplicate_order_fence"], "observation_expired")
+
+    def test_source_expiry_uses_minimum_of_both_snapshots_and_read_start_not_return_time(self):
+        key = self.reader()._controls()[3][1]
+        def shorten(execution):
+            if execution == 3:
+                self.redis.ttls[key] = 10000
+        self.redis.hook = shorten
+        clock = iter((1000, 1001, 1001))
+        rows = self.reader(clock=lambda: next(clock)).collect()
+        self.assertTrue(all(row["expires_at_epoch"] == 1010 for row in rows.values()))
+
+    def test_expired_or_imminently_expiring_duplicate_fence_denies_collection(self):
+        fence = "nija:control:v2:idempotency:" + "1" * 64
+        for ttl in (-2, 0, 999, 1000):
+            with self.subTest(ttl=ttl):
+                self.redis.ttls[fence] = ttl
+                self.assert_denied()
 
     def test_absent_inventory_is_not_inferred_from_legacy_keys(self):
         del self.redis.values[self.manifest_key]
