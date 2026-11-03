@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 import urllib.parse
 from pathlib import Path
 from typing import Callable, Mapping
@@ -42,7 +43,7 @@ def _read_counts(path: Path, *, forwarding: bool) -> dict:
             return {"status": "invalid_sqlite_header"}
         if header[18] == 2 or header[19] == 2:
             return {"status": "wal_mode_requires_consistent_snapshot"}
-        with sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=3) as db:
+        with closing(sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=3)) as db:
             db.execute("PRAGMA query_only=ON")
             budget = [0]
 
