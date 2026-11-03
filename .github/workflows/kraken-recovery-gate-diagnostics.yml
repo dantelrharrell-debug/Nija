@@ -21,6 +21,7 @@ jobs:
     secrets:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+      NIJA_RENDER_READONLY_APPROVAL_JSON: ${{ secrets.NIJA_RENDER_READONLY_APPROVAL_JSON }}
   inspect:
     needs: baseline
     if: inputs.current_instance != true && inputs.identity_compare != true

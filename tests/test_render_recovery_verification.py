@@ -341,6 +341,19 @@ class RecoveryVerificationTests(unittest.TestCase):
             api.assert_not_called()
             ssh.assert_not_called()
 
+    def test_required_approval_secret_is_forwarded_only_by_name(self) -> None:
+        """GitHub requires explicit caller forwarding of environment secrets."""
+        mapping = "NIJA_RENDER_READONLY_APPROVAL_JSON: ${{ secrets.NIJA_RENDER_READONLY_APPROVAL_JSON }}"
+        for path in ("kraken-recovery-gate-diagnostics.yml", "render-recovery-access.yml"):
+            with self.subTest(path=path):
+                source = (Path(".github/workflows") / path).read_text()
+                self.assertEqual(source.count(mapping), 1)
+                self.assertNotIn("secrets: inherit", source)
+        reusable = Path(".github/workflows/render-production-baseline.yml").read_text()
+        self.assertIn("environment: nija-render-recovery-readonly", reusable)
+        self.assertIn("NIJA_RENDER_READONLY_APPROVAL_JSON:\\n        required: true", reusable)
+        self.assertIn("secrets.NIJA_RENDER_READONLY_APPROVAL_JSON", reusable)
+
     def test_workflows_have_fixed_release_checkout_and_baseline_dependencies(self) -> None:
         for path in ("kraken-recovery-gate-diagnostics.yml", "render-recovery-access.yml"):
             source = (Path(".github/workflows") / path).read_text()
@@ -353,7 +366,10 @@ class RecoveryVerificationTests(unittest.TestCase):
                 "NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}",
                 source,
             )
-            self.assertNotIn("NIJA_RENDER_READONLY_APPROVAL_JSON:", source)
+            self.assertIn(
+                "NIJA_RENDER_READONLY_APPROVAL_JSON: ${{ secrets.NIJA_RENDER_READONLY_APPROVAL_JSON }}",
+                source,
+            )
         source = Path(".github/workflows/render-production-baseline.yml").read_text()
         self.assertIn("if: github.ref == 'refs/heads/" + RELEASE_BRANCH + "'", source)
         self.assertIn("ref: ${{ github.sha }}", source)
@@ -362,6 +378,6 @@ class RecoveryVerificationTests(unittest.TestCase):
         self.assertIn("secrets.NIJA_RENDER_READONLY_APPROVAL_JSON", source)
         self.assertIn("RENDER_API_KEY:", source)
         self.assertIn("NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY:", source)
-        self.assertNotIn("NIJA_RENDER_READONLY_APPROVAL_JSON:\n", source)
+        self.assertIn("NIJA_RENDER_READONLY_APPROVAL_JSON:\n        required: true", source)
         source = Path(".github/workflows/kraken-recovery-gate-diagnostics.yml").read_text()
         self.assertIn("ref: ${{ needs.baseline.outputs.verification_source_commit }}", source)

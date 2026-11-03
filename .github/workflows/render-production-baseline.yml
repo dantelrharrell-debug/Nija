@@ -6,6 +6,8 @@ on:
         required: false
       NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY:
         required: false
+      NIJA_RENDER_READONLY_APPROVAL_JSON:
+        required: true
     outputs:
       approved_commit:
         value: ${{ jobs.verify.outputs.approved_commit }}
