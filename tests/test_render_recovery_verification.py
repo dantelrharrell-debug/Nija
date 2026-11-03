@@ -133,6 +133,21 @@ class RecoveryVerificationTests(unittest.TestCase):
         self.assertFalse(report["CERTIFICATION_COMPLETE"])
         self.assertFalse(report["allow_new_orders"])
 
+    def test_explicit_sole_owner_readonly_approval_never_certifies_orders(self) -> None:
+        """A documented owner decision permits baseline reads, not execution."""
+        self.approval = {
+            **self.approval,
+            "approval_reference": "owner-readonly-synthetic-audit-record",
+        }
+        report = self.run_synthetic()
+        self.assertTrue(report["DEPLOYMENT_BASELINE_VERIFIED"], report)
+        self.assertTrue(report["SOURCE_INTEGRITY_VERIFIED"], report)
+        self.assertTrue(report["RUNTIME_ACCESS_VERIFIED"], report)
+        self.assertFalse(report["BROKER_EVIDENCE_VERIFIED"])
+        self.assertFalse(report["CERTIFICATION_COMPLETE"])
+        self.assertFalse(report["allow_new_orders"])
+        self.assertEqual(report["mode"], "READ_ONLY_RECOVERY")
+
     def test_incomplete_collector_cannot_be_inferred_from_logs(self) -> None:
         runtime = {
             **self.runtime, "collector_installed": True,
