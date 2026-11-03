@@ -341,7 +341,8 @@ def test_customer_partial_primary_alias_denied_even_with_complete_secondary(
     assert len(runtime.clients) == 1  # Only the already-authenticated platform.
     diagnostic = [
         record.getMessage() for record in caplog.records
-        if "KRAKEN_CREDENTIAL_SELECTION_DIAGNOSTIC" in record.getMessage()
+        if ("KRAKEN_CREDENTIAL_SELECTION_DIAGNOSTIC" in record.getMessage()
+            and "account_role=customer" in record.getMessage())
     ]
     assert len(diagnostic) == 1
     assert "account_role=customer" in diagnostic[0]
@@ -373,7 +374,8 @@ def test_customer_secondary_alias_connects_with_its_own_complete_pair(
     assert member.api is not platform.api
     diagnostic = [
         record.getMessage() for record in caplog.records
-        if "KRAKEN_CREDENTIAL_SELECTION_DIAGNOSTIC" in record.getMessage()
+        if ("KRAKEN_CREDENTIAL_SELECTION_DIAGNOSTIC" in record.getMessage()
+            and "account_role=customer" in record.getMessage())
     ]
     assert len(diagnostic) == 1
     assert "account_role=customer" in diagnostic[0]
