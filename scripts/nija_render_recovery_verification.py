@@ -28,6 +28,13 @@ OUTCOMES = (
     "SOURCE_INTEGRITY_VERIFIED", "RUNTIME_ACCESS_VERIFIED",
     "BROKER_EVIDENCE_VERIFIED", "CERTIFICATION_COMPLETE",
 )
+# Only these fixed labels from the reviewed, read-only instance inspector may
+# leave GitHub Actions. Never export raw remote stdout, stderr, accounts or keys.
+SAFE_RUNTIME_EVIDENCE_FAILURES = frozenset({
+    "runtime_process_inspection_failed", "process_inventory_unavailable",
+    "runtime_log_read_failed", "current_process_log_evidence_unavailable",
+    "canonical_runtime_process_not_found", "runtime_source_read_failed",
+})
 
 
 class VerificationDenied(ValueError):
@@ -165,6 +172,41 @@ def _command(args: list[str], reason: str, *, data: bytes | None = None) -> byte
     return result.stdout
 
 
+def _read_ssh_report(args: list[str], *, data: bytes) -> dict:
+    """Tell SSH transport errors from valid, fail-closed remote diagnostics.
+
+    The remote read-only inspector intentionally exits 2 for missing runtime
+    evidence, even after successful SSH authentication. Never export stderr.
+    """
+    try:
+        result = subprocess.run(
+            args, input=data, capture_output=True, timeout=90, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise VerificationDenied("ssh_connection_or_command_unavailable") from None
+    if result.returncode == 255:
+        # OpenSSH uses 255 for transport/authentication failures. It does not
+        # prove which issue occurred, so do not claim that credentials are bad.
+        raise VerificationDenied("ssh_transport_or_authorization_failed")
+    if result.returncode not in (0, 2):
+        raise VerificationDenied("ssh_remote_command_failed")
+    if len(result.stdout) > 1024 * 1024:
+        raise VerificationDenied("ssh_remote_report_oversize")
+    try:
+        report = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        raise VerificationDenied("ssh_remote_report_invalid") from None
+    if not isinstance(report, dict):
+        raise VerificationDenied("ssh_remote_report_invalid")
+    if (report.get("status") == "BLOCKED"
+            and report.get("reason") in {"service_identity_mismatch", "baseline_commit_mismatch"}):
+        raise VerificationDenied("ssh_runtime_deployment_identity_mismatch")
+    if (report.get("status") != "DIAGNOSTIC_ONLY"
+            or (result.returncode == 0) != report_succeeded(report)):
+        raise VerificationDenied("ssh_remote_report_exit_mismatch")
+    return report
+
+
 def _runtime(approval: dict) -> dict:
     key = os.environ.get("RENDER_RECOVERY_SSH_KEY", "")
     if not key:
@@ -184,7 +226,7 @@ def _runtime(approval: dict) -> dict:
         )
         if {line.split()[1] for line in fingerprints.decode().splitlines()} != {HOST_FINGERPRINT}:
             raise VerificationDenied("ssh_host_fingerprint_mismatch")
-        raw = _command([
+        return _read_ssh_report([
             "ssh", "-T", "-i", str(private_key),
             "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
             "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=" + str(known_hosts),
@@ -192,11 +234,7 @@ def _runtime(approval: dict) -> dict:
             "-o", "ConnectionAttempts=1", "-o", "ServerAliveInterval=10",
             "-o", "ServerAliveCountMax=1", SERVICE + "@" + HOST,
             "env NIJA_APPROVED_RENDER_COMMIT=" + approval["commit"] + " python -B -S -",
-        ], "ssh_runtime_inspection_failed", data=Path("scripts/nija_kraken_instance_diagnostic.py").read_bytes())
-        report = json.loads(raw)
-        if not isinstance(report, dict):
-            raise VerificationDenied("runtime_report_invalid")
-        return report
+        ], data=Path("scripts/nija_kraken_instance_diagnostic.py").read_bytes())
 
 
 def run_verification() -> dict:
@@ -230,6 +268,18 @@ def run_verification() -> dict:
                 raise VerificationDenied("reviewed_source_digest_mismatch")
         result["DEPLOYMENT_BASELINE_VERIFIED"] = True
         report = _runtime(approval)
+        # A valid, authenticated remote diagnostic may be blocked by its own
+        # read-only evidence checks. Report ONLY predefined reason labels.
+        if report.get("status") == "DIAGNOSTIC_ONLY":
+            result["ssh_runtime_report_received"] = True
+            failures = report.get("failures")
+            if isinstance(failures, list):
+                safe = sorted({
+                    reason for reason in failures
+                    if type(reason) is str and reason in SAFE_RUNTIME_EVIDENCE_FAILURES
+                })
+                if safe:
+                    result["ssh_runtime_evidence_failures"] = safe
         verify_runtime(approval, report)
         # A deployment may change during SSH; recheck independent live metadata.
         verify_baseline(approval, inspect_render_api(deployment_only=True), workflow_ref=os.environ["GITHUB_REF"])
