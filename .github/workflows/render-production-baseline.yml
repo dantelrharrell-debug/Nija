@@ -12,6 +12,7 @@ permissions:
   contents: read
 jobs:
   verify:
+    if: github.ref == 'refs/heads/release/justcall-handoff-only-20261017'
     # Must be configured by repository admins with required independent
     # reviewers and prevent-self-review enabled before any approval secret
     # is provisioned. Unconfigured environments have no approval secret and
@@ -27,7 +28,7 @@ jobs:
       - name: Checkout verification control code from the production release only
         uses: actions/checkout@v4
         with:
-          ref: release/justcall-handoff-only-20261017
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify reviewed approval, independent Render metadata, source and runtime
