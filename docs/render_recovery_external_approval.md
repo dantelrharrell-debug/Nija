@@ -15,6 +15,10 @@ Do **not** modify the committed manifest to approve production.
 - The reusable `.github/workflows/render-production-baseline.yml` job uses the
   `nija-render-recovery-readonly` GitHub Actions environment. It imports the
   *environment-only* secret `NIJA_RENDER_READONLY_APPROVAL_JSON`.
+- Callers explicitly pass only the Render API and recovery SSH credentials to
+  the reusable workflow. The approval JSON is not a `workflow_call` secret and
+  is never passed using `secrets: inherit`; do not provision a repository- or
+  organization-level copy of `NIJA_RENDER_READONLY_APPROVAL_JSON`.
 - No approval is valid without a real independent operator action and recorded
   review reference. A repository push, issue comment, automatic merge, observed
   Render SHA, or this document does **not** provide operator approval.
