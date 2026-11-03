@@ -98,6 +98,9 @@ class ReconciliationTests(unittest.TestCase):
             def __exit__(self, *args):
                 return self.connection.__exit__(*args)
 
+            def close(self):
+                self.connection.close()
+
             def execute(self, sql, *args):
                 cursor = self.connection.execute(sql, *args)
                 if sql.startswith("SELECT COUNT(*), COUNT(DISTINCT"):
