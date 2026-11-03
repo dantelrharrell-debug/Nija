@@ -96,6 +96,35 @@ Do **not** modify the committed manifest to approve production.
 - A successful baseline permits read-only diagnostics only; it is neither a
   Kraken credential check nor trading approval.
 
+## SSH runtime read-only triage
+
+A valid environment approval and exact Render deployment proof can advance the
+baseline to the SSH stage while **still failing closed**. The original verifier
+collapsed all nonzero SSH exits under `ssh_runtime_inspection_failed`, even
+though the read-only remote inspector intentionally exits 2 when it has missing
+evidence. The revised verifier distinguishes:
+
+- `ssh_transport_or_authorization_failed`: SSH returned exit 255; inspect the
+  matching **public key** in Render Account Settings, service compatibility and
+  network access. Never paste or rotate a private key based only on this code.
+- `ssh_connection_or_command_unavailable`: SSH binary or transport could not
+  be run or timed out; diagnose network and execution path without weakening the
+  approved host fingerprint.
+- `ssh_remote_report_invalid` or `ssh_remote_report_exit_mismatch`: remote
+  output did not match the strictly bounded read-only protocol.
+- `ssh_runtime_deployment_identity_mismatch`: the running service/commit did
+  not agree with the pinned deployment; do not repin without owner review.
+- `runtime_evidence_incomplete` with optional **fixed allowlisted**
+  `ssh_runtime_evidence_failures`: SSH reached and ran the protected instance
+  inspector, which reported unresolved runtime evidence. Never print raw
+  stdout, stderr, account IDs, balances, credentials or diagnostic payloads.
+
+All of these are blocking outcomes; even a fully successful SSH baseline is
+not Kraken ledger, protective-exit or 13-source trading certification.
+After merging a diagnostic-only release change, Render auto-deploys a **new**
+commit. Reconfirm the deployment and have the owner independently review and
+repin the environment-only JSON; do not reuse or auto-renew the old approval.
+
 ## Prerequisites and limitations
 - Existing `RENDER_API_KEY` and
   `NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY` credentials must be configured by

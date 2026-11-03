@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from scripts.nija_render_recovery_verification import (
     MANIFEST, OUTCOMES, RELEASE_BRANCH, SERVICE, SOURCE_PATHS, VerificationDenied,
-    _command, load_reviewed_approval, run_verification, verify_baseline, verify_runtime,
+    _command, _read_ssh_report, load_reviewed_approval, run_verification,
+    verify_baseline, verify_runtime,
 )
 
 PIN = "a" * 40
@@ -107,6 +108,64 @@ class RecoveryVerificationTests(unittest.TestCase):
             [], 255, b"", b"private-canary Permission denied",
         )), self.assertRaisesRegex(VerificationDenied, "^ssh_runtime_inspection_failed$"):
             _command(["ssh"], "ssh_runtime_inspection_failed")
+
+    def test_remote_inspector_exit_two_reports_runtime_blocker_not_ssh_failure(self) -> None:
+        remote = {**self.runtime, "failures": ["canonical_runtime_process_not_found"]}
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess(
+            ["ssh"], 2, json.dumps(remote).encode(), b"private-stderr-canary",
+        )):
+            report = _read_ssh_report(["ssh"], data=b"synthetic-only")
+        self.assertEqual(report["failures"], ["canonical_runtime_process_not_found"])
+        with self.assertRaisesRegex(VerificationDenied, "^runtime_evidence_incomplete$"):
+            verify_runtime(self.approval, report)
+        outcome = self.run_synthetic(runtime=report)
+        self.assertIn("runtime_evidence_incomplete", outcome["failures"])
+        self.assertEqual(
+            outcome["ssh_runtime_evidence_failures"],
+            ["canonical_runtime_process_not_found"],
+        )
+        self.assertTrue(outcome["ssh_runtime_report_received"])
+        self.assertFalse(outcome["DEPLOYMENT_BASELINE_VERIFIED"])
+        self.assertFalse(outcome["CERTIFICATION_COMPLETE"])
+        self.assertFalse(outcome["allow_new_orders"])
+
+    def test_ssh_transport_denial_does_not_disclose_stderr(self) -> None:
+        with patch("subprocess.run", return_value=subprocess.CompletedProcess(
+            ["ssh"], 255, b"", b"private-secret-canary Permission denied (publickey)",
+        )), self.assertRaisesRegex(
+            VerificationDenied, "^ssh_transport_or_authorization_failed$",
+        ) as ctx:
+            _read_ssh_report(["ssh"], data=b"synthetic-only")
+        self.assertNotIn("private-secret-canary", str(ctx.exception))
+
+    def test_remote_ssh_report_invalid_or_exit_inconsistent_fails_closed(self) -> None:
+        cases = (
+            (2, b"not-json", "ssh_remote_report_invalid"),
+            (0, b"[]", "ssh_remote_report_invalid"),
+            (0, json.dumps({**self.runtime, "failures": ["runtime_source_read_failed"]}).encode(),
+             "ssh_remote_report_exit_mismatch"),
+            (2, json.dumps(self.runtime).encode(), "ssh_remote_report_exit_mismatch"),
+            (1, json.dumps(self.runtime).encode(), "ssh_remote_command_failed"),
+        )
+        for rc, stdout, reason in cases:
+            with self.subTest(code=rc, reason=reason), patch(
+                "subprocess.run", return_value=subprocess.CompletedProcess(
+                    ["ssh"], rc, stdout, b"private-canary",
+                ),
+            ), self.assertRaisesRegex(VerificationDenied, "^" + reason + "$"):
+                _read_ssh_report(["ssh"], data=b"synthetic-only")
+
+    def test_remote_failure_reasons_never_publish_unreviewed_content(self) -> None:
+        remote = {**self.runtime, "failures": [
+            "current_process_log_evidence_unavailable", "private_account_or_token_canary",
+        ]}
+        outcome = self.run_synthetic(runtime=remote)
+        self.assertEqual(
+            outcome["ssh_runtime_evidence_failures"],
+            ["current_process_log_evidence_unavailable"],
+        )
+        self.assertNotIn("private_account_or_token_canary", json.dumps(outcome))
+        self.assertFalse(outcome["CERTIFICATION_COMPLETE"])
 
     def run_synthetic(self, *, runtime=None, command=None, evidence=None) -> dict:
         """Exercise orchestration with an independently reviewed synthetic approval."""
