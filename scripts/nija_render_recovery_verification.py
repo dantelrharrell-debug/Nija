@@ -219,11 +219,7 @@ def _read_render_instance_logs(instance: str, start: float, end: float) -> list[
 
 
 def _render_log_instance_matches(full: str, logged: str) -> bool:
-    """Render app logs use the five-character instance slug after service ID.
-
-    SSH may report that slug followed by an additional hyphen-delimited suffix.
-    Never accept an arbitrary prefix or a different service.
-    """
+    """Match exact IDs or Render labels with the ReplicaSet component omitted."""
     if full == logged and re.fullmatch(re.escape(SERVICE) + r"-[a-zA-Z0-9-]{1,64}", full):
         return True
     prefix = SERVICE + "-"
@@ -233,8 +229,8 @@ def _render_log_instance_matches(full: str, logged: str) -> bool:
     short = logged[len(prefix):]
     return bool(
         re.fullmatch(r"[a-z0-9]{5}", short)
-        and re.fullmatch(r"[a-z0-9]{5}(?:-[a-zA-Z0-9]+)*", suffix)
-        and (suffix == short or suffix.startswith(short + "-"))
+        and re.fullmatch(r"(?:[a-zA-Z0-9]+-)*[a-z0-9]{5}", suffix)
+        and suffix.rsplit("-", 1)[-1] == short
     )
 
 
