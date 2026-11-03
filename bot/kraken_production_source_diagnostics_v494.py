@@ -86,13 +86,19 @@ def _inspect_kill_switch(
         # rejects active/malformed/duplicate-key/expired-looking clearance
         # payloads. This diagnostic DOES NOT approve the resulting digest.
         from bot.kraken_kill_switch_evidence import (
-            KrakenKillSwitchDenied, _clearance,
+            KrakenKillSwitchDenied, _clearance, _unique_object,
         )
         try:
+            record = json.loads(first, object_pairs_hook=_unique_object)
+        except (KrakenKillSwitchDenied, ValueError, TypeError, UnicodeDecodeError):
+            return _result(False, "durable_kill_switch_record_unverified")
+        if not isinstance(record, Mapping):
+            return _result(False, "durable_kill_switch_record_unverified")
+        if record.get("is_active") is True:
+            return _result(False, "durable_kill_switch_active")
+        try:
             _clearance(first, float(now_epoch))
-        except KrakenKillSwitchDenied as exc:
-            if str(exc) == "durable_clearance_not_clear":
-                return _result(False, "durable_kill_switch_active")
+        except KrakenKillSwitchDenied:
             return _result(False, "durable_kill_switch_record_unverified")
         # A concurrent stop update must not be reported as a stable read.
         if redis_client.get(key) != first or kill_switch.get_status() != status_a:
