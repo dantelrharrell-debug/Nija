@@ -44,6 +44,26 @@ def _reject_duplicate_fields(pairs: list[tuple[str, object]]) -> dict:
     return out
 
 
+def _validate_approval_metadata(approval: dict) -> None:
+    """Reject unapproved or malformed deployment pins before external access."""
+    if (approval.get("service_id") != SERVICE
+            or approval.get("release_branch") != RELEASE_BRANCH):
+        raise VerificationDenied("approval_target_mismatch")
+    if (approval.get("operator_approved") is not True
+            or not isinstance(approval.get("approval_reference"), str)
+            or not approval["approval_reference"].strip()):
+        raise VerificationDenied("deployment_operator_approval_missing")
+    commit, deployment = approval.get("commit"), approval.get("deployment_id")
+    if (not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)
+            or not isinstance(deployment, str) or not re.fullmatch(r"dep-[a-zA-Z0-9]+", deployment)):
+        raise VerificationDenied("approved_deployment_pin_missing")
+    pins = approval.get("source_sha256")
+    if (not isinstance(pins, dict) or set(pins) != set(SOURCE_PATHS)
+            or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                   for value in pins.values())):
+        raise VerificationDenied("reviewed_source_pins_incomplete")
+
+
 def load_reviewed_approval() -> dict:
     """Use a separately protected GitHub environment secret, never a release push.
 
@@ -87,6 +107,7 @@ def load_reviewed_approval() -> dict:
             or reviewed.get("release_branch") != RELEASE_BRANCH
             or reviewed.get("source_sha256") != pins):
         raise VerificationDenied("independent_environment_approval_pins_mismatch")
+    _validate_approval_metadata(reviewed)
     if (reviewed.get("operator_approved") is not True
             or not isinstance(reviewed.get("approval_reference"), str)
             or not reviewed["approval_reference"].strip()):
@@ -103,17 +124,7 @@ def verify_baseline(approval: dict, evidence: dict, *, workflow_ref: str) -> Non
     """Require operator review AND independent, fresh Render deployment evidence."""
     if workflow_ref != "refs/heads/" + RELEASE_BRANCH:
         raise VerificationDenied("workflow_dispatch_not_production_release")
-    if (approval.get("service_id") != SERVICE
-            or approval.get("release_branch") != RELEASE_BRANCH):
-        raise VerificationDenied("approval_target_mismatch")
-    if (approval.get("operator_approved") is not True
-            or not isinstance(approval.get("approval_reference"), str)
-            or not approval["approval_reference"].strip()):
-        raise VerificationDenied("deployment_operator_approval_missing")
-    commit, deployment = approval.get("commit"), approval.get("deployment_id")
-    if (not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)
-            or not isinstance(deployment, str) or not re.fullmatch(r"dep-[a-zA-Z0-9]+", deployment)):
-        raise VerificationDenied("approved_deployment_pin_missing")
+    _validate_approval_metadata(approval)
     stamp = evidence.get("observed_at_epoch")
     if (evidence.get("status") != "DIAGNOSTIC_ONLY" or evidence.get("failures") != []
             or evidence.get("service_id") != SERVICE
@@ -121,13 +132,9 @@ def verify_baseline(approval: dict, evidence: dict, *, workflow_ref: str) -> Non
             or evidence.get("release_branch_verified") is not True
             or type(stamp) not in (int, float) or not 0 <= time.time() - stamp <= 60):
         raise VerificationDenied("current_render_evidence_missing")
-    if evidence.get("commit") != commit or evidence.get("deployment_id") != deployment:
+    if (evidence.get("commit") != approval["commit"]
+            or evidence.get("deployment_id") != approval["deployment_id"]):
         raise VerificationDenied("approved_render_deployment_mismatch")
-    pins = approval.get("source_sha256")
-    if (not isinstance(pins, dict) or set(pins) != set(SOURCE_PATHS)
-            or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
-                   for value in pins.values())):
-        raise VerificationDenied("reviewed_source_pins_incomplete")
 
 
 def verify_runtime(approval: dict, report: dict) -> None:
