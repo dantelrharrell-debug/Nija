@@ -12,6 +12,12 @@ permissions:
   contents: read
 jobs:
   verify:
+    if: github.ref == 'refs/heads/release/justcall-handoff-only-20261017'
+    # Must be configured by repository admins with required independent
+    # reviewers and prevent-self-review enabled before any approval secret
+    # is provisioned. Unconfigured environments have no approval secret and
+    # the verification code fails closed without accessing Render.
+    environment: nija-render-recovery-readonly
     runs-on: ubuntu-latest
     timeout-minutes: 6
     outputs:
@@ -22,7 +28,7 @@ jobs:
       - name: Checkout verification control code from the production release only
         uses: actions/checkout@v4
         with:
-          ref: release/justcall-handoff-only-20261017
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify reviewed approval, independent Render metadata, source and runtime
@@ -30,6 +36,7 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           RENDER_RECOVERY_SSH_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
+          NIJA_RENDER_READONLY_APPROVAL_JSON: ${{ secrets.NIJA_RENDER_READONLY_APPROVAL_JSON }}
         run: python -B -S -m scripts.nija_render_recovery_verification
       - name: Retain sanitized machine-readable verification outcomes
         if: always()
