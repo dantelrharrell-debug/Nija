@@ -295,3 +295,91 @@ def test_render_alias_normalization_never_builds_hybrid_pairs(variables, expecte
     if "KRAKEN_PLATFORM_API_KEY" in variables:
         assert secret == ""
     assert "unrelated" not in result.stdout
+
+
+@pytest.mark.parametrize("values,expected", [
+    ({}, False),
+    ({"KRAKEN_USER_EXAMPLE_API_KEY": "short-key",
+      "KRAKEN_USER_EXAMPLE_PERSON_API_SECRET": SECRET}, False),
+    ({"KRAKEN_USER_EXAMPLE_API_KEY": "short-key",
+      "KRAKEN_USER_EXAMPLE_PERSON_API_KEY": "full-key",
+      "KRAKEN_USER_EXAMPLE_PERSON_API_SECRET": SECRET}, False),
+    ({"KRAKEN_USER_EXAMPLE_API_KEY": "  ",
+      "KRAKEN_USER_EXAMPLE_API_SECRET": SECRET}, False),
+    ({"KRAKEN_USER_EXAMPLE_PERSON_API_KEY": "full-key",
+      "KRAKEN_USER_EXAMPLE_PERSON_API_SECRET": SECRET}, True),
+    ({"KRAKEN_USER_EXAMPLE_API_KEY": "short-key",
+      "KRAKEN_USER_EXAMPLE_API_SECRET": SECRET}, True),
+])
+def test_user_preflight_respects_atomic_first_credential_alias(monkeypatch, values, expected):
+    for key in tuple(os.environ):
+        if key.startswith("KRAKEN_USER_"):
+            monkeypatch.delenv(key)
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    assert bm._kraken_user_credentials_configured("example_person") is expected
+
+
+def test_customer_partial_primary_alias_denied_even_with_complete_secondary(
+    runtime, monkeypatch, caplog,
+):
+    import logging
+
+    platform = bm.KrakenBroker()
+    assert platform.connect()
+    monkeypatch.setenv("KRAKEN_USER_EXAMPLE_API_KEY", "offline-partial-key")
+    monkeypatch.setenv("KRAKEN_USER_EXAMPLE_PERSON_API_KEY", "offline-full-key")
+    monkeypatch.setenv("KRAKEN_USER_EXAMPLE_PERSON_API_SECRET", SECRET)
+    assert bm._kraken_user_credentials_configured("example_person") is False
+    member = bm.KrakenBroker(
+        account_type=bm.AccountType.USER, user_id="example_person"
+    )
+    with caplog.at_level(logging.INFO, logger="nija.broker"):
+        assert member.connect() is False
+    assert member.last_connection_error == "CREDENTIAL_PAIR_MISSING_OR_INCOMPLETE"
+    assert member.api is None
+    assert len(runtime.clients) == 1  # Only the already-authenticated platform.
+    diagnostic = [
+        record.getMessage() for record in caplog.records
+        if "KRAKEN_CREDENTIAL_SELECTION_DIAGNOSTIC" in record.getMessage()
+    ]
+    assert len(diagnostic) == 1
+    assert "account_role=customer" in diagnostic[0]
+    assert "selected_alias=primary" in diagnostic[0]
+    assert "key_present=True" in diagnostic[0]
+    assert "secret_present=False" in diagnostic[0]
+    assert "pair_complete=False" in diagnostic[0]
+    for sensitive in ("example_person", "offline-partial-key", "offline-full-key", SECRET):
+        assert sensitive not in diagnostic[0]
+    assert platform.connected is True
+
+
+def test_customer_secondary_alias_connects_with_its_own_complete_pair(
+    runtime, monkeypatch, caplog,
+):
+    import logging
+
+    platform = bm.KrakenBroker()
+    assert platform.connect()
+    monkeypatch.setenv("KRAKEN_USER_EXAMPLE_PERSON_API_KEY", "offline-full-key")
+    monkeypatch.setenv("KRAKEN_USER_EXAMPLE_PERSON_API_SECRET", SECRET)
+    assert bm._kraken_user_credentials_configured("example_person") is True
+    member = bm.KrakenBroker(
+        account_type=bm.AccountType.USER, user_id="example_person"
+    )
+    with caplog.at_level(logging.INFO, logger="nija.broker"):
+        assert member.connect() is True
+    assert member.api.key == "offline-full-key"
+    assert member.api is not platform.api
+    diagnostic = [
+        record.getMessage() for record in caplog.records
+        if "KRAKEN_CREDENTIAL_SELECTION_DIAGNOSTIC" in record.getMessage()
+    ]
+    assert len(diagnostic) == 1
+    assert "account_role=customer" in diagnostic[0]
+    assert "selected_alias=secondary" in diagnostic[0]
+    assert "key_present=True" in diagnostic[0]
+    assert "secret_present=True" in diagnostic[0]
+    assert "pair_complete=True" in diagnostic[0]
+    assert "offline-full-key" not in diagnostic[0]
+    assert "example_person" not in diagnostic[0]
