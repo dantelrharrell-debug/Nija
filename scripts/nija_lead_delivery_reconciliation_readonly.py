@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 import urllib.parse
 from pathlib import Path
 from typing import Callable, Mapping
@@ -32,13 +33,17 @@ def _read_counts(path: Path, *, forwarding: bool) -> dict:
             return {"status": "missing"}
         if any(Path(str(resolved) + suffix).exists() for suffix in ("-wal", "-shm")):
             return {"status": "live_wal_requires_consistent_snapshot"}
+        # An active or hot rollback journal can make immutable=1 read stale data.
+        # Refuse rather than treating a potentially inconsistent live read as evidence.
+        if Path(str(resolved) + "-journal").exists():
+            return {"status": "rollback_journal_requires_consistent_snapshot"}
         with resolved.open("rb") as file:
             header = file.read(100)
         if len(header) < 100 or header[:16] != b"SQLite format 3" + bytes((0,)):
             return {"status": "invalid_sqlite_header"}
         if header[18] == 2 or header[19] == 2:
             return {"status": "wal_mode_requires_consistent_snapshot"}
-        with sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=3) as db:
+        with closing(sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=3)) as db:
             db.execute("PRAGMA query_only=ON")
             budget = [0]
 
@@ -96,11 +101,15 @@ def inspect(*, environ: Mapping[str, str] | None = None,
             app_default: Path = Path("/app/data/nija_outreach.sqlite3"),
             mount_check: Callable[[Path], bool] | None = None) -> dict:
     env = os.environ if environ is None else environ
-    key = next((k for k in ("NIJA_LEAD_DB_PATH", "NIJA_OUTREACH_DB_PATH")
-                if str(env.get(k) or "").strip()), "default")
-    active = Path(str(env[key]).strip()).expanduser() if key != "default" else app_default
+    # Match render_lead_intake._db_path exactly: select the first TRUTHY raw
+    # override, then strip it. A whitespace-only primary value must not fall
+    # through to the secondary override, and "~" is never expanded at runtime.
+    raw_active = str(env.get("NIJA_LEAD_DB_PATH") or env.get("NIJA_OUTREACH_DB_PATH")
+                     or app_default)
+    active_value = raw_active.strip()
+    active = Path(active_value) if active_value else None
     override = str(env.get("NIJA_LEAD_FORWARD_DB_PATH") or "").strip()
-    forward = (Path(override).expanduser() if override else
+    forward = (Path(override) if override else
                disk / "nija_lead_forwarding.sqlite3" if disk.is_dir() else active)
     mounted = bool((mount_check or (lambda path: path.is_mount()))(disk))
     url = str(env.get("NIJA_LEAD_FORWARD_URL") or "").strip()
@@ -117,10 +126,12 @@ def inspect(*, environ: Mapping[str, str] | None = None,
         "mode": "READ_ONLY", "production_pipeline_certified": False,
         "bulk_replay_authorized": False, "zapier_account_verified": False,
         "storage_mount_verified": mounted,
-        "lead_db_on_mounted_disk": _on_disk(active, disk, mounted),
-        "forward_history_on_mounted_disk": _on_disk(forward, disk, mounted),
-        "lead_database": _read_counts(active, forwarding=False),
-        "forward_history": _read_counts(forward, forwarding=True),
+        "lead_db_on_mounted_disk": _on_disk(active, disk, mounted) if active else False,
+        "forward_history_on_mounted_disk": _on_disk(forward, disk, mounted) if forward else False,
+        "lead_database": (_read_counts(active, forwarding=False) if active else
+                          {"status": "invalid_runtime_path"}),
+        "forward_history": (_read_counts(forward, forwarding=True) if forward else
+                            {"status": "invalid_runtime_path"}),
         "configured_forwarding_https": https_ok,
         "configured_forwarding_category": category,
         "configured_intake_auth": bool(str(env.get("NIJA_LEAD_WEBHOOK_TOKEN")

@@ -4,7 +4,19 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import contextmanager
 from scripts.nija_lead_delivery_reconciliation_readonly import inspect
+
+
+@contextmanager
+def db_transaction(path):
+    """Commit on success, roll back on error, and always close test connections."""
+    db = sqlite3.connect(path)
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -26,7 +38,7 @@ class ReconciliationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def populate(self):
-        with sqlite3.connect(self.lead) as db:
+        with db_transaction(self.lead) as db:
             db.execute("CREATE TABLE website_leads(event_key TEXT, email TEXT, received_at TEXT)")
             db.executemany("INSERT INTO website_leads VALUES(?,?,?)", [
                 ("a", "one@example.com", "2026-10-20T10:00:00Z"),
@@ -39,7 +51,7 @@ class ReconciliationTests(unittest.TestCase):
                 ("b", "synced", ""),
                 ("c", "needs_review", "HTTP_422_email"),
             ])
-        with sqlite3.connect(self.forward) as db:
+        with db_transaction(self.forward) as db:
             db.execute("CREATE TABLE website_lead_forwarding(event_key TEXT,state TEXT)")
             db.executemany("INSERT INTO website_lead_forwarding VALUES(?,?)", [
                 ("a", "pending"), ("b", "pending"), ("c", "sent")
@@ -78,6 +90,29 @@ class ReconciliationTests(unittest.TestCase):
         Path(str(self.lead) + "-wal").touch()
         self.assertEqual(self.audit()["lead_database"]["status"], "live_wal_requires_consistent_snapshot")
 
+    def test_rollback_journal_sidecar_requires_snapshot(self):
+        self.populate()
+        Path(str(self.lead) + "-journal").touch()
+        self.assertEqual(
+            self.audit()["lead_database"]["status"],
+            "rollback_journal_requires_consistent_snapshot",
+        )
+
+    def test_whitespace_primary_override_does_not_use_secondary_path(self):
+        self.populate()
+        self.env["NIJA_LEAD_DB_PATH"] = "   "
+        self.env["NIJA_OUTREACH_DB_PATH"] = str(self.lead)
+        report = self.audit()
+        self.assertEqual(report["lead_database"]["status"], "invalid_runtime_path")
+        self.assertFalse(report["lead_db_on_mounted_disk"])
+
+    def test_literal_tilde_path_is_not_expanded(self):
+        self.populate()
+        self.env["NIJA_LEAD_DB_PATH"] = "~/nija_outreach.sqlite3"
+        report = self.audit()
+        self.assertEqual(report["lead_database"]["status"], "missing")
+        self.assertFalse(report["lead_db_on_mounted_disk"])
+
     def test_plain_http_not_accepted_as_forwarding(self):
         self.populate()
         self.env["NIJA_LEAD_FORWARD_URL"] = "http://hooks.zapier.com/SECRET"
@@ -85,7 +120,7 @@ class ReconciliationTests(unittest.TestCase):
 
     def test_unknown_rejection_code_redacted(self):
         self.populate()
-        with sqlite3.connect(self.lead) as db:
+        with db_transaction(self.lead) as db:
             db.execute("UPDATE website_lead_crm_sync SET last_error_code='sensitive-customer@example.com' WHERE state='needs_review'")
         report = self.audit()
         self.assertEqual(report["lead_database"]["crm_review_categories"], {"other": 1})
@@ -93,7 +128,7 @@ class ReconciliationTests(unittest.TestCase):
 
     def test_unknown_forward_state_redacted(self):
         self.populate()
-        with sqlite3.connect(self.forward) as db:
+        with db_transaction(self.forward) as db:
             db.execute("UPDATE website_lead_forwarding SET state='private-token' WHERE event_key='a'")
         report = self.audit()
         self.assertEqual(report["forward_history"]["forwarding_states"]["other"], 1)
