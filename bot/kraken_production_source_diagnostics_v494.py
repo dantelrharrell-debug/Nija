@@ -47,6 +47,14 @@ def _valid_identifier(value: Any) -> bool:
 def _inspect_kill_switch(
     kill_switch: Any, redis_client: Any, *, now_epoch: float,
 ) -> dict[str, Any]:
+    """Observe stops without changing them or asserting independent clearance.
+
+    is_active() is deliberately NEVER called: the operational kill switch
+    can persist a newly detected filesystem stop from that method. Missing
+    Redis records are not clearance evidence. Even a structurally valid
+    explicit clear still needs a separately approved account-bound digest and
+    reviewer before the v452 kill_switch_clear field can be certified.
+    """
     if kill_switch is None or redis_client is None:
         return _result(False, "existing_kill_switch_or_shared_redis_missing")
     key = getattr(kill_switch, "DURABLE_REDIS_KEY", None)
@@ -55,38 +63,58 @@ def _inspect_kill_switch(
     try:
         if redis_client.ping() is not True:
             return _result(False, "shared_redis_ping_unverified")
+        status_a = kill_switch.get_status()
+        status_b = kill_switch.get_status()
+        if status_a != status_b:
+            return _result(False, "local_kill_switch_changed_during_read")
+        if (not isinstance(status_a, Mapping)
+                or status_a.get("is_active") is not False
+                or status_a.get("kill_file_exists") is not False):
+            return _result(False, "local_and_shared_kill_switch_state_not_proven_clear")
+        if os.environ.get("NIJA_KILL_SWITCH", "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            return _result(False, "deployment_kill_switch_active")
+
         first = redis_client.get(key)
         second = redis_client.get(key)
         if first != second:
             return _result(False, "durable_kill_switch_changed_during_read")
-        if first is not None:
-            try:
-                durable = json.loads(first)
-            except (TypeError, ValueError, UnicodeDecodeError):
-                return _result(False, "durable_kill_switch_state_invalid")
-            if not isinstance(durable, Mapping) or durable.get("is_active") is not True:
-                return _result(False, "durable_kill_switch_state_contradictory")
+        if first is None:
+            return _result(False, "explicit_durable_clearance_record_missing")
+        # The same strict parser used by the independently pinned provider
+        # rejects active/malformed/duplicate-key/expired-looking clearance
+        # payloads. This diagnostic DOES NOT approve the resulting digest.
+        from bot.kraken_kill_switch_evidence import (
+            KrakenKillSwitchDenied, _clearance, _unique_object,
+        )
+        try:
+            record = json.loads(first, object_pairs_hook=_unique_object)
+        except (KrakenKillSwitchDenied, ValueError, TypeError, UnicodeDecodeError):
+            return _result(False, "durable_kill_switch_record_unverified")
+        if not isinstance(record, Mapping):
+            return _result(False, "durable_kill_switch_record_unverified")
+        if record.get("is_active") is True:
             return _result(False, "durable_kill_switch_active")
-        status = kill_switch.get_status()
-        active = kill_switch.is_active()
-    except Exception as exc:
-        return _result(False, f"kill_switch_read_failed:{type(exc).__name__}")
-    if os.environ.get("NIJA_KILL_SWITCH", "").strip().lower() in {
-        "1", "true", "yes", "on",
-    }:
-        return _result(False, "deployment_kill_switch_active")
-    if (not isinstance(status, Mapping)
-            or status.get("is_active") is not False
-            or status.get("kill_file_exists") is not False
-            or active is not False):
-        return _result(False, "local_and_shared_kill_switch_state_not_proven_clear")
-    return _result(
-        True, "shared_and_local_kill_switch_clear",
-        observed_at_epoch=now_epoch,
-        shared_redis_verified=True,
-        durable_stop_absent=True,
-        local_kill_file_absent=True,
-    )
+        try:
+            _clearance(first, float(now_epoch))
+        except KrakenKillSwitchDenied:
+            return _result(False, "durable_kill_switch_record_unverified")
+        # A concurrent stop update must not be reported as a stable read.
+        if redis_client.get(key) != first or kill_switch.get_status() != status_a:
+            return _result(False, "kill_switch_changed_during_read")
+
+        return _result(
+            False, "independent_durable_clearance_binding_required",
+            observed_at_epoch=float(now_epoch),
+            shared_redis_verified=True,
+            explicit_clearance_record_observed=True,
+            local_kill_file_absent=True,
+            independent_clearance_approved=False,
+        )
+    except Exception:
+        # Never print the raw Redis record, local paths, identities, or secrets.
+        return _result(False, "kill_switch_read_unverified")
 
 
 def _inspect_position_sync(
