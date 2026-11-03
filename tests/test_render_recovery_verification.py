@@ -351,7 +351,7 @@ class RecoveryVerificationTests(unittest.TestCase):
                 self.assertNotIn("secrets: inherit", source)
         reusable = Path(".github/workflows/render-production-baseline.yml").read_text()
         self.assertIn("environment: nija-render-recovery-readonly", reusable)
-        self.assertIn("NIJA_RENDER_READONLY_APPROVAL_JSON:\\n        required: true", reusable)
+        self.assertIn("NIJA_RENDER_READONLY_APPROVAL_JSON:\n        required: true", reusable)
         self.assertIn("secrets.NIJA_RENDER_READONLY_APPROVAL_JSON", reusable)
 
     def test_workflows_have_fixed_release_checkout_and_baseline_dependencies(self) -> None:
