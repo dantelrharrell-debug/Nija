@@ -213,6 +213,38 @@ class RecoveryVerificationTests(unittest.TestCase):
         api.assert_not_called()
         ssh.assert_not_called()
 
+    def test_invalid_external_approval_refuses_before_render_api_or_ssh(self) -> None:
+        template = {
+            **self.approval, "operator_approved": False,
+            "approval_reference": None, "commit": None, "deployment_id": None,
+        }
+        invalid_approvals = (
+            ({**self.approval, "operator_approved": False}, "deployment_operator_approval_missing"),
+            ({**self.approval, "approval_reference": "  "}, "deployment_operator_approval_missing"),
+            ({**self.approval, "commit": "not-a-commit"}, "approved_deployment_pin_missing"),
+            ({**self.approval, "deployment_id": "not-a-deployment"}, "approved_deployment_pin_missing"),
+            ({**self.approval, "source_sha256": {
+                **self.approval["source_sha256"], SOURCE_PATHS[0]: "not-a-digest",
+            }}, "independent_environment_approval_pins_mismatch"),
+        )
+        for approval, failure in invalid_approvals:
+            with self.subTest(failure=failure), patch(
+                "scripts.nija_render_recovery_verification.MANIFEST",
+            ) as manifest, patch.dict(
+                os.environ,
+                {"GITHUB_REF": REF, "NIJA_RENDER_READONLY_APPROVAL_JSON": json.dumps(approval)},
+                clear=True,
+            ), patch(
+                "scripts.nija_render_recovery_verification.inspect_render_api",
+            ) as api, patch(
+                "scripts.nija_render_recovery_verification._runtime",
+            ) as ssh:
+                manifest.read_bytes.return_value = json.dumps(template).encode()
+                report = run_verification()
+            self.assertIn(failure, report["failures"])
+            api.assert_not_called()
+            ssh.assert_not_called()
+
     def test_committed_manifest_cannot_approve_itself(self) -> None:
         with patch("scripts.nija_render_recovery_verification.MANIFEST") as manifest, patch.dict(
             os.environ, {"NIJA_RENDER_READONLY_APPROVAL_JSON": json.dumps(self.approval)}
@@ -260,17 +292,61 @@ class RecoveryVerificationTests(unittest.TestCase):
                     with self.assertRaises(VerificationDenied):
                         load_reviewed_approval()
 
+    def test_unapproved_or_malformed_external_approval_refuses_before_remote_access(self) -> None:
+        template = {
+            **self.approval, "operator_approved": False,
+            "approval_reference": None, "commit": None, "deployment_id": None,
+        }
+        cases = (
+            ({"operator_approved": False}, "deployment_operator_approval_missing"),
+            ({"approval_reference": "  "}, "deployment_operator_approval_missing"),
+            ({"commit": "not-a-commit"}, "approved_deployment_pin_missing"),
+            ({"deployment_id": "not-a-deployment"}, "approved_deployment_pin_missing"),
+        )
+        for changes, reason in cases:
+            with self.subTest(changes=changes), patch(
+                "scripts.nija_render_recovery_verification.MANIFEST"
+            ) as manifest, patch.dict(
+                os.environ,
+                {
+                    "GITHUB_REF": REF,
+                    "NIJA_RENDER_READONLY_APPROVAL_JSON": json.dumps({**self.approval, **changes}),
+                },
+                clear=True,
+            ), patch(
+                "scripts.nija_render_recovery_verification._command", return_value=b"c" * 40,
+            ), patch(
+                "scripts.nija_render_recovery_verification.inspect_render_api",
+            ) as api, patch(
+                "scripts.nija_render_recovery_verification._runtime",
+            ) as ssh:
+                manifest.read_bytes.return_value = json.dumps(template).encode()
+                report = run_verification()
+            self.assertIn(reason, report["failures"])
+            api.assert_not_called()
+            ssh.assert_not_called()
+
     def test_workflows_have_fixed_release_checkout_and_baseline_dependencies(self) -> None:
         for path in ("kraken-recovery-gate-diagnostics.yml", "render-recovery-access.yml"):
             source = (Path(".github/workflows") / path).read_text()
             self.assertIn("uses: ./.github/workflows/render-production-baseline.yml", source)
             self.assertIn("needs: baseline", source)
             self.assertNotIn("--request-identity", source)
+            self.assertNotIn("secrets: inherit", source)
+            self.assertIn("RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}", source)
+            self.assertIn(
+                "NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}",
+                source,
+            )
+            self.assertNotIn("NIJA_RENDER_READONLY_APPROVAL_JSON:", source)
         source = Path(".github/workflows/render-production-baseline.yml").read_text()
-        self.assertIn("if: github.ref == '" + REF + "'", source)
+        self.assertIn("if: github.ref == 'refs/heads/" + RELEASE_BRANCH + "'", source)
         self.assertIn("ref: ${{ github.sha }}", source)
         self.assertIn("if-no-files-found: error", source)
         self.assertIn("environment: nija-render-recovery-readonly", source)
         self.assertIn("secrets.NIJA_RENDER_READONLY_APPROVAL_JSON", source)
+        self.assertIn("RENDER_API_KEY:", source)
+        self.assertIn("NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY:", source)
+        self.assertNotIn("NIJA_RENDER_READONLY_APPROVAL_JSON:\n", source)
         source = Path(".github/workflows/kraken-recovery-gate-diagnostics.yml").read_text()
         self.assertIn("ref: ${{ needs.baseline.outputs.verification_source_commit }}", source)
