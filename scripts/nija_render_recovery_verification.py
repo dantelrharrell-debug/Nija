@@ -87,8 +87,15 @@ def load_reviewed_approval() -> dict:
             or reviewed.get("release_branch") != RELEASE_BRANCH
             or reviewed.get("source_sha256") != pins):
         raise VerificationDenied("independent_environment_approval_pins_mismatch")
-    # verify_baseline checks explicit operator decision, reference, exact live
-    # commit, deployment, source pins, and fresh independent Render metadata.
+    if (reviewed.get("operator_approved") is not True
+            or not isinstance(reviewed.get("approval_reference"), str)
+            or not reviewed["approval_reference"].strip()):
+        raise VerificationDenied("deployment_operator_approval_missing")
+    commit, deployment = reviewed.get("commit"), reviewed.get("deployment_id")
+    if (not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit)
+            or not isinstance(deployment, str) or not re.fullmatch(r"dep-[a-zA-Z0-9]+", deployment)):
+        raise VerificationDenied("approved_deployment_pin_missing")
+    # verify_baseline still requires exact agreement with fresh Render evidence.
     return reviewed
 
 
