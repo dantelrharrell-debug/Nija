@@ -12,7 +12,9 @@ concurrency:
 jobs:
   baseline:
     uses: ./.github/workflows/render-production-baseline.yml
-    secrets: inherit
+    secrets:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY: ${{ secrets.NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY }}
   network:
     needs: baseline
     runs-on: ubuntu-latest

@@ -1,6 +1,11 @@
 name: Reviewed Render production baseline (read-only)
 on:
   workflow_call:
+    secrets:
+      RENDER_API_KEY:
+        required: false
+      NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY:
+        required: false
     outputs:
       approved_commit:
         value: ${{ jobs.verify.outputs.approved_commit }}
