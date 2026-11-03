@@ -257,6 +257,54 @@ class RecoveryVerificationTests(unittest.TestCase):
             ), self.assertRaises(VerificationDenied):
                 _verify_render_instance_app_logs(self.approval, base)
 
+    def test_strict_heartbeat_rejects_conflicts_and_duplicates(self) -> None:
+        remote = self._remote_missing_local_logs()
+        remote["instance_id"] = SERVICE + "-abc12-extra"
+        good = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-abc12")
+        for name, replacement in (
+            ("contradictory", "allow_new_orders=false allow_new_orders=true"),
+            ("duplicate", "allow_new_orders=false allow_new_orders=false"),
+            ("malformed", "allow_new_orders=FALSE"),
+            ("unsafe", "allow_new_orders=true"),
+            ("state", "state=TRADING"),
+        ):
+            rows = [dict(row) for row in good]
+            rows[0] = {**rows[0], "message": rows[0]["message"].replace(
+                "allow_new_orders=false" if name not in ("state",) else "state=READ_ONLY_RECOVERY",
+                replacement,
+            )}
+            with self.subTest(name=name), patch(
+                "scripts.nija_render_recovery_verification._read_render_instance_logs",
+                return_value=rows,
+            ), self.assertRaises(VerificationDenied):
+                _verify_render_instance_app_logs(self.approval, remote)
+        later = {**good[0], "timestamp": datetime.fromtimestamp(
+            remote["observed_at_epoch"] - 1, timezone.utc,
+        ).isoformat(), "message": good[0]["message"].replace(
+            "allow_new_orders=false", "allow_new_orders=true",
+        )}
+        with patch(
+            "scripts.nija_render_recovery_verification._read_render_instance_logs",
+            return_value=[*good, later],
+        ), self.assertRaises(VerificationDenied):
+            _verify_render_instance_app_logs(self.approval, remote)
+
+    def test_render_short_instance_label_matches_only_same_instance(self) -> None:
+        remote = self._remote_missing_local_logs()
+        remote["instance_id"] = SERVICE + "-abc12-extra"
+        good = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-abc12")
+        with patch(
+            "scripts.nija_render_recovery_verification._read_render_instance_logs",
+            return_value=good,
+        ):
+            self.assertTrue(_verify_render_instance_app_logs(self.approval, remote))
+        wrong = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-xyz98")
+        with patch(
+            "scripts.nija_render_recovery_verification._read_render_instance_logs",
+            return_value=wrong,
+        ), self.assertRaises(VerificationDenied):
+            _verify_render_instance_app_logs(self.approval, remote)
+
     def test_instance_log_fallback_cannot_mask_other_missing_proofs(self) -> None:
         remote = self._remote_missing_local_logs()
         for change in (
