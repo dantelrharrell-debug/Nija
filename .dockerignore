@@ -103,6 +103,9 @@ test_state.json
 
 # Scripts not needed at runtime
 scripts/*
+# Allow approved read-only NIJA lead diagnostics in the production image.
+!scripts/nija_lead_storage_preflight.py
+!scripts/nija_lead_delivery_reconciliation_readonly.py
 # Read-only recovery diagnostics are required IN the running Render container.
 # Build-time omission would prevent safe SQLite backup and account-state audit.
 !scripts/nija_trade_ledger_snapshot_v436.py
