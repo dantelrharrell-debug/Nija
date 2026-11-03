@@ -110,5 +110,54 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn("multiple_potential_lead_databases_require_reconciliation", r["issues"])
 
 
+    def test_wal_database_fails_closed_without_sidecar_changes(self):
+        make_db(self.lead)
+        make_db(self.forward, forwarding=True)
+        with sqlite3.connect(self.lead) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA wal_autocheckpoint=0")
+            db.execute("INSERT INTO website_leads VALUES ('second', 'test', 'hidden@example.com', 'now')")
+            before = {p.name: p.read_bytes() for p in self.disk.iterdir() if p.is_file()}
+            result = self.run_check()
+            after = {p.name: p.read_bytes() for p in self.disk.iterdir() if p.is_file()}
+            self.assertEqual(before, after)
+            self.assertIn("lead_database_not_verified", result["issues"])
+            self.assertEqual(result["lead_database"]["read_error"], "wal_database_requires_offline_snapshot")
+
+    def test_whitespace_primary_override_does_not_fall_back(self):
+        make_db(self.lead)
+        make_db(self.forward, forwarding=True)
+        env = dict(self.env, NIJA_LEAD_DB_PATH="   ", NIJA_OUTREACH_DB_PATH=str(self.lead))
+        result = self.run_check(env)
+        self.assertEqual(result["lead_db_config_source"], "NIJA_LEAD_DB_PATH")
+        self.assertIn("lead_database_not_verified", result["issues"])
+
+    def test_whitespace_primary_auth_does_not_fall_back(self):
+        make_db(self.lead)
+        make_db(self.forward, forwarding=True)
+        env = dict(self.env, NIJA_LEAD_WEBHOOK_TOKEN="   ", NIJA_OUTREACH_SERVICE_TOKEN="fallback")
+        result = self.run_check(env)
+        self.assertFalse(result["lead_intake_auth_configured"])
+        self.assertIn("lead_intake_auth_not_configured", result["issues"])
+
+    def test_malformed_forward_url_is_sanitized(self):
+        make_db(self.lead)
+        make_db(self.forward, forwarding=True)
+        for target in ("https://user:SECRET@[bad", "https://SECRET@invalid.example:badport"):
+            env = dict(self.env, NIJA_LEAD_FORWARD_URL=target)
+            result = self.run_check(env)
+            self.assertFalse(result["forwarding_https_configured"])
+            self.assertIn("forwarding_https_endpoint_not_configured", result["issues"])
+            self.assertNotIn("SECRET", json.dumps(result))
+
+    def test_tilde_path_is_not_expanded(self):
+        make_db(self.lead)
+        make_db(self.forward, forwarding=True)
+        env = dict(self.env, NIJA_LEAD_DB_PATH="~/not-an-actual-lead-db.sqlite3",
+                   NIJA_LEAD_FORWARD_DB_PATH="~/not-an-actual-forward-db.sqlite3")
+        result = self.run_check(env)
+        self.assertIn("lead_database_not_verified", result["issues"])
+        self.assertIn("forward_history_not_verified", result["issues"])
+
 if __name__ == "__main__":
     unittest.main()

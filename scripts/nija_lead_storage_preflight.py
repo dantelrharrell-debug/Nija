@@ -21,7 +21,23 @@ def _sqlite_summary(path: Path, *, forward: bool = False) -> dict:
         source = path.resolve(strict=True)
         if not source.is_file():
             return summary
-        with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=3) as db:
+        # Never attach SQLite to a live WAL database: even mode=ro may create
+        # -shm/-wal files, while immutable=1 could silently omit committed WAL.
+        # Inspect the header without SQLite first and fail closed for WAL.
+        if source.with_name(source.name + "-wal").exists() or source.with_name(source.name + "-shm").exists():
+            summary["read_error"] = "wal_database_requires_offline_snapshot"
+            return summary
+        with source.open("rb") as header_file:
+            header = header_file.read(100)
+        if len(header) < 100 or header[:16] != b"SQLite format 3\x00":
+            summary["read_error"] = "sqlite_header_invalid"
+            return summary
+        if header[18] == 2 or header[19] == 2:
+            summary["read_error"] = "wal_database_requires_offline_snapshot"
+            return summary
+        # immutable=1 guarantees SQLite will not create journal sidecars.
+        # This is a diagnostic only, never proof of a consistent live backup.
+        with sqlite3.connect(source.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=3) as db:
             db.execute("PRAGMA query_only=ON")
             # Prevent a huge/corrupt database from making this unbounded.
             budget = [0]
@@ -55,15 +71,15 @@ def inspect(*, environ: Mapping[str, str] | None = None,
             mount_check: Callable[[Path], bool] | None = None) -> dict:
     env = os.environ if environ is None else environ
     source_key = next((key for key in ("NIJA_LEAD_DB_PATH", "NIJA_OUTREACH_DB_PATH")
-                       if str(env.get(key) or "").strip()), "default")
-    active = (Path(str(env[source_key]).strip()).expanduser() if source_key != "default"
+                       if env.get(key)), "default")
+    active = (Path(str(env[source_key]).strip()) if source_key != "default"
               else app_default)
     disk_mounted = bool((mount_check or (lambda p: p.is_mount()))(disk))
     disk_candidate = disk / "nija_outreach.sqlite3"
     candidates = [("active", active), ("app_default", app_default),
                   ("disk_candidate", disk_candidate)]
-    if str(env.get("NIJA_OUTREACH_DB_PATH") or "").strip():
-        candidates.append(("outreach_override", Path(env["NIJA_OUTREACH_DB_PATH"].strip()).expanduser()))
+    if env.get("NIJA_OUTREACH_DB_PATH"):
+        candidates.append(("outreach_override", Path(str(env["NIJA_OUTREACH_DB_PATH"]).strip())))
     seen: set[Path] = set()
     stores = {}
     for name, path in candidates:
@@ -78,16 +94,22 @@ def inspect(*, environ: Mapping[str, str] | None = None,
     lead = _sqlite_summary(active)
     lead_durable = _on_disk(active, disk, disk_mounted)
     forward_key = str(env.get("NIJA_LEAD_FORWARD_DB_PATH") or "").strip()
-    forward = Path(forward_key).expanduser() if forward_key else (
+    forward = Path(forward_key) if forward_key else (
         disk / "nija_lead_forwarding.sqlite3" if disk.is_dir() else active)
     forwarding = _sqlite_summary(forward, forward=True)
     forwarding_durable = _on_disk(forward, disk, disk_mounted)
-    token_configured = bool(str(env.get("NIJA_LEAD_WEBHOOK_TOKEN") or "").strip()
-                            or str(env.get("NIJA_OUTREACH_SERVICE_TOKEN") or "").strip())
+    token_configured = bool(str(env.get("NIJA_LEAD_WEBHOOK_TOKEN")
+                            or env.get("NIJA_OUTREACH_SERVICE_TOKEN") or "").strip())
     target = str(env.get("NIJA_LEAD_FORWARD_URL") or "").strip()
-    url = urllib.parse.urlsplit(target)
-    valid_https = bool(target and url.scheme == "https" and url.hostname and not url.username and not url.password)
-    destination = ("zapier" if url.hostname == "hooks.zapier.com" else
+    try:
+        url = urllib.parse.urlsplit(target)
+        valid_https = bool(target and url.scheme == "https" and url.hostname
+                           and not url.username and not url.password and url.port != 0)
+        hostname = url.hostname if valid_https else None
+    except ValueError:
+        valid_https = False
+        hostname = None
+    destination = ("zapier" if hostname == "hooks.zapier.com" else
                    "other_https" if valid_https else "missing_or_invalid")
 
     issues = []
