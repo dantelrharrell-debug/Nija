@@ -4,9 +4,21 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from contextlib import contextmanager
 from unittest.mock import patch
 import scripts.nija_lead_delivery_reconciliation_readonly as reconciliation
 from scripts.nija_lead_delivery_reconciliation_readonly import inspect
+
+
+@contextmanager
+def db_transaction(path):
+    """Commit on success, roll back on error, and always close test connections."""
+    db = sqlite3.connect(path)
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
 
 
 class ReconciliationTests(unittest.TestCase):
@@ -28,7 +40,7 @@ class ReconciliationTests(unittest.TestCase):
         self.temp.cleanup()
 
     def populate(self):
-        with sqlite3.connect(self.lead) as db:
+        with db_transaction(self.lead) as db:
             db.execute("CREATE TABLE website_leads(event_key TEXT, email TEXT, received_at TEXT)")
             db.executemany("INSERT INTO website_leads VALUES(?,?,?)", [
                 ("a", "one@example.com", "2026-10-20T10:00:00Z"),
@@ -41,7 +53,7 @@ class ReconciliationTests(unittest.TestCase):
                 ("b", "synced", ""),
                 ("c", "needs_review", "HTTP_422_email"),
             ])
-        with sqlite3.connect(self.forward) as db:
+        with db_transaction(self.forward) as db:
             db.execute("CREATE TABLE website_lead_forwarding(event_key TEXT,state TEXT)")
             db.executemany("INSERT INTO website_lead_forwarding VALUES(?,?)", [
                 ("a", "pending"), ("b", "pending"), ("c", "sent")
@@ -86,6 +98,9 @@ class ReconciliationTests(unittest.TestCase):
             def __exit__(self, *args):
                 return self.connection.__exit__(*args)
 
+            def close(self):
+                self.connection.close()
+
             def execute(self, sql, *args):
                 cursor = self.connection.execute(sql, *args)
                 if sql.startswith("SELECT COUNT(*), COUNT(DISTINCT"):
@@ -103,6 +118,9 @@ class ReconciliationTests(unittest.TestCase):
 
             def set_progress_handler(self, *args):
                 return self.connection.set_progress_handler(*args)
+
+            def close(self):
+                return self.connection.close()
 
         def connect_for_audit(database, *args, **kwargs):
             connection = connect(database, *args, **kwargs)
@@ -126,6 +144,31 @@ class ReconciliationTests(unittest.TestCase):
         self.populate()
         Path(str(self.lead) + "-wal").touch()
         self.assertEqual(self.audit()["lead_database"]["status"], "live_wal_requires_consistent_snapshot")
+
+    def test_scan_uses_lock_respecting_read_transaction(self):
+        self.populate()
+        connect = sqlite3.connect
+        statements = []
+        uris = []
+
+        def traced_connect(database, *args, **kwargs):
+            uris.append(database)
+            db = connect(database, *args, **kwargs)
+            db.set_trace_callback(statements.append)
+            return db
+
+        with patch("scripts.nija_lead_delivery_reconciliation_readonly.sqlite3.connect",
+                   side_effect=traced_connect):
+            report = self.audit()
+
+        self.assertEqual(report["lead_database"]["status"], "read_only_counts")
+        self.assertIn("mode=ro", uris[0])
+        self.assertNotIn("immutable=1", uris[0])
+        begin = next(index for index, statement in enumerate(statements)
+                     if statement.upper() == "BEGIN")
+        first_read = next(index for index, statement in enumerate(statements)
+                          if statement.upper().startswith(("SELECT", "PRAGMA TABLE_INFO")))
+        self.assertLess(begin, first_read)
 
     def test_rollback_journal_sidecar_requires_snapshot(self):
         self.populate()
@@ -166,7 +209,7 @@ class ReconciliationTests(unittest.TestCase):
 
     def test_unknown_rejection_code_redacted(self):
         self.populate()
-        with sqlite3.connect(self.lead) as db:
+        with db_transaction(self.lead) as db:
             db.execute("UPDATE website_lead_crm_sync SET last_error_code='sensitive-customer@example.com' WHERE state='needs_review'")
         report = self.audit()
         self.assertEqual(report["lead_database"]["crm_review_categories"], {"other": 1})
@@ -174,7 +217,7 @@ class ReconciliationTests(unittest.TestCase):
 
     def test_unknown_forward_state_redacted(self):
         self.populate()
-        with sqlite3.connect(self.forward) as db:
+        with db_transaction(self.forward) as db:
             db.execute("UPDATE website_lead_forwarding SET state='private-token' WHERE event_key='a'")
         report = self.audit()
         self.assertEqual(report["forward_history"]["forwarding_states"]["other"], 1)
