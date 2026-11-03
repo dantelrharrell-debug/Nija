@@ -78,6 +78,29 @@ class ReconciliationTests(unittest.TestCase):
         Path(str(self.lead) + "-wal").touch()
         self.assertEqual(self.audit()["lead_database"]["status"], "live_wal_requires_consistent_snapshot")
 
+    def test_rollback_journal_sidecar_requires_snapshot(self):
+        self.populate()
+        Path(str(self.lead) + "-journal").touch()
+        self.assertEqual(
+            self.audit()["lead_database"]["status"],
+            "rollback_journal_requires_consistent_snapshot",
+        )
+
+    def test_whitespace_primary_override_does_not_use_secondary_path(self):
+        self.populate()
+        self.env["NIJA_LEAD_DB_PATH"] = "   "
+        self.env["NIJA_OUTREACH_DB_PATH"] = str(self.lead)
+        report = self.audit()
+        self.assertEqual(report["lead_database"]["status"], "invalid_runtime_path")
+        self.assertFalse(report["lead_db_on_mounted_disk"])
+
+    def test_literal_tilde_path_is_not_expanded(self):
+        self.populate()
+        self.env["NIJA_LEAD_DB_PATH"] = "~/nija_outreach.sqlite3"
+        report = self.audit()
+        self.assertEqual(report["lead_database"]["status"], "missing")
+        self.assertFalse(report["lead_db_on_mounted_disk"])
+
     def test_plain_http_not_accepted_as_forwarding(self):
         self.populate()
         self.env["NIJA_LEAD_FORWARD_URL"] = "http://hooks.zapier.com/SECRET"
