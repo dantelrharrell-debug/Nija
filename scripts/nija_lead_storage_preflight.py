@@ -29,7 +29,7 @@ def _sqlite_summary(path: Path, *, forward: bool = False) -> dict:
             return summary
         with source.open("rb") as header_file:
             header = header_file.read(100)
-        if len(header) < 100 or header[:16] != b"SQLite format 3\\x00":
+        if len(header) < 100 or header[:16] != b"SQLite format 3\x00":
             summary["read_error"] = "sqlite_header_invalid"
             return summary
         if header[18] == 2 or header[19] == 2:
