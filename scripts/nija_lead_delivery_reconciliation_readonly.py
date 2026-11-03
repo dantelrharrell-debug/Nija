@@ -32,8 +32,8 @@ def _read_counts(path: Path, *, forwarding: bool) -> dict:
             return {"status": "missing"}
         if any(Path(str(resolved) + suffix).exists() for suffix in ("-wal", "-shm")):
             return {"status": "live_wal_requires_consistent_snapshot"}
-        # An active or hot rollback journal can make immutable=1 read stale data.
-        # Refuse rather than treating a potentially inconsistent live read as evidence.
+        # Refuse known sidecars rather than treating a potentially changing live
+        # database as evidence.
         if Path(str(resolved) + "-journal").exists():
             return {"status": "rollback_journal_requires_consistent_snapshot"}
         with resolved.open("rb") as file:
@@ -42,8 +42,9 @@ def _read_counts(path: Path, *, forwarding: bool) -> dict:
             return {"status": "invalid_sqlite_header"}
         if header[18] == 2 or header[19] == 2:
             return {"status": "wal_mode_requires_consistent_snapshot"}
-        with sqlite3.connect(resolved.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=3) as db:
+        with sqlite3.connect(resolved.as_uri() + "?mode=ro", uri=True, timeout=3) as db:
             db.execute("PRAGMA query_only=ON")
+            db.execute("BEGIN")
             budget = [0]
 
             def progress() -> int:

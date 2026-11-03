@@ -73,7 +73,7 @@ class ReconciliationTests(unittest.TestCase):
         self.assertFalse(self.lead.exists())
         self.assertFalse(self.forward.exists())
 
-    def test_wal_sidecar_blocks_immutable_scan(self):
+    def test_wal_sidecar_requires_consistent_snapshot(self):
         self.populate()
         Path(str(self.lead) + "-wal").touch()
         self.assertEqual(self.audit()["lead_database"]["status"], "live_wal_requires_consistent_snapshot")
@@ -105,6 +105,15 @@ class ReconciliationTests(unittest.TestCase):
         self.populate()
         self.env["NIJA_LEAD_FORWARD_URL"] = "http://hooks.zapier.com/SECRET"
         self.assertEqual(self.audit()["configured_forwarding_category"], "missing_or_invalid")
+
+    def test_invalid_forwarding_ports_not_accepted(self):
+        self.populate()
+        for port in ("not-a-port", "0", "65536"):
+            with self.subTest(port=port):
+                self.env["NIJA_LEAD_FORWARD_URL"] = f"https://hooks.zapier.com:{port}/hooks/catch/SECRET"
+                report = self.audit()
+                self.assertFalse(report["configured_forwarding_https"])
+                self.assertEqual(report["configured_forwarding_category"], "missing_or_invalid")
 
     def test_unknown_rejection_code_redacted(self):
         self.populate()
