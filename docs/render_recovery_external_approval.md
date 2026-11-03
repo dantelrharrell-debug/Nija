@@ -125,6 +125,39 @@ After merging a diagnostic-only release change, Render auto-deploys a **new**
 commit. Reconfirm the deployment and have the owner independently review and
 repin the environment-only JSON; do not reuse or auto-renew the old approval.
 
+## Render-managed stdout/stderr evidence (read-only fallback)
+
+[Read-only recovery #25](https://github.com/dantelrharrell-debug/Nija/actions/runs/41665330600)
+confirmed that SSH remote execution worked but produced the single failure
+`current_process_log_evidence_unavailable`: the inspector searches local
+regular files under `/app`, while Render captures live application stdout/
+stderr via its separate managed log service. This is **not** proof that
+application logging stopped.
+
+With independently pinned deployment/source and exact SSH runtime identity,
+the verifier may supplement **only this one exact local-log gap** using an
+authenticated, bounded Render logs API query. It uses the existing API key,
+fixed account owner, service ID, and the SSH-observed instance ID; `type=app`,
+a maximum of 100 rows, and a narrow window after the inventoried process
+start. At least two distinct, separated heartbeat events must come from the
+specific runtime heartbeat logger with explicit `READ_ONLY_RECOVERY`,
+`independent_attestations=unverified`, `allow_new_orders=false` and
+`canonical_gate_unchanged=true`. Response labels must match the exact
+service, instance, and app-log type. Stale, inconsistent, ambiguous or
+unavailable evidence continues to fail closed. No raw app logs, account data
+or credentials may be printed or included in verification artifacts.
+
+Render instance-scoped log timestamps corroborate a live service instance;
+they do **not** identify the emitting process PID or authenticate any Kraken
+orders. Successful corroboration satisfies only the operational log-presence
+check, not broker-readiness, ledger, protective exits, writer/nonce authority,
+collector certification, kill switch clearance or live-order authorization.
+The verifier must never create/modify local production log files merely to
+pass this test.
+
+References: https://api-docs.render.com/reference/list-logs and
+https://render.com/docs/logging.
+
 ## Prerequisites and limitations
 - Existing `RENDER_API_KEY` and
   `NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY` credentials must be configured by
