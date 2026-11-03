@@ -21,7 +21,9 @@ Status: **NOT END-TO-END CERTIFIED. DO NOT BULK REPLAY OR REDEPLOY ONLY FOR DIAG
   attribution, and not proof that Zapier or Apollo processed all events.
 
 ## Proposed read-only tool in this PR
-`scripts/nija_lead_delivery_reconciliation_readonly.py` summarizes the
+Run `NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python3 -B -S scripts/nija_lead_delivery_reconciliation_readonly.py`
+inside the authenticated existing instance to disable interpreter startup hooks
+and bytecode writes. The tool summarizes the
 existing databases using SQLite `mode=ro&immutable=1` only when there are no
 WAL/SHM sidecars and the header does not indicate WAL mode. It prints
 whitelisted aggregate counts and error categories, never emails, webhook URLs,
