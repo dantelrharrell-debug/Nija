@@ -1,0 +1,37 @@
+name: NIJA lead delivery reconciliation audit (offline only)
+on:
+  pull_request:
+    paths:
+      - 'scripts/nija_lead_delivery_reconciliation_readonly.py'
+      - 'tests/test_nija_lead_delivery_reconciliation_readonly.py'
+      - '.dockerignore'
+      - '.github/workflows/nija-lead-delivery-audit-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run synthetic no-network and no-write audit regression tests
+        run: |
+          python3 -B -m unittest discover -s tests -p 'test_nija_lead_delivery_reconciliation_readonly.py' -v
+      - name: Verify source syntax and runtime Docker build allowlist
+        run: |
+          python3 -B - <<'PY'
+          import ast
+          from pathlib import Path
+          for script in ('scripts/nija_lead_storage_preflight.py',
+                         'scripts/nija_lead_delivery_reconciliation_readonly.py',
+                         'tests/test_nija_lead_delivery_reconciliation_readonly.py'):
+              ast.parse(Path(script).read_text(encoding='utf8'), filename=script)
+          rules = Path('.dockerignore').read_text(encoding='utf8')
+          for rule in ('!scripts/nija_lead_storage_preflight.py',
+                       '!scripts/nija_lead_delivery_reconciliation_readonly.py'):
+              assert rule in rules.splitlines(), f'missing runtime diagnostic allowlist: {rule}'
+          print('NIJA_OFFLINE_AUDIT_SYNTAX_AND_DOCKER_ALLOWLIST_OK')
+          PY
