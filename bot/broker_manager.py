@@ -310,20 +310,23 @@ def _user_env_prefix(user_id: str) -> tuple:
 
 
 def _kraken_user_credentials_configured(user_id: str) -> bool:
-    """Return credential presence for a Kraken user without exposing values."""
+    """Match the FIRST nonempty Kraken user alias as connect() does.
 
+    A key from one alias and a secret from another are never a pair. A partial
+    primary alias must not be silently satisfied by a later complete alias.
+    This is only a presence check; no authenticated readiness is inferred.
+    """
     short, full = _user_env_prefix(user_id)
     raw_full = (user_id or "").strip().upper().replace("-", "_")
-    prefixes = tuple(dict.fromkeys(prefix for prefix in (short, full, raw_full) if prefix))
-    key_present = any(
-        bool(os.environ.get(f"KRAKEN_USER_{prefix}_API_KEY", "").strip())
-        for prefix in prefixes
-    )
-    secret_present = any(
-        bool(os.environ.get(f"KRAKEN_USER_{prefix}_API_SECRET", "").strip())
-        for prefix in prefixes
-    )
-    return key_present and secret_present
+    prefixes = tuple(dict.fromkeys(
+        f"KRAKEN_USER_{name}" for name in (short, full, raw_full)
+    ))
+    for prefix in prefixes:
+        raw_key = os.environ.get(f"{prefix}_API_KEY", "")
+        raw_secret = os.environ.get(f"{prefix}_API_SECRET", "")
+        if raw_key or raw_secret:
+            return bool(raw_key.strip() and raw_secret.strip())
+    return False
 
 
 def _kraken_clock_readiness() -> Tuple[bool, str, Dict[str, Any]]:
@@ -8746,8 +8749,9 @@ def _kraken_connection_lifecycle(connect: Callable[..., bool]) -> Callable[..., 
                         reason = self.last_connection_error
                     logger.error(
                         "KRAKEN_INITIALIZATION_BLOCKED stage=%s reason=%s "
-                        "authenticated=false collector_eligible=false",
+                        "account_role=%s authenticated=false collector_eligible=false",
                         failed_stage, reason or "CHECK_CONNECTION_STAGE_AND_CONFIGURATION",
+                        "platform" if self.account_type == AccountType.PLATFORM else "customer",
                     )
 
     return guarded
@@ -9994,13 +9998,25 @@ class KrakenBroker(BaseBroker):
                 cred_label = f"USER:{self.user_id}"
             key_name, secret_name = f"{prefixes[0]}_API_KEY", f"{prefixes[0]}_API_SECRET"
             api_key_raw = api_secret_raw = ""
-            for prefix in prefixes:
+            selected_alias_slot = "none"
+            for alias_index, prefix in enumerate(prefixes):
                 key_name, secret_name = f"{prefix}_API_KEY", f"{prefix}_API_SECRET"
                 api_key_raw = os.getenv(key_name, "")
                 api_secret_raw = os.getenv(secret_name, "")
                 if api_key_raw or api_secret_raw:
+                    selected_alias_slot = ("primary", "secondary", "tertiary")[alias_index]
                     break
             api_key, api_secret = api_key_raw.strip(), api_secret_raw.strip()
+            # Values, customer identifiers, namespace names and exception text
+            # must never enter this diagnostic. It does not change selection.
+            logger.info(
+                "KRAKEN_CREDENTIAL_SELECTION_DIAGNOSTIC "
+                "account_role=%s selected_alias=%s key_present=%s "
+                "secret_present=%s pair_complete=%s",
+                "platform" if self.account_type == AccountType.PLATFORM else "customer",
+                selected_alias_slot, bool(api_key), bool(api_secret),
+                bool(api_key and api_secret),
+            )
 
             # Enhanced validation: detect if variables are set but contain only whitespace
             key_is_set = api_key_raw != ""

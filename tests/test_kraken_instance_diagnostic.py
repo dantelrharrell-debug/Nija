@@ -211,6 +211,24 @@ class IdentityProbeTests(unittest.TestCase):
         row.update(overrides)
         self.write(IDENTITY_REQUEST + ".identity.evidence.json", json.dumps(row).encode())
 
+    def test_identity_probe_rejects_unreviewed_consumer_source(self) -> None:
+        from scripts import nija_kraken_instance_diagnostic as diagnostic
+
+        original = diagnostic._read_regular
+
+        def replace_one_source(path, limit):
+            if path.name == "kraken_identity_request_recovery_v491.py":
+                return b"synthetic-unreviewed-code"
+            return original(path, limit)
+
+        with patch.object(diagnostic, "_read_regular", side_effect=replace_one_source):
+            report = identity_probe(publish=True)
+
+        self.assertFalse(report["request_created"])
+        self.assertFalse(report["allow_new_orders"])
+        self.assertEqual(report["reason"], "identity_consumer_source_changed")
+        self.assertFalse((self.root / "identity_request.json").exists())
+
     def test_publishes_once_without_overwriting_other_modes_or_bindings(self) -> None:
         before = (self.root / "approved-binding-platform-20261028.json").read_bytes()
         report = identity_probe(publish=True)
