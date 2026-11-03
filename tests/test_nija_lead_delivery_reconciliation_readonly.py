@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from contextlib import contextmanager
 from unittest.mock import patch
-from unittest.mock import patch
 import scripts.nija_lead_delivery_reconciliation_readonly as reconciliation
 from scripts.nija_lead_delivery_reconciliation_readonly import inspect
 
@@ -116,6 +115,9 @@ class ReconciliationTests(unittest.TestCase):
 
             def set_progress_handler(self, *args):
                 return self.connection.set_progress_handler(*args)
+
+            def close(self):
+                return self.connection.close()
 
         def connect_for_audit(database, *args, **kwargs):
             connection = connect(database, *args, **kwargs)
