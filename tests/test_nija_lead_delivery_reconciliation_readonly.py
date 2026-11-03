@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from contextlib import contextmanager
+from unittest.mock import patch
 from scripts.nija_lead_delivery_reconciliation_readonly import inspect
 
 
@@ -85,10 +86,35 @@ class ReconciliationTests(unittest.TestCase):
         self.assertFalse(self.lead.exists())
         self.assertFalse(self.forward.exists())
 
-    def test_wal_sidecar_blocks_immutable_scan(self):
+    def test_wal_sidecar_requires_consistent_snapshot(self):
         self.populate()
         Path(str(self.lead) + "-wal").touch()
         self.assertEqual(self.audit()["lead_database"]["status"], "live_wal_requires_consistent_snapshot")
+
+    def test_scan_uses_lock_respecting_read_transaction(self):
+        self.populate()
+        connect = sqlite3.connect
+        statements = []
+        uris = []
+
+        def traced_connect(database, *args, **kwargs):
+            uris.append(database)
+            db = connect(database, *args, **kwargs)
+            db.set_trace_callback(statements.append)
+            return db
+
+        with patch("scripts.nija_lead_delivery_reconciliation_readonly.sqlite3.connect",
+                   side_effect=traced_connect):
+            report = self.audit()
+
+        self.assertEqual(report["lead_database"]["status"], "read_only_counts")
+        self.assertIn("mode=ro", uris[0])
+        self.assertNotIn("immutable=1", uris[0])
+        begin = next(index for index, statement in enumerate(statements)
+                     if statement.upper() == "BEGIN")
+        first_read = next(index for index, statement in enumerate(statements)
+                          if statement.upper().startswith(("SELECT", "PRAGMA TABLE_INFO")))
+        self.assertLess(begin, first_read)
 
     def test_rollback_journal_sidecar_requires_snapshot(self):
         self.populate()
