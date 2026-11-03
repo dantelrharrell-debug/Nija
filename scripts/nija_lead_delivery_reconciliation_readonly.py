@@ -34,7 +34,7 @@ def _read_counts(path: Path, *, forwarding: bool) -> dict:
             return {"status": "live_wal_requires_consistent_snapshot"}
         with resolved.open("rb") as file:
             header = file.read(100)
-        if len(header) < 100 or header[:16] != b"SQLite format 3\\x00".replace(b"\\x00", b"\x00"):
+        if len(header) < 100 or header[:16] != b"SQLite format 3" + bytes((0,)):
             return {"status": "invalid_sqlite_header"}
         if header[18] == 2 or header[19] == 2:
             return {"status": "wal_mode_requires_consistent_snapshot"}
