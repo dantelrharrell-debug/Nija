@@ -184,16 +184,16 @@ def _utc_query_time(stamp: float) -> str:
     return datetime.fromtimestamp(stamp, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _read_render_instance_logs(instance: str, start: float, end: float) -> list[dict]:
+def _read_render_instance_logs(instance_label: str, start: float, end: float) -> list[dict]:
     """Read bounded Render app logs using the existing approval-scoped API key.
 
-    Fixed endpoint, owner, service and instance filter. Never log response bodies.
+    Fixed endpoint, owner, service and short app-log instance label. Never log response bodies.
     """
     token = os.environ.get("RENDER_API_KEY", "")
     if not token:
         raise VerificationDenied("render_instance_log_api_unavailable")
     query = urlencode({
-        "ownerId": RENDER_LOG_OWNER, "resource": SERVICE, "instance": instance,
+        "ownerId": RENDER_LOG_OWNER, "resource": SERVICE, "instance": instance_label,
         "type": "app", "text": "STARTUP_READONLY_RECOVERY_DIAGNOSTIC",
         "startTime": _utc_query_time(start), "endTime": _utc_query_time(end),
         "direction": "backward", "limit": 100,
@@ -218,6 +218,46 @@ def _read_render_instance_logs(instance: str, start: float, end: float) -> list[
     return payload["logs"]
 
 
+def _render_log_instance_label(instance: str) -> str:
+    """Return Render's short label for a full SSH instance ID."""
+    prefix = SERVICE + "-"
+    suffix = instance[len(prefix):] if instance.startswith(prefix) else ""
+    if len(suffix) > 64 or not re.fullmatch(r"(?:[a-zA-Z0-9]+-)+[a-z0-9]{5}", suffix):
+        raise VerificationDenied("render_instance_log_context_mismatch")
+    return prefix + suffix.rsplit("-", 1)[-1]
+
+
+def _render_log_instance_matches(full: str, logged: str) -> bool:
+    """Match the full SSH ID or its final-slug Render app-log label."""
+    try:
+        return logged in (full, _render_log_instance_label(full))
+    except VerificationDenied:
+        return False
+
+
+def _canonical_heartbeat(message: str) -> bool | None:
+    """Return safe/unsafe for canonical diagnostics, None for unrelated logs."""
+    if RENDER_LOG_MODULE not in message or "STARTUP_READONLY_RECOVERY_DIAGNOSTIC" not in message:
+        return None
+    # Fields must be standalone whitespace-delimited key=value tokens.
+    tail = message.split("STARTUP_READONLY_RECOVERY_DIAGNOSTIC", 1)[1]
+    fields = {}
+    for token in tail.split():
+        if "=" not in token:
+            return False
+        key, value = token.split("=", 1)
+        if not re.fullmatch(r"[a-z_]+", key) or not value or key in fields:
+            return False
+        fields[key] = value
+    expected = {
+        "state": "READ_ONLY_RECOVERY",
+        "independent_attestations": "unverified",
+        "allow_new_orders": "false",
+        "canonical_gate_unchanged": "true",
+    }
+    return all(fields.get(k) == v for k, v in expected.items())
+
+
 def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
     """Correlate authenticated Render app heartbeat to SSH instance/process times.
 
@@ -234,9 +274,9 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
             or report.get("allow_new_orders") is not False):
         raise VerificationDenied("render_instance_log_context_mismatch")
     instance = report.get("instance_id")
-    if (not isinstance(instance, str)
-            or not re.fullmatch(re.escape(SERVICE) + r"-[a-zA-Z0-9-]{1,64}", instance)):
+    if not isinstance(instance, str):
         raise VerificationDenied("render_instance_log_context_mismatch")
+    instance_label = _render_log_instance_label(instance)
     processes = report.get("processes")
     if not isinstance(processes, list) or not processes:
         raise VerificationDenied("render_instance_log_context_mismatch")
@@ -255,7 +295,7 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
     end = min(now, observed + 15)
     if end - start < 3:
         raise VerificationDenied("render_instance_log_window_insufficient")
-    rows = _read_render_instance_logs(instance, start, end)
+    rows = _read_render_instance_logs(instance_label, start, end)
     heartbeats = set()
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("labels"), list):
@@ -267,7 +307,7 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
                     or label["name"] in labels):
                 raise VerificationDenied("render_instance_log_response_invalid")
             labels[label["name"]] = label["value"]
-        if (labels.get("resource") != SERVICE or labels.get("instance") != instance
+        if (labels.get("resource") != SERVICE or not _render_log_instance_matches(instance, labels.get("instance", ""))
                 or labels.get("type") != "app"):
             raise VerificationDenied("render_instance_log_scope_mismatch")
         msg, timestamp = row.get("message"), row.get("timestamp")
@@ -283,8 +323,10 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
             raise VerificationDenied("render_instance_log_response_invalid") from None
         if not start <= observed_log_at <= end:
             raise VerificationDenied("render_instance_log_time_mismatch")
-        if (RENDER_LOG_MODULE in msg and RENDER_LOG_MARKER in msg
-                and all(marker in msg for marker in RENDER_LOG_SAFETY)):
+        verdict = _canonical_heartbeat(msg)
+        if verdict is False:
+            raise VerificationDenied("render_instance_log_safety_conflict")
+        if verdict is True:
             heartbeats.add(observed_log_at)
     if len(heartbeats) < 2 or max(heartbeats) - min(heartbeats) < 3:
         raise VerificationDenied("render_current_instance_heartbeat_unverified")
