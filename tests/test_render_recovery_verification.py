@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from scripts.nija_render_recovery_verification import (
     MANIFEST, OUTCOMES, RELEASE_BRANCH, SERVICE, SOURCE_PATHS, VerificationDenied,
-    _command, run_verification, verify_baseline, verify_runtime,
+    _command, load_reviewed_approval, run_verification, verify_baseline, verify_runtime,
 )
 
 PIN = "a" * 40
@@ -109,10 +109,11 @@ class RecoveryVerificationTests(unittest.TestCase):
             _command(["ssh"], "ssh_runtime_inspection_failed")
 
     def run_synthetic(self, *, runtime=None, command=None, evidence=None) -> dict:
-        """Exercise orchestration with isolated synthetic authority boundaries."""
+        """Exercise orchestration with an independently reviewed synthetic approval."""
         with patch.dict(os.environ, {"GITHUB_REF": REF, "GITHUB_SHA": "c" * 40}, clear=True), patch(
-            "scripts.nija_render_recovery_verification.MANIFEST",
-        ) as manifest, patch(
+            "scripts.nija_render_recovery_verification.load_reviewed_approval",
+            return_value=self.approval,
+        ), patch(
             "scripts.nija_render_recovery_verification.inspect_render_api",
             return_value=self.evidence if evidence is None else evidence,
         ), patch(
@@ -122,7 +123,6 @@ class RecoveryVerificationTests(unittest.TestCase):
             "scripts.nija_render_recovery_verification._command",
             side_effect=command or (lambda args, reason: b"synthetic-source"),
         ):
-            manifest.read_bytes.return_value = json.dumps(self.approval).encode()
             return run_verification()
 
     def test_access_success_never_means_broker_or_collector_certification(self) -> None:
@@ -159,14 +159,14 @@ class RecoveryVerificationTests(unittest.TestCase):
 
     def test_deployment_change_during_ssh_revokes_verification(self) -> None:
         with patch.dict(os.environ, {"GITHUB_REF": REF}, clear=True), patch(
-            "scripts.nija_render_recovery_verification.MANIFEST",
-        ) as manifest, patch(
+            "scripts.nija_render_recovery_verification.load_reviewed_approval",
+            return_value=self.approval,
+        ), patch(
             "scripts.nija_render_recovery_verification.inspect_render_api",
             side_effect=[self.evidence, {**self.evidence, "deployment_id": "dep-new"}],
         ), patch(
             "scripts.nija_render_recovery_verification._runtime", return_value=self.runtime,
         ), patch("scripts.nija_render_recovery_verification._command", return_value=b"synthetic-source"):
-            manifest.read_bytes.return_value = json.dumps(self.approval).encode()
             report = run_verification()
         self.assertFalse(report["DEPLOYMENT_BASELINE_VERIFIED"])
         self.assertFalse(report["SOURCE_INTEGRITY_VERIFIED"])
@@ -174,20 +174,12 @@ class RecoveryVerificationTests(unittest.TestCase):
 
     def test_committed_manifest_has_reviewed_sources_and_explicit_approval(self) -> None:
         approval = json.loads(MANIFEST.read_bytes())
-        self.assertIn(approval["operator_approved"], (True, False))
-        if approval["operator_approved"] is False:
-            self.assertIsNone(approval["commit"])
-            self.assertIsNone(approval["deployment_id"])
-        else:
-            self.assertTrue(approval["approval_reference"])
-            self.assertRegex(approval["commit"], r"^[0-9a-f]{40}$")
-            self.assertRegex(approval["deployment_id"], r"^dep-[a-zA-Z0-9]+$")
+        self.assertIs(approval["operator_approved"], False)
+        self.assertIsNone(approval["approval_reference"])
+        self.assertIsNone(approval["commit"])
+        self.assertIsNone(approval["deployment_id"])
         for path, digest in approval["source_sha256"].items():
-            if approval["operator_approved"]:
-                source = _command(["git", "show", approval["commit"] + ":" + path], "test_source_missing")
-            else:
-                source = Path(path).read_bytes()
-            self.assertEqual(hashlib.sha256(source).hexdigest(), digest)
+            self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), digest)
 
     def test_real_git_inspection_reads_exact_pinned_source_not_control_head(self) -> None:
         approval = json.loads(MANIFEST.read_bytes())
@@ -198,16 +190,75 @@ class RecoveryVerificationTests(unittest.TestCase):
         })
         runtime = {**self.runtime, "commit": commit, "source_sha256": approval["source_sha256"]}
         with patch.dict(os.environ, {"GITHUB_REF": REF, "GITHUB_SHA": "c" * 40}, clear=True), patch(
-            "scripts.nija_render_recovery_verification.MANIFEST",
-        ) as manifest, patch(
+            "scripts.nija_render_recovery_verification.load_reviewed_approval",
+            return_value=approval,
+        ), patch(
             "scripts.nija_render_recovery_verification.inspect_render_api",
             return_value={**self.evidence, "commit": commit},
         ), patch("scripts.nija_render_recovery_verification._runtime", return_value=runtime):
-            manifest.read_bytes.return_value = json.dumps(approval).encode()
             report = run_verification()
         self.assertEqual(report["inspected_source_commit"], commit)
         self.assertNotEqual(report["inspected_source_commit"], report["workflow_source_commit"])
         self.assertTrue(report["SOURCE_INTEGRITY_VERIFIED"], report)
+
+    def test_missing_external_approval_refuses_before_render_api_or_ssh(self) -> None:
+        with patch.dict(os.environ, {"GITHUB_REF": REF}, clear=True), patch(
+            "scripts.nija_render_recovery_verification.inspect_render_api",
+        ) as api, patch(
+            "scripts.nija_render_recovery_verification._runtime",
+        ) as ssh:
+            report = run_verification()
+        self.assertFalse(report["DEPLOYMENT_BASELINE_VERIFIED"])
+        self.assertIn("independent_environment_approval_missing", report["failures"])
+        api.assert_not_called()
+        ssh.assert_not_called()
+
+    def test_committed_manifest_cannot_approve_itself(self) -> None:
+        with patch("scripts.nija_render_recovery_verification.MANIFEST") as manifest, patch.dict(
+            os.environ, {"NIJA_RENDER_READONLY_APPROVAL_JSON": json.dumps(self.approval)}
+        ):
+            manifest.read_bytes.return_value = json.dumps(self.approval).encode()
+            with self.assertRaisesRegex(
+                VerificationDenied, "committed_manifest_must_remain_unapproved"
+            ):
+                load_reviewed_approval()
+
+    def test_external_approval_matches_unapproved_template_only(self) -> None:
+        template = {
+            **self.approval, "operator_approved": False,
+            "approval_reference": None, "commit": None, "deployment_id": None,
+        }
+        with patch("scripts.nija_render_recovery_verification.MANIFEST") as manifest, patch.dict(
+            os.environ, {"NIJA_RENDER_READONLY_APPROVAL_JSON": json.dumps(self.approval)}
+        ):
+            manifest.read_bytes.return_value = json.dumps(template).encode()
+            self.assertEqual(load_reviewed_approval(), self.approval)
+            wrong = {**self.approval, "source_sha256": {
+                **self.approval["source_sha256"], SOURCE_PATHS[0]: "0" * 64,
+            }}
+            with patch.dict(os.environ, {"NIJA_RENDER_READONLY_APPROVAL_JSON": json.dumps(wrong)}):
+                with self.assertRaisesRegex(
+                    VerificationDenied, "independent_environment_approval_pins_mismatch"
+                ):
+                    load_reviewed_approval()
+
+    def test_malformed_or_duplicate_external_approval_rejected(self) -> None:
+        template = {
+            **self.approval, "operator_approved": False,
+            "approval_reference": None, "commit": None, "deployment_id": None,
+        }
+        with patch("scripts.nija_render_recovery_verification.MANIFEST") as manifest:
+            manifest.read_bytes.return_value = json.dumps(template).encode()
+            for raw in (
+                '{"operator_approved":true,"operator_approved":false}',
+                '{"incomplete":',
+                " " * 17000,
+            ):
+                with self.subTest(raw=raw[:20]), patch.dict(
+                    os.environ, {"NIJA_RENDER_READONLY_APPROVAL_JSON": raw}
+                ):
+                    with self.assertRaises(VerificationDenied):
+                        load_reviewed_approval()
 
     def test_workflows_have_fixed_release_checkout_and_baseline_dependencies(self) -> None:
         for path in ("kraken-recovery-gate-diagnostics.yml", "render-recovery-access.yml"):
@@ -218,5 +269,7 @@ class RecoveryVerificationTests(unittest.TestCase):
         source = Path(".github/workflows/render-production-baseline.yml").read_text()
         self.assertIn("ref: " + RELEASE_BRANCH, source)
         self.assertIn("if-no-files-found: error", source)
+        self.assertIn("environment: nija-render-recovery-readonly", source)
+        self.assertIn("secrets.NIJA_RENDER_READONLY_APPROVAL_JSON", source)
         source = Path(".github/workflows/kraken-recovery-gate-diagnostics.yml").read_text()
         self.assertIn("ref: ${{ needs.baseline.outputs.verification_source_commit }}", source)
