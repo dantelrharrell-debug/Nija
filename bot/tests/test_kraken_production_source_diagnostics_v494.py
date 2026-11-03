@@ -123,19 +123,77 @@ def test_six_sources_remain_fail_closed_when_approval_and_complete_sources_are_m
     assert report["collector_registration_attempted"] is False
 
 
-def test_shared_and_local_kill_switch_clear_is_diagnostic_only(tmp_path, monkeypatch):
+def test_absent_durable_clearance_is_not_independent_evidence(tmp_path, monkeypatch):
     monkeypatch.delenv("NIJA_KILL_SWITCH", raising=False)
     redis = FakeRedis()
+    kill_switch = FakeKillSwitch()
+
+    # The real is_active() may persist a filesystem-triggered kill-switch
+    # activation. A diagnostic must not call it, even when Redis is empty.
+    def must_not_call():
+        raise AssertionError("side-effecting kill switch check invoked")
+
+    kill_switch.is_active = must_not_call
     report = inspect_kraken_production_sources(
         **_arguments(
-            tmp_path, redis_client=redis, kill_switch=FakeKillSwitch(),
+            tmp_path, redis_client=redis, kill_switch=kill_switch,
         )
     )
 
-    assert report["checks"]["kill_switch_clear"] is True
-    assert report["sources"]["kill_switch_clear"]["shared_redis_verified"] is True
+    assert report["checks"]["kill_switch_clear"] is False
+    assert report["sources"]["kill_switch_clear"]["reason"] == (
+        "explicit_durable_clearance_record_missing"
+    )
     assert report["authorizes_orders"] is False
+    assert report["collector_registration_attempted"] is False
     assert report["execution_authority_changed"] is False
+
+
+def test_explicit_clearance_is_diagnostic_not_an_approval(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.delenv("NIJA_KILL_SWITCH", raising=False)
+    clearing = json.dumps({
+        "schema": 2, "is_active": False, "reason": "synthetic-only",
+        "timestamp": datetime.fromtimestamp(NOW - 10, timezone.utc).isoformat(),
+    })
+    redis = FakeRedis(clearing)
+    switch = FakeKillSwitch()
+    switch.is_active = lambda: (_ for _ in ()).throw(
+        AssertionError("side-effecting is_active called")
+    )
+    report = inspect_kraken_production_sources(
+        **_arguments(
+            tmp_path, redis_client=redis, kill_switch=switch,
+        )
+    )
+    assert report["checks"]["kill_switch_clear"] is False
+    source = report["sources"]["kill_switch_clear"]
+    assert source["reason"] == "independent_durable_clearance_binding_required"
+    assert source["explicit_clearance_record_observed"] is True
+    assert source["independent_clearance_approved"] is False
+    assert report["authorizes_orders"] is False
+
+
+def test_malformed_or_duplicate_durable_state_never_certifies(tmp_path, monkeypatch):
+    monkeypatch.delenv("NIJA_KILL_SWITCH", raising=False)
+    for index, value in enumerate((
+        "not-json",
+        '{"is_active":false,"is_active":false,"schema":2}',
+        '{"is_active":false,"schema":99,"reason":"bad","timestamp":"2026-01-01T00:00:00+00:00"}',
+        '{"is_active":null}',
+    )):
+        report = inspect_kraken_production_sources(
+            **_arguments(
+                tmp_path / str(index), redis_client=FakeRedis(value),
+                kill_switch=FakeKillSwitch(),
+            )
+        )
+        assert report["checks"]["kill_switch_clear"] is False
+        assert report["sources"]["kill_switch_clear"]["reason"] == (
+            "durable_kill_switch_record_unverified"
+        )
+        assert report["authorizes_orders"] is False
 
 
 def test_active_contradictory_or_unavailable_shared_kill_state_fails_closed(
