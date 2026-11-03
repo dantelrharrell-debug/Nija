@@ -18,10 +18,11 @@ permissions:
 jobs:
   verify:
     if: github.ref == 'refs/heads/release/justcall-handoff-only-20261017'
-    # Must be configured by repository admins with required independent
-    # reviewers and prevent-self-review enabled before any approval secret
-    # is provisioned. Unconfigured environments have no approval secret and
-    # the verification code fails closed without accessing Render.
+    # Limit this environment to the production release and keep its
+    # approval JSON secret separate from versioned source. For sole-owner
+    # repos, documented owner authorization of READ-ONLY diagnostics can be
+    # used without inventing a second human reviewer. This cannot authorize
+    # trading, and missing approval denies before Render access.
     environment: nija-render-recovery-readonly
     runs-on: ubuntu-latest
     timeout-minutes: 6
