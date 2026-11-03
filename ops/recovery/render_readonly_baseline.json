@@ -9,7 +9,7 @@
     "bot/kraken_sqlite_readonly_preflight_v488.py": "480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452",
     "bot/kraken_live_history_recovery.py": "02d382407fe6f71fd8cb36190c5c87fcdb0f79e6ef4f62d597e633343e99e4df",
     "bot/universal_broker_exit_supervisor_patch.py": "7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758",
-    "bot/kraken_identity_request_recovery_v491.py": "7b4c50886c9f3046478842b6479c875762461fe3d5e9ea95f1dfc65a741dc346",
+    "bot/kraken_identity_request_recovery_v491.py": "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2",
     "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py": "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
     "bot/broker_manager.py": "58b50f54b681c69bafaf336472c67bb7d421b2db5be3296b9dd9f58012d3cd56",
     "bot/canonical_broker_startup_convergence_v24.py": "96876ef73948b28be79bb66c2c20bf5ca8dc0c0ef695dc4db8d3aac5f730fe4f",
