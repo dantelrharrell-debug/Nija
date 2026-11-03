@@ -224,6 +224,8 @@ def _render_log_instance_matches(full: str, logged: str) -> bool:
     SSH may report that slug followed by an additional hyphen-delimited suffix.
     Never accept an arbitrary prefix or a different service.
     """
+    if full == logged and re.fullmatch(re.escape(SERVICE) + r"-[a-zA-Z0-9-]{1,64}", full):
+        return True
     prefix = SERVICE + "-"
     if not full.startswith(prefix) or not logged.startswith(prefix):
         return False
