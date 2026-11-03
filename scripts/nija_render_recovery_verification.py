@@ -184,16 +184,16 @@ def _utc_query_time(stamp: float) -> str:
     return datetime.fromtimestamp(stamp, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _read_render_instance_logs(instance: str, start: float, end: float) -> list[dict]:
+def _read_render_instance_logs(instance_label: str, start: float, end: float) -> list[dict]:
     """Read bounded Render app logs using the existing approval-scoped API key.
 
-    Fixed endpoint, owner, service and instance filter. Never log response bodies.
+    Fixed endpoint, owner, service and short app-log instance label. Never log response bodies.
     """
     token = os.environ.get("RENDER_API_KEY", "")
     if not token:
         raise VerificationDenied("render_instance_log_api_unavailable")
     query = urlencode({
-        "ownerId": RENDER_LOG_OWNER, "resource": SERVICE, "instance": instance,
+        "ownerId": RENDER_LOG_OWNER, "resource": SERVICE, "instance": instance_label,
         "type": "app", "text": "STARTUP_READONLY_RECOVERY_DIAGNOSTIC",
         "startTime": _utc_query_time(start), "endTime": _utc_query_time(end),
         "direction": "backward", "limit": 100,
@@ -218,20 +218,21 @@ def _read_render_instance_logs(instance: str, start: float, end: float) -> list[
     return payload["logs"]
 
 
-def _render_log_instance_matches(full: str, logged: str) -> bool:
-    """Match exact IDs or Render labels with the ReplicaSet component omitted."""
-    if full == logged and re.fullmatch(re.escape(SERVICE) + r"-[a-zA-Z0-9-]{1,64}", full):
-        return True
+def _render_log_instance_label(instance: str) -> str:
+    """Return Render's short label for a full SSH instance ID."""
     prefix = SERVICE + "-"
-    if not full.startswith(prefix) or not logged.startswith(prefix):
+    suffix = instance[len(prefix):] if instance.startswith(prefix) else ""
+    if len(suffix) > 64 or not re.fullmatch(r"(?:[a-zA-Z0-9]+-)+[a-z0-9]{5}", suffix):
+        raise VerificationDenied("render_instance_log_context_mismatch")
+    return prefix + suffix.rsplit("-", 1)[-1]
+
+
+def _render_log_instance_matches(full: str, logged: str) -> bool:
+    """Match the full SSH ID or its final-slug Render app-log label."""
+    try:
+        return logged in (full, _render_log_instance_label(full))
+    except VerificationDenied:
         return False
-    suffix = full[len(prefix):]
-    short = logged[len(prefix):]
-    return bool(
-        re.fullmatch(r"[a-z0-9]{5}", short)
-        and re.fullmatch(r"(?:[a-zA-Z0-9]+-)*[a-z0-9]{5}", suffix)
-        and suffix.rsplit("-", 1)[-1] == short
-    )
 
 
 def _canonical_heartbeat(message: str) -> bool | None:
@@ -273,9 +274,9 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
             or report.get("allow_new_orders") is not False):
         raise VerificationDenied("render_instance_log_context_mismatch")
     instance = report.get("instance_id")
-    if (not isinstance(instance, str)
-            or not re.fullmatch(re.escape(SERVICE) + r"-[a-zA-Z0-9-]{1,64}", instance)):
+    if not isinstance(instance, str):
         raise VerificationDenied("render_instance_log_context_mismatch")
+    instance_label = _render_log_instance_label(instance)
     processes = report.get("processes")
     if not isinstance(processes, list) or not processes:
         raise VerificationDenied("render_instance_log_context_mismatch")
@@ -294,7 +295,7 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
     end = min(now, observed + 15)
     if end - start < 3:
         raise VerificationDenied("render_instance_log_window_insufficient")
-    rows = _read_render_instance_logs(instance, start, end)
+    rows = _read_render_instance_logs(instance_label, start, end)
     heartbeats = set()
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("labels"), list):

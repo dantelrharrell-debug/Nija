@@ -194,7 +194,7 @@ class RecoveryVerificationTests(unittest.TestCase):
         return {
             **self.runtime,
             "observed_at_epoch": now,
-            "instance_id": SERVICE + "-synthetic",
+            "instance_id": SERVICE + "-7d458c8976-zsc58",
             "processes": [{"started_at_epoch": now - 120, "configured": {}}],
             "failures": ["current_process_log_evidence_unavailable"],
             "log_signals": {},
@@ -202,7 +202,7 @@ class RecoveryVerificationTests(unittest.TestCase):
 
     def test_external_render_app_logs_correlate_exact_runtime_without_trading(self) -> None:
         remote = self._remote_missing_local_logs()
-        logs = self._synthetic_app_rows(remote["observed_at_epoch"], remote["instance_id"])
+        logs = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-zsc58")
         with patch(
             "scripts.nija_render_recovery_verification._read_render_instance_logs",
             return_value=logs,
@@ -210,7 +210,7 @@ class RecoveryVerificationTests(unittest.TestCase):
             self.assertTrue(_verify_render_instance_app_logs(self.approval, remote))
         source.assert_called_once()
         _, start, end = source.call_args.args
-        self.assertEqual(source.call_args.args[0], remote["instance_id"])
+        self.assertEqual(source.call_args.args[0], SERVICE + "-zsc58")
         self.assertGreaterEqual(start, remote["processes"][0]["started_at_epoch"])
         self.assertLessEqual(end, time.time())
         with self.assertRaisesRegex(VerificationDenied, "^runtime_evidence_incomplete$"):
@@ -247,7 +247,7 @@ class RecoveryVerificationTests(unittest.TestCase):
             )} for x in good]),
             ("request_type", [{**x, "labels": [
                 {"name": "resource", "value": SERVICE},
-                {"name": "instance", "value": base["instance_id"]},
+                {"name": "instance", "value": SERVICE + "-zsc58"},
                 {"name": "type", "value": "request"},
             ]} for x in good]),
         ):
@@ -259,8 +259,8 @@ class RecoveryVerificationTests(unittest.TestCase):
 
     def test_strict_heartbeat_rejects_conflicts_and_duplicates(self) -> None:
         remote = self._remote_missing_local_logs()
-        remote["instance_id"] = SERVICE + "-abc12-extra"
-        good = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-abc12")
+        remote["instance_id"] = SERVICE + "-7d458c8976-zsc58"
+        good = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-zsc58")
         for name, replacement in (
             ("contradictory", "allow_new_orders=false allow_new_orders=true"),
             ("duplicate", "allow_new_orders=false allow_new_orders=false"),
@@ -291,8 +291,8 @@ class RecoveryVerificationTests(unittest.TestCase):
 
     def test_render_short_instance_label_matches_only_same_instance(self) -> None:
         remote = self._remote_missing_local_logs()
-        remote["instance_id"] = SERVICE + "-abc12-extra"
-        good = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-abc12")
+        remote["instance_id"] = SERVICE + "-7d458c8976-zsc58"
+        good = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-zsc58")
         with patch(
             "scripts.nija_render_recovery_verification._read_render_instance_logs",
             return_value=good,
@@ -341,7 +341,7 @@ class RecoveryVerificationTests(unittest.TestCase):
             "scripts.nija_render_recovery_verification.urlopen", return_value=fake,
         ) as opener:
             self.assertEqual(
-                _read_render_instance_logs(SERVICE + "-synthetic", 1700000000, 1700000060),
+                _read_render_instance_logs(SERVICE + "-zsc58", 1700000000, 1700000060),
                 [],
             )
         request = opener.call_args.args[0]
@@ -349,7 +349,7 @@ class RecoveryVerificationTests(unittest.TestCase):
         self.assertEqual(urlsplit(request.full_url).netloc, "api.render.com")
         self.assertEqual(q["resource"], [SERVICE])
         self.assertEqual(q["ownerId"], ["tea-d37fhe8gjchc73c8eo0g"])
-        self.assertEqual(q["instance"], [SERVICE + "-synthetic"])
+        self.assertEqual(q["instance"], [SERVICE + "-zsc58"])
         self.assertEqual(q["type"], ["app"])
         self.assertEqual(q["limit"], ["100"])
         self.assertEqual(q["direction"], ["backward"])
