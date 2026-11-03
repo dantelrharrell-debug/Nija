@@ -19,6 +19,8 @@ from scripts.nija_kraken_instance_diagnostic import (
 )
 
 MANIFEST = Path("ops/recovery/render_readonly_baseline.json")
+APPROVAL_SECRET_ENV = "NIJA_RENDER_READONLY_APPROVAL_JSON"
+_MAX_APPROVAL_BYTES = 16384
 HOST = "ssh.oregon.render.com"
 HOST_FINGERPRINT = "SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM"
 OUTCOMES = (
@@ -30,6 +32,64 @@ OUTCOMES = (
 
 class VerificationDenied(ValueError):
     """A fixed technical reason safe to expose in diagnostic output."""
+
+
+def _reject_duplicate_fields(pairs: list[tuple[str, object]]) -> dict:
+    """Refuse ambiguous JSON, including nested duplicate approval fields."""
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise VerificationDenied("approval_json_duplicate_field")
+        out[key] = value
+    return out
+
+
+def load_reviewed_approval() -> dict:
+    """Use a separately protected GitHub environment secret, never a release push.
+
+    The committed manifest remains a source-pin template with approval=false.
+    Human review and secret administration are external to this program.
+    Neither an issue comment nor the latest live Render SHA is an approval.
+    """
+    try:
+        template = json.loads(
+            MANIFEST.read_bytes(), object_pairs_hook=_reject_duplicate_fields,
+        )
+    except VerificationDenied:
+        raise
+    except (OSError, ValueError, TypeError):
+        raise VerificationDenied("approval_template_invalid") from None
+    if (not isinstance(template, dict)
+            or template.get("operator_approved") is not False
+            or template.get("approval_reference") is not None
+            or template.get("commit") is not None
+            or template.get("deployment_id") is not None
+            or template.get("service_id") != SERVICE
+            or template.get("release_branch") != RELEASE_BRANCH):
+        raise VerificationDenied("committed_manifest_must_remain_unapproved")
+    pins = template.get("source_sha256")
+    if (not isinstance(pins, dict) or set(pins) != set(SOURCE_PATHS)
+            or any(not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None
+                   for value in pins.values())):
+        raise VerificationDenied("approval_template_source_pins_invalid")
+
+    raw = os.environ.get(APPROVAL_SECRET_ENV, "")
+    if not raw or len(raw.encode("utf-8")) > _MAX_APPROVAL_BYTES:
+        raise VerificationDenied("independent_environment_approval_missing")
+    try:
+        reviewed = json.loads(raw, object_pairs_hook=_reject_duplicate_fields)
+    except VerificationDenied:
+        raise
+    except (ValueError, TypeError):
+        raise VerificationDenied("independent_environment_approval_invalid") from None
+    if (not isinstance(reviewed, dict) or set(reviewed) != set(template)
+            or reviewed.get("service_id") != SERVICE
+            or reviewed.get("release_branch") != RELEASE_BRANCH
+            or reviewed.get("source_sha256") != pins):
+        raise VerificationDenied("independent_environment_approval_pins_mismatch")
+    # verify_baseline checks explicit operator decision, reference, exact live
+    # commit, deployment, source pins, and fresh independent Render metadata.
+    return reviewed
 
 
 def verify_baseline(approval: dict, evidence: dict, *, workflow_ref: str) -> None:
@@ -138,11 +198,9 @@ def run_verification() -> dict:
         result["verification_source_commit"] = _command(
             ["git", "rev-parse", "HEAD"], "release_checkout_unavailable",
         ).decode().strip()
-        approval = json.loads(MANIFEST.read_bytes())
-        if not isinstance(approval, dict):
-            raise VerificationDenied("approval_manifest_invalid")
-        # Discovery precedes approval verification but never authorizes or
-        # rewrites a pin. It does not depend on SSH/instance/log availability.
+        # The independent environment's guarded secret must exist BEFORE any
+        # Render API or SSH access. A release-branch commit cannot self-approve.
+        approval = load_reviewed_approval()
         evidence = inspect_render_api(deployment_only=True)
         for key in ("service_id", "deployment_id", "commit", "branch", "release_branch_verified", "deployment_status"):
             if key in evidence:
