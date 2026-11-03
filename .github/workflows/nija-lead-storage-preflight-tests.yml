@@ -1,0 +1,31 @@
+name: NIJA lead storage preflight tests (offline only)
+on:
+  pull_request:
+    paths:
+      - 'scripts/nija_lead_storage_preflight.py'
+      - 'tests/test_nija_lead_storage_preflight.py'
+      - '.github/workflows/nija-lead-storage-preflight-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test non-destructive storage inspection (synthetic fixtures only)
+        run: |
+          python3 -B -m unittest discover -s tests -p 'test_nija_lead_storage_preflight.py' -v
+      - name: Compile source without runtime import side effects
+        run: |
+          python3 -B - <<'PY'
+          import ast
+          from pathlib import Path
+          for name in ('scripts/nija_lead_storage_preflight.py',
+                       'tests/test_nija_lead_storage_preflight.py'):
+              ast.parse(Path(name).read_text(encoding='utf-8'), filename=name)
+          print('LEAD_PREFLIGHT_SOURCE_SYNTAX_OK')
+          PY

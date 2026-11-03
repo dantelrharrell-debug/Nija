@@ -15,10 +15,17 @@ Do **not** modify the committed manifest to approve production.
 - The reusable `.github/workflows/render-production-baseline.yml` job uses the
   `nija-render-recovery-readonly` GitHub Actions environment. It imports the
   *environment-only* secret `NIJA_RENDER_READONLY_APPROVAL_JSON`.
-- Callers explicitly pass only the Render API and recovery SSH credentials to
-  the reusable workflow. The approval JSON is not a `workflow_call` secret and
-  is never passed using `secrets: inherit`; do not provision a repository- or
-  organization-level copy of `NIJA_RENDER_READONLY_APPROVAL_JSON`.
+- The two recovery callers forward only the required Render API, SSH and
+  `NIJA_RENDER_READONLY_APPROVAL_JSON` secrets **by explicit name**. GitHub
+  requires a reusable-workflow caller to pass an environment-scoped secret even
+  when the called job declares `environment: nija-render-recovery-readonly`.
+  The called job must use the protected environment version. Do not use
+  `secrets: inherit`, and never create a repository- or organization-scoped
+  copy of `NIJA_RENDER_READONLY_APPROVAL_JSON` (such a copy would undermine
+  the environment-only authorization boundary). The `workflow_call` secret is
+  marked `required: true` to enforce caller wiring; the verifier still rejects
+  an empty, malformed, stale or unapproved record before any Render API or SSH.
+  Do not place the secret value in GitHub logs or a public issue.
 - A sole repository owner may authorize **read-only recovery diagnostics** after
   deliberate, documented review. Record a genuine owner authorization reference
   separately from Git; do not label it as a second-person or independent human
@@ -76,6 +83,18 @@ Do **not** modify the committed manifest to approve production.
    becomes invalid. Revoke it; repeat the owner's explicit read-only review
    before updating the environment secret. Never auto-approve the latest SHA.
    Remove the approval secret when the authorized inspection is finished.
+
+## Troubleshooting the named environment approval secret
+
+- A baseline that stops with `independent_environment_approval_missing`
+  **before reaching Render** can mean that the caller did not forward the
+  environment secret, despite the secret being present in GitHub Settings.
+  Both entrypoint workflows must explicitly pass the exact named approval
+  secret to the reusable baseline. Review the sanitized `baseline / verify`
+  job output; GitHub displays a masked value when the secret is available.
+  Never diagnose this by printing, comparing or exposing the actual JSON.
+- A successful baseline permits read-only diagnostics only; it is neither a
+  Kraken credential check nor trading approval.
 
 ## Prerequisites and limitations
 - Existing `RENDER_API_KEY` and
