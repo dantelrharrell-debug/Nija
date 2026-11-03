@@ -89,6 +89,9 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_lead_payment_attribution.py -v
 
+      - name: Run readiness evidence contract regressions
+        run: python -m unittest discover -s tests -p test_readiness_evidence_contract.py -v
+
       - name: Run tests
         env:
           GH_TOKEN: ""

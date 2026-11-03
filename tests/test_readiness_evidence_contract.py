@@ -2,7 +2,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from bot.readiness_evidence_contract import Evidence, Readiness, assess
+from readiness_evidence_contract import Evidence, Readiness, assess
 
 NOW = datetime(2026, 11, 3, 20, 0, tzinfo=timezone.utc)
 REQUIRED = frozenset({"ledger", "protective_orders"})
