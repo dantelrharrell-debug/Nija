@@ -116,7 +116,7 @@ def inspect(*, environ: Mapping[str, str] | None = None,
     try:
         parsed = urllib.parse.urlsplit(url)
         https_ok = bool(url and parsed.scheme == "https" and parsed.hostname
-                        and not parsed.username and not parsed.password)
+                        and not parsed.username and not parsed.password and parsed.port != 0)
         category = ("zapier" if https_ok and parsed.hostname == "hooks.zapier.com"
                     else "other_https" if https_ok else "missing_or_invalid")
     except ValueError:
