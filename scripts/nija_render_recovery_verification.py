@@ -8,11 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from scripts.nija_kraken_instance_diagnostic import (
     RELEASE_BRANCH, SERVICE, SOURCE_PATHS, inspect_render_api, report_succeeded,
@@ -23,6 +27,14 @@ APPROVAL_SECRET_ENV = "NIJA_RENDER_READONLY_APPROVAL_JSON"
 _MAX_APPROVAL_BYTES = 16384
 HOST = "ssh.oregon.render.com"
 HOST_FINGERPRINT = "SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM"
+RENDER_LOG_OWNER = "tea-d37fhe8gjchc73c8eo0g"
+RENDER_LOG_MODULE = "| nija.runtime_heartbeat_marker_convergence_v238 |"
+RENDER_LOG_MARKER = "STARTUP_READONLY_RECOVERY_DIAGNOSTIC state=READ_ONLY_RECOVERY"
+RENDER_LOG_SAFETY = (
+    "independent_attestations=unverified", "allow_new_orders=false",
+    "canonical_gate_unchanged=true",
+)
+RENDER_LOG_MAX_BYTES = 512 * 1024
 OUTCOMES = (
     "WORKFLOW_EXECUTION_SUCCESS", "DEPLOYMENT_BASELINE_VERIFIED",
     "SOURCE_INTEGRITY_VERIFIED", "RUNTIME_ACCESS_VERIFIED",
@@ -144,9 +156,17 @@ def verify_baseline(approval: dict, evidence: dict, *, workflow_ref: str) -> Non
         raise VerificationDenied("approved_render_deployment_mismatch")
 
 
-def verify_runtime(approval: dict, report: dict) -> None:
-    """Require exact current runtime source and process evidence, not log readiness."""
-    if (not report_succeeded(report) or report.get("service_id") != SERVICE
+def verify_runtime(
+    approval: dict, report: dict, *, render_instance_app_logs_verified: bool = False,
+) -> None:
+    """Require exact runtime evidence; only one known missing local-log gap is recoverable."""
+    log_only_gap = (
+        render_instance_app_logs_verified is True
+        and report.get("failures") == ["current_process_log_evidence_unavailable"]
+        and report.get("log_signals") == {}
+        and report.get("status") == "DIAGNOSTIC_ONLY"
+    )
+    if (not (report_succeeded(report) or log_only_gap) or report.get("service_id") != SERVICE
             or report.get("commit") != approval["commit"]
             or not report.get("processes") or not report.get("instance_id")
             or report.get("state_changed") is not False
@@ -158,6 +178,117 @@ def verify_runtime(approval: dict, report: dict) -> None:
         raise VerificationDenied("runtime_evidence_stale")
     if report.get("source_sha256") != approval["source_sha256"]:
         raise VerificationDenied("runtime_source_digest_mismatch")
+
+
+def _utc_query_time(stamp: float) -> str:
+    return datetime.fromtimestamp(stamp, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _read_render_instance_logs(instance: str, start: float, end: float) -> list[dict]:
+    """Read bounded Render app logs using the existing approval-scoped API key.
+
+    Fixed endpoint, owner, service and instance filter. Never log response bodies.
+    """
+    token = os.environ.get("RENDER_API_KEY", "")
+    if not token:
+        raise VerificationDenied("render_instance_log_api_unavailable")
+    query = urlencode({
+        "ownerId": RENDER_LOG_OWNER, "resource": SERVICE, "instance": instance,
+        "type": "app", "text": "STARTUP_READONLY_RECOVERY_DIAGNOSTIC",
+        "startTime": _utc_query_time(start), "endTime": _utc_query_time(end),
+        "direction": "backward", "limit": 100,
+    })
+    request = Request(
+        "https://api.render.com/v1/logs?" + query,
+        headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            raw = response.read(RENDER_LOG_MAX_BYTES + 1)
+        if len(raw) > RENDER_LOG_MAX_BYTES:
+            raise VerificationDenied("render_instance_log_response_invalid")
+        payload = json.loads(raw)
+    except VerificationDenied:
+        raise
+    except (OSError, HTTPError, URLError, TimeoutError, ValueError, TypeError):
+        raise VerificationDenied("render_instance_log_api_unavailable") from None
+    if (not isinstance(payload, dict) or not isinstance(payload.get("logs"), list)
+            or len(payload["logs"]) > 100):
+        raise VerificationDenied("render_instance_log_response_invalid")
+    return payload["logs"]
+
+
+def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
+    """Correlate authenticated Render app heartbeat to SSH instance/process times.
+
+    Only supplements the missing local-file classification, never broker proof.
+    """
+    if (report.get("status") != "DIAGNOSTIC_ONLY"
+            or report.get("service_id") != SERVICE
+            or report.get("commit") != approval["commit"]
+            or report.get("source_sha256") != approval["source_sha256"]
+            or report.get("failures") != ["current_process_log_evidence_unavailable"]
+            or report.get("log_signals") != {}
+            or report.get("state_changed") is not False
+            or report.get("broker_requests") is not False
+            or report.get("allow_new_orders") is not False):
+        raise VerificationDenied("render_instance_log_context_mismatch")
+    instance = report.get("instance_id")
+    if (not isinstance(instance, str)
+            or not re.fullmatch(re.escape(SERVICE) + r"-[a-zA-Z0-9-]{1,64}", instance)):
+        raise VerificationDenied("render_instance_log_context_mismatch")
+    processes = report.get("processes")
+    if not isinstance(processes, list) or not processes:
+        raise VerificationDenied("render_instance_log_context_mismatch")
+    observed = report.get("observed_at_epoch")
+    now = time.time()
+    if type(observed) not in (float, int) or not 0 <= now - observed <= 60:
+        raise VerificationDenied("render_instance_log_context_mismatch")
+    starts = []
+    for process in processes:
+        stamp = process.get("started_at_epoch") if isinstance(process, dict) else None
+        if (type(stamp) not in (int, float) or not 0 < stamp <= observed
+                or not isinstance(process.get("configured"), dict)):
+            raise VerificationDenied("render_instance_log_context_mismatch")
+        starts.append(stamp)
+    start = max(observed - 75, max(starts))
+    end = min(now, observed + 15)
+    if end - start < 3:
+        raise VerificationDenied("render_instance_log_window_insufficient")
+    rows = _read_render_instance_logs(instance, start, end)
+    heartbeats = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("labels"), list):
+            raise VerificationDenied("render_instance_log_response_invalid")
+        labels = {}
+        for label in row["labels"]:
+            if (not isinstance(label, dict) or not isinstance(label.get("name"), str)
+                    or not isinstance(label.get("value"), str)
+                    or label["name"] in labels):
+                raise VerificationDenied("render_instance_log_response_invalid")
+            labels[label["name"]] = label["value"]
+        if (labels.get("resource") != SERVICE or labels.get("instance") != instance
+                or labels.get("type") != "app"):
+            raise VerificationDenied("render_instance_log_scope_mismatch")
+        msg, timestamp = row.get("message"), row.get("timestamp")
+        if (not isinstance(msg, str) or len(msg) > 8192
+                or not isinstance(timestamp, str) or len(timestamp) > 60):
+            raise VerificationDenied("render_instance_log_response_invalid")
+        try:
+            moment = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                raise ValueError("timezone required")
+            observed_log_at = moment.timestamp()
+        except (ValueError, TypeError, OverflowError):
+            raise VerificationDenied("render_instance_log_response_invalid") from None
+        if not start <= observed_log_at <= end:
+            raise VerificationDenied("render_instance_log_time_mismatch")
+        if (RENDER_LOG_MODULE in msg and RENDER_LOG_MARKER in msg
+                and all(marker in msg for marker in RENDER_LOG_SAFETY)):
+            heartbeats.add(observed_log_at)
+    if len(heartbeats) < 2 or max(heartbeats) - min(heartbeats) < 3:
+        raise VerificationDenied("render_current_instance_heartbeat_unverified")
+    return True
 
 
 def _command(args: list[str], reason: str, *, data: bytes | None = None) -> bytes:
@@ -280,7 +411,16 @@ def run_verification() -> dict:
                 })
                 if safe:
                     result["ssh_runtime_evidence_failures"] = safe
-        verify_runtime(approval, report)
+        # Render captures stdout/stderr outside local /app files. Only a
+        # pinned, bounded same-instance heartbeat can corroborate this exact
+        # missing-file issue; all other runtime failures still block.
+        render_app_log_proof = False
+        if report.get("failures") == ["current_process_log_evidence_unavailable"]:
+            render_app_log_proof = _verify_render_instance_app_logs(approval, report)
+            result["render_instance_app_log_evidence_verified"] = render_app_log_proof
+        verify_runtime(
+            approval, report, render_instance_app_logs_verified=render_app_log_proof,
+        )
         # A deployment may change during SSH; recheck independent live metadata.
         verify_baseline(approval, inspect_render_api(deployment_only=True), workflow_ref=os.environ["GITHUB_REF"])
         result["RUNTIME_ACCESS_VERIFIED"] = True

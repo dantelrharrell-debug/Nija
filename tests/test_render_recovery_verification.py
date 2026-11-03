@@ -1,17 +1,21 @@
 """Offline synthetic provenance tests; never contact Render, Kraken or Redis."""
 import copy
+from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import time
 import unittest
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
 from scripts.nija_render_recovery_verification import (
     MANIFEST, OUTCOMES, RELEASE_BRANCH, SERVICE, SOURCE_PATHS, VerificationDenied,
-    _command, _read_ssh_report, load_reviewed_approval, run_verification,
+    _command, _read_ssh_report, _read_render_instance_logs,
+    _verify_render_instance_app_logs, load_reviewed_approval, run_verification,
     verify_baseline, verify_runtime,
 )
 
@@ -166,6 +170,142 @@ class RecoveryVerificationTests(unittest.TestCase):
         )
         self.assertNotIn("private_account_or_token_canary", json.dumps(outcome))
         self.assertFalse(outcome["CERTIFICATION_COMPLETE"])
+
+    def _synthetic_app_rows(self, observed: float, instance: str) -> list[dict]:
+        return [{
+            "timestamp": datetime.fromtimestamp(observed - seconds, timezone.utc).isoformat(),
+            "labels": [
+                {"name": "resource", "value": SERVICE},
+                {"name": "instance", "value": instance},
+                {"name": "type", "value": "app"},
+                {"name": "level", "value": "info"},
+            ],
+            "message": (
+                "2026-11-03 15:35:00,000 | INFO | "
+                "nija.runtime_heartbeat_marker_convergence_v238 | "
+                "STARTUP_READONLY_RECOVERY_DIAGNOSTIC state=READ_ONLY_RECOVERY "
+                "independent_attestations=unverified "
+                "allow_new_orders=false canonical_gate_unchanged=true"
+            ),
+        } for seconds in (12, 6)]
+
+    def _remote_missing_local_logs(self) -> dict:
+        now = time.time()
+        return {
+            **self.runtime,
+            "observed_at_epoch": now,
+            "instance_id": SERVICE + "-synthetic",
+            "processes": [{"started_at_epoch": now - 120, "configured": {}}],
+            "failures": ["current_process_log_evidence_unavailable"],
+            "log_signals": {},
+        }
+
+    def test_external_render_app_logs_correlate_exact_runtime_without_trading(self) -> None:
+        remote = self._remote_missing_local_logs()
+        logs = self._synthetic_app_rows(remote["observed_at_epoch"], remote["instance_id"])
+        with patch(
+            "scripts.nija_render_recovery_verification._read_render_instance_logs",
+            return_value=logs,
+        ) as source:
+            self.assertTrue(_verify_render_instance_app_logs(self.approval, remote))
+        source.assert_called_once()
+        _, start, end = source.call_args.args
+        self.assertEqual(source.call_args.args[0], remote["instance_id"])
+        self.assertGreaterEqual(start, remote["processes"][0]["started_at_epoch"])
+        self.assertLessEqual(end, time.time())
+        with self.assertRaisesRegex(VerificationDenied, "^runtime_evidence_incomplete$"):
+            verify_runtime(self.approval, remote)
+        verify_runtime(self.approval, remote, render_instance_app_logs_verified=True)
+        with patch(
+            "scripts.nija_render_recovery_verification._verify_render_instance_app_logs",
+            return_value=True,
+        ):
+            result = self.run_synthetic(runtime=remote)
+        self.assertTrue(result["render_instance_app_log_evidence_verified"])
+        self.assertTrue(result["RUNTIME_ACCESS_VERIFIED"])
+        self.assertTrue(result["SOURCE_INTEGRITY_VERIFIED"])
+        self.assertFalse(result["BROKER_EVIDENCE_VERIFIED"])
+        self.assertFalse(result["CERTIFICATION_COMPLETE"])
+        self.assertFalse(result["allow_new_orders"])
+
+    def test_instance_log_fallback_denies_stale_or_cross_instance(self) -> None:
+        base = self._remote_missing_local_logs()
+        good = self._synthetic_app_rows(base["observed_at_epoch"], base["instance_id"])
+        for label, rows in (
+            ("cross_instance", [{**good[0], "labels": [
+                {"name": "resource", "value": SERVICE},
+                {"name": "instance", "value": SERVICE + "-wrong"},
+                {"name": "type", "value": "app"},
+            ]}, good[1]]),
+            ("one_only", good[:1]),
+            ("stale", [{**x, "timestamp": "2025-01-01T00:00:00Z"} for x in good]),
+            ("wrong_module", [{**x, "message": x["message"].replace(
+                "nija.runtime_heartbeat_marker_convergence_v238", "nija.some_other_logger",
+            )} for x in good]),
+            ("unsafe_marker", [{**x, "message": x["message"].replace(
+                "allow_new_orders=false", "allow_new_orders=true",
+            )} for x in good]),
+            ("request_type", [{**x, "labels": [
+                {"name": "resource", "value": SERVICE},
+                {"name": "instance", "value": base["instance_id"]},
+                {"name": "type", "value": "request"},
+            ]} for x in good]),
+        ):
+            with self.subTest(label=label), patch(
+                "scripts.nija_render_recovery_verification._read_render_instance_logs",
+                return_value=rows,
+            ), self.assertRaises(VerificationDenied):
+                _verify_render_instance_app_logs(self.approval, base)
+
+    def test_instance_log_fallback_cannot_mask_other_missing_proofs(self) -> None:
+        remote = self._remote_missing_local_logs()
+        for change in (
+            {"failures": ["canonical_runtime_process_not_found"]},
+            {"failures": ["current_process_log_evidence_unavailable", "runtime_source_read_failed"]},
+            {"allow_new_orders": True},
+            {"broker_requests": True},
+            {"source_sha256": {}},
+            {"commit": "b" * 40},
+            {"instance_id": "srv-unrelated-instance"},
+            {"observed_at_epoch": time.time() - 120},
+            {"processes": []},
+        ):
+            with self.subTest(changes=list(change)), patch(
+                "scripts.nija_render_recovery_verification._read_render_instance_logs",
+            ) as api, self.assertRaises(VerificationDenied):
+                _verify_render_instance_app_logs(self.approval, {**remote, **change})
+            api.assert_not_called()
+        for failures in (
+            ["runtime_source_read_failed"],
+            ["current_process_log_evidence_unavailable", "runtime_process_inspection_failed"],
+        ):
+            with self.assertRaisesRegex(VerificationDenied, "^runtime_evidence_incomplete$"):
+                verify_runtime(
+                    self.approval, {**remote, "failures": failures},
+                    render_instance_app_logs_verified=True,
+                )
+
+    def test_instance_log_api_reads_only_bounded_fixed_scope(self) -> None:
+        import unittest.mock
+        fake = unittest.mock.MagicMock()
+        fake.__enter__.return_value = io.BytesIO(b'{"logs":[]}')
+        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-api-key"}), patch(
+            "scripts.nija_render_recovery_verification.urlopen", return_value=fake,
+        ) as opener:
+            self.assertEqual(
+                _read_render_instance_logs(SERVICE + "-synthetic", 1700000000, 1700000060),
+                [],
+            )
+        request = opener.call_args.args[0]
+        q = parse_qs(urlsplit(request.full_url).query)
+        self.assertEqual(urlsplit(request.full_url).netloc, "api.render.com")
+        self.assertEqual(q["resource"], [SERVICE])
+        self.assertEqual(q["ownerId"], ["tea-d37fhe8gjchc73c8eo0g"])
+        self.assertEqual(q["instance"], [SERVICE + "-synthetic"])
+        self.assertEqual(q["type"], ["app"])
+        self.assertEqual(q["limit"], ["100"])
+        self.assertEqual(q["direction"], ["backward"])
+        self.assertNotIn("synthetic-api-key", request.full_url)
 
     def run_synthetic(self, *, runtime=None, command=None, evidence=None) -> dict:
         """Exercise orchestration with an independently reviewed synthetic approval."""
