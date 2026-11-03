@@ -41,6 +41,16 @@ def _reject_cross_user(payload: Dict) -> Optional[tuple]:
     return None
 
 
+def _unavailable_mobile_data(resource: str) -> tuple:
+    return jsonify({
+        "success": False,
+        "status": "unavailable",
+        "resource": resource,
+        "error": "Authoritative mobile data is not connected",
+        "reason": "authoritative_data_source_not_connected",
+    }), 503
+
+
 @mobile_api.route("/status", methods=["GET"])
 def get_mobile_status():
     return jsonify({"status": "ok", "service": "mobile_api", "timestamp": _utcnow()})
@@ -147,16 +157,7 @@ def get_dashboard_summary():
     supplied = request.args.get("user_id")
     if supplied and supplied != _authenticated_user():
         return jsonify({"error": "Cannot access another user's dashboard"}), 403
-    return jsonify({
-        "success": True,
-        "data": {
-            "user_id": _authenticated_user(),
-            "trading_active": False,
-            "stats": {"total_pnl": 0.0, "win_rate": 0.0, "total_trades": 0, "active_positions": 0},
-            "account": {"balance": 0.0, "tier": "basic", "max_position_size": 100.0},
-            "last_updated": _utcnow(),
-        },
-    })
+    return _unavailable_mobile_data("dashboard")
 
 
 @mobile_api.route("/trading/quick-toggle", methods=["POST"])
@@ -169,16 +170,22 @@ def quick_toggle_trading():
     if "enabled" not in data or not isinstance(data["enabled"], bool):
         return jsonify({"error": "enabled must be a boolean"}), 400
 
-    user_id = _authenticated_user()
-    enabled = data["enabled"]
-    logger.info("Mobile trading toggle requested user_id=%s enabled=%s", user_id, enabled)
-    send_push_notification(
-        user_id,
-        "Trading Enabled" if enabled else "Trading Disabled",
-        "NIJA is now actively monitoring markets and executing trades" if enabled else "NIJA has stopped monitoring markets",
-        {"type": "trading_status", "enabled": enabled},
+    # The mobile companion does not own the trading admission controller.
+    # Never treat a UI request as a confirmed state transition. Both enable
+    # and disable requests must fail closed until an authenticated,
+    # account-scoped controller API can return authoritative confirmation.
+    logger.warning(
+        "Mobile trading toggle denied: no authoritative controller binding user_id=%s requested_enabled=%s",
+        _authenticated_user(),
+        data["enabled"],
     )
-    return jsonify({"success": True, "trading_enabled": enabled})
+    return jsonify({
+        "success": False,
+        "trading_enabled": False,
+        "state_verified": False,
+        "error": "Trading controls are unavailable from the mobile app",
+        "reason": "authoritative_controller_not_connected",
+    }), 503
 
 
 @mobile_api.route("/positions/lightweight", methods=["GET"])
@@ -187,7 +194,7 @@ def get_lightweight_positions():
     supplied = request.args.get("user_id")
     if supplied and supplied != _authenticated_user():
         return jsonify({"error": "Cannot access another user's positions"}), 403
-    return jsonify({"success": True, "positions": [], "count": 0, "last_updated": _utcnow()})
+    return _unavailable_mobile_data("positions")
 
 
 @mobile_api.route("/trades/recent", methods=["GET"])
@@ -202,7 +209,7 @@ def get_recent_trades():
         return jsonify({"error": "limit must be an integer"}), 400
     if not 1 <= limit <= 50:
         return jsonify({"error": "limit must be between 1 and 50"}), 400
-    return jsonify({"success": True, "trades": [], "count": 0, "limit": limit, "last_updated": _utcnow()})
+    return _unavailable_mobile_data("trades")
 
 
 @mobile_api.route("/config", methods=["GET"])
@@ -214,13 +221,13 @@ def get_mobile_config():
             "api_version": "1.1.0",
             "min_app_version": "1.0.0",
             "features": {
-                "push_notifications": True,
-                "biometric_auth": True,
-                "real_time_updates": True,
-                "multi_exchange": True,
+                "push_notifications": False,
+                "biometric_auth": False,
+                "real_time_updates": False,
+                "multi_exchange": False,
             },
             "refresh_intervals": {"dashboard": 30, "positions": 10, "trades": 60},
-            "supported_exchanges": ["coinbase", "kraken", "binance", "okx", "alpaca"],
+            "supported_exchanges": [],
         },
     })
 

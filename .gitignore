@@ -554,3 +554,6 @@ data/accounting/
 bot/data/*.json
 bot/data/*.jsonl
 .nija_trading_state.json
+
+# Generated Capacitor web entrypoint; source is frontend/templates/index.html
+/frontend/index.html

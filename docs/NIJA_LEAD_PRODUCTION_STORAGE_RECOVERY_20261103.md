@@ -13,29 +13,9 @@ Status: **diagnostics prepared, live data not yet certified.**
 
 In the *existing* authenticated Render service Shell/SSH, run this bounded stdlib probe. It does not write, move files, or send a network request. If access is unavailable, **stop** and report blocked. Running it in a GitHub checkout is not production evidence.
 
-~~~sh
-python3 -B -S - <<'PY'
-import json, os
-from pathlib import Path
-base=Path('/data')
-source=next((k for k in ('NIJA_LEAD_DB_PATH','NIJA_OUTREACH_DB_PATH') if str(os.environ.get(k) or '').strip()), 'default')
-active=Path(os.environ[source]).expanduser() if source != 'default' else Path('/app/data/nija_outreach.sqlite3')
-def safe_state(path):
-    p=path.resolve()
-    return {'exists':p.is_file(), 'on_data_disk':base.is_mount() and p.is_relative_to(base.resolve())}
-legacy=Path('/app/data/nija_outreach.sqlite3')
-mounted=Path('/data/nija_outreach.sqlite3')
-out={
- 'service_verified':os.environ.get('RENDER_SERVICE_ID')=='srv-d98dsr5aeets73fpbaqg',
- 'data_mount_present':base.is_mount(), 'config_source':source,
- 'active_db':safe_state(active), 'legacy_db':safe_state(legacy),
- 'disk_db':safe_state(mounted),
- 'auth_configured': bool((os.environ.get('NIJA_LEAD_WEBHOOK_TOKEN') or os.environ.get('NIJA_OUTREACH_SERVICE_TOKEN') or '').strip()),
- 'forward_configured': bool((os.environ.get('NIJA_LEAD_FORWARD_URL') or '').strip()),
-}
-print(json.dumps(out,sort_keys=True))
-PY
-~~~
+Do not use the earlier inline probe: its database-path precedence did not match the intake runtime. Before invoking any SQLite inspection, verify the active service identity, mounted disk and raw configuration precedence using a reviewed, non-mutating probe. The intake path is selected as the first truthy raw NIJA_LEAD_DB_PATH, NIJA_OUTREACH_DB_PATH or default, then stripped; do not expand ~. A whitespace-only primary override takes precedence and yields an invalid/empty path. Never print raw environment values or secrets.
+
+For live WAL databases, **stop SQLite inspection**. Capture and verify a consistent, independently approved offline snapshot first; do not use immutable=1 against live WAL files, because committed WAL data may be omitted. The corrected preflight returns a fixed WAL failure code rather than opening such a database.
 
 If the service is not verified, the disk is not mounted, the active database is missing, or the active database is outside /data, **STOP**. Do not change database-path environment variables, overwrite an existing copy, reset any table, or redeploy. Reconcile immutable submission IDs after preserving original files and performing a verified backup.
 
@@ -47,7 +27,7 @@ Once the reviewed script is safely available in the *running* instance, run:
 python3 -B -S scripts/nija_lead_storage_preflight.py
 ~~~
 
-Do not deploy just to make the script available; use authenticated read-only access to inspect the existing instance first. The script uses SQLite read-only mode, bounded aggregate counting, fixed technical issue codes, and checks only presence/type of forwarding/authentication configuration. It never sends leads, creates files, modifies credentials or changes trading settings.
+Do not deploy just to make the script available; use authenticated read-only access to inspect the existing instance first. The corrected script rejects WAL-mode databases and existing WAL/SHM sidecars before connecting, and uses SQLite immutable read-only inspection only for rollback-journal databases. A live concurrent database is not a certified consistent snapshot. It performs bounded aggregate counting and reports fixed technical issue codes without printing secrets.
 
 - lead_db_on_mounted_disk=false: **block release**; possible ephemeral storage.
 - multiple_potential_lead_databases_require_reconciliation: **block release**; preserve both copies.

@@ -1,0 +1,27 @@
+name: NIJA Mobile Release Gate (strict)
+
+# Automatically validate dedicated mobile release branches and allow manual
+# preflight. It stays separate from ordinary main/PR CI.
+on:
+  push:
+    branches:
+      - 'mobile/release/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-release-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify mobile toggle denies unverified trading transitions
+        run: python tests/test_mobile_toggle_fail_closed.py
+      - name: Verify unavailable mobile data is not reported as empty
+        run: python tests/test_mobile_data_unavailable.py
+      - name: Require generated Android Gradle project and SDK 36+
+        run: python scripts/validate_mobile_store_readiness.py --strict
