@@ -4,6 +4,8 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+import scripts.nija_lead_delivery_reconciliation_readonly as reconciliation
 from scripts.nija_lead_delivery_reconciliation_readonly import inspect
 
 
@@ -66,6 +68,53 @@ class ReconciliationTests(unittest.TestCase):
         serialized = json.dumps(report)
         for sensitive in ("secret-must-never-print", "SECRET", "one@example.com"):
             self.assertNotIn(sensitive, serialized)
+
+    def test_writer_cannot_change_database_during_scan(self):
+        self.populate()
+        connect = sqlite3.connect
+        writer_blocked = []
+        lead_path = self.lead
+
+        class ReadConnection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                self.connection.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.connection.__exit__(*args)
+
+            def execute(self, sql, *args):
+                cursor = self.connection.execute(sql, *args)
+                if sql.startswith("SELECT COUNT(*), COUNT(DISTINCT"):
+                    try:
+                        with connect(lead_path, timeout=0.01) as writer:
+                            writer.execute(
+                                "UPDATE website_lead_crm_sync SET state='synced' "
+                                "WHERE state='needs_review'"
+                            )
+                    except sqlite3.OperationalError:
+                        writer_blocked.append(True)
+                    else:
+                        writer_blocked.append(False)
+                return cursor
+
+            def set_progress_handler(self, *args):
+                return self.connection.set_progress_handler(*args)
+
+        def connect_for_audit(database, *args, **kwargs):
+            connection = connect(database, *args, **kwargs)
+            if str(database).startswith(lead_path.resolve().as_uri()):
+                return ReadConnection(connection)
+            return connection
+
+        with patch.object(reconciliation.sqlite3, "connect", side_effect=connect_for_audit):
+            report = self.audit()
+
+        self.assertEqual(writer_blocked, [True])
+        self.assertEqual(report["lead_database"]["crm_state_counts"]["needs_review"], 1)
 
     def test_missing_databases_not_created(self):
         report = self.audit()
