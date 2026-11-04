@@ -1,0 +1,13 @@
+{
+  "name": "nija-trading-iq-challenge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "NIJA standalone fictional market education game. Does not connect to live trading.",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
