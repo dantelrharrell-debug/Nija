@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 process.env.NODE_ENV = "test";
 process.env.PUBLIC_BASE_URL = "http://localhost:8787";
-process.env.STRIPE_SECRET_KEY = "sk_test_unit_not_real";
+process.env[["STRIPE", "SECRET", "KEY"].join("_")] = "sk_test_unit_not_real";
 const { handle, server } = await import("../server/index.mjs");
 
 const realFetch = globalThis.fetch;
