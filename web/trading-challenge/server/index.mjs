@@ -37,6 +37,13 @@ function json(res, code, object) {
   res.end(JSON.stringify(object));
 }
 async function bodyJSON(req) {
+  if (req.body !== undefined) {
+    const supplied = req.body;
+    const content = Buffer.isBuffer(supplied) ? supplied.toString("utf8")
+      : typeof supplied === "string" ? supplied : JSON.stringify(supplied);
+    if (Buffer.byteLength(content, "utf8") > 4096) throw new Error("Request too large");
+    return JSON.parse(content);
+  }
   let bytes = 0, content = "";
   for await (const chunk of req) {
     bytes += chunk.length;
