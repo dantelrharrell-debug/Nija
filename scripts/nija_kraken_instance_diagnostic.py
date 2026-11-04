@@ -368,6 +368,8 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
                 if re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance):
                     observed_instances.add(observed_instance)
                 if not render_instances_match(instance, observed_instance):
+                    if render_instances_match(render_instance_label(instance), observed_instance):
+                        raise ValueError("render_log_instance_conflict")
                     continue
                 if observed_instance != render_instance_label(observed_instance):
                     matching_full_instances.add(observed_instance)
