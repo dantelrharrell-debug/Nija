@@ -319,7 +319,7 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
                 or not result["release_branch_verified"]):
             raise ValueError("approved_deployment_mismatch")
         try:
-            render_instance_label(instance)
+            instance_label = render_instance_label(instance)
         except ValueError:
             result["failures"].append("current_instance_identity_unavailable")
             return result
@@ -367,9 +367,18 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
                 observed_instance = identifiers[0]
                 if re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance):
                     observed_instances.add(observed_instance)
+                try:
+                    observed_instance_label = render_instance_label(observed_instance)
+                except ValueError:
+                    observed_instance_label = None
+                if (
+                    observed_instance_label == instance_label
+                    and instance != instance_label
+                    and observed_instance != observed_instance_label
+                    and instance != observed_instance
+                ):
+                    raise ValueError("render_log_instance_conflict")
                 if not render_instances_match(instance, observed_instance):
-                    if render_instances_match(render_instance_label(instance), observed_instance):
-                        raise ValueError("render_log_instance_conflict")
                     continue
                 if observed_instance != render_instance_label(observed_instance):
                     matching_full_instances.add(observed_instance)
