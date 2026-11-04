@@ -14,7 +14,7 @@ def allowed_web_origins() -> list[str]:
         parsed = urlsplit(origin)
         if (not origin or parsed.scheme not in {"https", "http"} or not parsed.hostname
                 or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment
-                or any(character.isspace() or character in "*\\[](){}|^$" for character in origin)):
+                or any(character.isspace() or character in "*\\[](){}|^$?#" for character in origin)):
             raise ValueError("ALLOWED_ORIGINS must contain explicit HTTP(S) origins without paths or patterns")
         # Validate ports as well; urlsplit defers invalid-port errors.
         _ = parsed.port
