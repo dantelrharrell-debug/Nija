@@ -131,12 +131,12 @@ def _inventory(root: Path, source_commit: str, base_commit: str) -> tuple[dict[s
     # Include ignored provider modules in this check: otherwise an ignored new
     # composition module could silently escape an apparently complete release.
     candidates = [
-        *root.glob("bot/**/*.py"), *root.glob("scripts/**/*.py"), *root.glob("scripts/**/*.sh"),
-        *root.glob("auth/**/*.py"), *root.glob("execution/**/*.py"), *root.glob("*.sh"),
+        *root.glob("auth/**/*.py"), *root.glob("bot/**/*.py"), *root.glob("execution/**/*.py"),
+        *root.glob("scripts/**/*.py"), *root.glob("scripts/**/*.sh"),
         *root.glob("requirements*.txt"), *root.glob(".github/workflows/**/*"),
         *root.glob("k8s/**/*.yaml"), *root.glob("k8s/**/*.yml"), *root.glob("k8s/**/*.json"),
         *root.glob("Dockerfile*"), *(root / name for name in ROOT_RELEASE_FILES),
-        *root.glob("*.py"), *root.glob("docker-compose*"),
+        *root.glob("*.py"), *root.glob("*.sh"), *root.glob("docker-compose*"),
     ]
     for path in candidates:
         if path.is_file() or path.is_symlink():

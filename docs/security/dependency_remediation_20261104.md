@@ -131,12 +131,16 @@ findings, confirming the acquisition repair and nonzero vulnerability gate.
 These results describe that head/its PR merge, not subsequent commits.
 
 `hosted_scan_blockers_20261104.json` preserves value-free metadata for the image
-findings and **322 credential candidates** in the full legacy scan: 321 remain
-unreviewed; one public dummy-only test fixture has a narrow inline annotation.
-Candidates are not confirmed leaks and have not been blanket-baselined. Their
-values are not retained. Authenticated owners must investigate genuine
-credentials and revoke/rotate any confirmed exposure; benign fixtures/digests
-need specific reviewed dispositions, not a global scan bypass.
+findings and **322 credential candidates** in the full legacy scan. Of the 321
+unreviewed locations, context-only review classifies 168 as likely test dummies,
+56 as generated examples/documentation, 41 as identifiers/digests, 6 as
+configuration placeholders, and 50 as unresolved credential-risk. One separate
+public dummy-only test fixture has a narrow inline annotation. No live or active
+credential can be confirmed from repository evidence alone. Candidate values
+are not retained; none of the 321 has been blanket-baselined. Authenticated
+owners must validate the 50 unresolved-risk locations and revoke/rotate any
+confirmed exposure through the relevant provider; benign values need specific
+reviewed dispositions, not a global scan bypass.
 
 Image findings with no reported fixed version remain blocking, including
 OS/library and kernel-header advisories. A header finding does not prove that
@@ -149,6 +153,13 @@ was hardened. PostgreSQL now uses Alpine's UID/GID 70, a read-only root,
 dropped capabilities and writable data/socket/temp mounts. A no-network,
 ephemeral Docker rehearsal initialized PostgreSQL and wrote/read a table under
 these restrictions; existing secrets/PVC/init-script bindings are preserved.
+
+The final-commit scan also identified root-default security contexts on the API
+and founder-dashboard Kubernetes deployments. The follow-up hardens both with
+explicit non-root UIDs (matching the API image's `nija` UID), read-only roots,
+dropped capabilities, runtime-default seccomp and ephemeral `/tmp` mounts. The
+API startup entrypoint continues to run its existing database checks and
+migrations; this configuration has not been deployed.
 
 Bandit's remaining three high/high-confidence hits were reviewed: two SHA-1
 uses produce stable grouping/client tags, not authentication. Marking those

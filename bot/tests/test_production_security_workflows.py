@@ -164,6 +164,41 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(statefulset["spec"]["volumeClaimTemplates"][0]["metadata"]["name"],
                          "postgres-storage")
 
+    def test_dashboard_hardening_runs_non_root_with_writable_runtime_storage(self) -> None:
+        documents = yaml.safe_load_all((ROOT / "k8s/components/dashboard/deployment.yaml").read_text())
+        deployment = next(doc for doc in documents if doc["kind"] == "Deployment")
+        pod = deployment["spec"]["template"]["spec"]
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+        self.assertEqual(pod["securityContext"]["runAsUser"], 10001)
+        self.assertEqual(pod["securityContext"]["fsGroup"], 10001)
+        self.assertEqual(pod["securityContext"]["seccompProfile"]["type"], "RuntimeDefault")
+        dashboard = pod["containers"][0]
+        self.assertTrue(dashboard["securityContext"]["readOnlyRootFilesystem"])
+        self.assertFalse(dashboard["securityContext"]["allowPrivilegeEscalation"])
+        self.assertEqual(dashboard["securityContext"]["capabilities"]["drop"], ["ALL"])
+        mounts = {mount["mountPath"]: mount["name"] for mount in dashboard["volumeMounts"]}
+        self.assertEqual(mounts, {"/tmp": "dashboard-tmp", "/app/logs": "dashboard-logs"})
+        volumes = {volume["name"]: volume["emptyDir"] for volume in pod["volumes"]}
+        self.assertEqual(volumes, {"dashboard-tmp": {}, "dashboard-logs": {}})
+
+    def test_api_hardening_matches_non_root_image_user_and_ephemeral_temp_storage(self) -> None:
+        documents = yaml.safe_load_all((ROOT / "k8s/components/api/deployment.yaml").read_text())
+        deployment = next(doc for doc in documents if doc["kind"] == "Deployment")
+        pod = deployment["spec"]["template"]["spec"]
+        self.assertIn("useradd -m -u 1000 nija", (ROOT / "Dockerfile.api").read_text())
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+        self.assertEqual(pod["securityContext"]["runAsUser"], 1000)
+        self.assertEqual(pod["securityContext"]["seccompProfile"]["type"], "RuntimeDefault")
+        api = pod["containers"][0]
+        self.assertTrue(api["securityContext"]["readOnlyRootFilesystem"])
+        self.assertFalse(api["securityContext"]["allowPrivilegeEscalation"])
+        self.assertTrue(api["securityContext"]["runAsNonRoot"])
+        self.assertEqual(api["securityContext"]["runAsUser"], 1000)
+        self.assertEqual(api["securityContext"]["capabilities"]["drop"], ["ALL"])
+        self.assertIn({"name": "PYTHONDONTWRITEBYTECODE", "value": "1"}, api["env"])
+        self.assertEqual(api["volumeMounts"], [{"name": "api-tmp", "mountPath": "/tmp"}])
+        self.assertEqual(pod["volumes"], [{"name": "api-tmp", "emptyDir": {}}])
+
     def test_image_findings_do_not_skip_independent_scanner_or_evidence(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
         steps = workflow["jobs"]["docker-image-scan"]["steps"]
@@ -173,6 +208,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertTrue(grype["with"]["fail-build"])
         evidence = next(step for step in steps if step["name"] == "Retain raw container scan evidence")
         self.assertIn("always()", evidence["if"])
+        self.assertIn("||", evidence["if"])
+        self.assertIn("steps.grype-scan.outputs.sarif != ''", evidence["if"])
+        self.assertIn("hashFiles", evidence["if"])
+        self.assertIn("steps.grype-scan.outputs.sarif", evidence["if"])
         self.assertIn("trivy-results-", evidence["with"]["path"])
         self.assertIn("steps.grype-scan.outputs.sarif", evidence["with"]["path"])
 

@@ -35,10 +35,22 @@ spec:
         app: founder-dashboard
         component: dashboard
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: dashboard
         image: nija-dashboard:latest
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 5001
           name: http
@@ -68,6 +80,11 @@ spec:
           value: "5"
         - name: LOG_LEVEL
           value: "INFO"
+        volumeMounts:
+        - name: dashboard-tmp
+          mountPath: /tmp
+        - name: dashboard-logs
+          mountPath: /app/logs
         resources:
           requests:
             cpu: 300m
@@ -91,3 +108,8 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
+      volumes:
+      - name: dashboard-tmp
+        emptyDir: {}
+      - name: dashboard-logs
+        emptyDir: {}

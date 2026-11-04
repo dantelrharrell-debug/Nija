@@ -54,6 +54,14 @@ class DependencyTriageTests(unittest.TestCase):
             result = build_triage(audit, {"data": {}}, {}, resolved)
             self.assertEqual(result["advisories"][0]["disposition"], expected)
 
+    def test_skipped_fresh_dependency_is_not_reported_as_advisory_free(self) -> None:
+        audit = {"dependencies": [{"name": "example", "version": "1", "vulns": [
+            {"id": "PYSEC-example", "aliases": ["GHSA-example"], "fix_versions": ["2"]},
+        ]}]}
+        resolved = {"dependencies": [{"name": "example", "version": "2", "skip_reason": "not-supported"}]}
+        with self.assertRaisesRegex(ValueError, "fresh_resolved_audit_skipped_dependency"):
+            build_triage(audit, {"data": {}}, {}, resolved)
+
     def test_committed_inventory_covers_every_baseline_id_and_preserves_residual(self) -> None:
         root = Path(__file__).resolve().parents[2] / "docs/security"
         baseline = json.loads((root / "dependency_triage_20261104.json").read_text())
@@ -85,6 +93,12 @@ class DependencyTriageTests(unittest.TestCase):
         unreviewed = sum(len(row["lines"]) for row in candidates
                          if row["disposition"].startswith("unreviewed_"))
         self.assertEqual(report["unreviewed_credential_candidate_count"], unreviewed)
+        classification = report["credential_candidate_context_classification"]
+        self.assertEqual(classification["unreviewed_candidate_count"], 321)
+        self.assertEqual(sum(classification["category_counts"].values()), 321)
+        self.assertEqual(sum(classification["scanner_type_counts"].values()), 321)
+        self.assertEqual(classification["confirmed_live_or_active_from_repository_evidence"], 0)
+        self.assertTrue(classification["external_owner_validation_required"])
         reviewed = [row for row in candidates if not row["disposition"].startswith("unreviewed_")]
         self.assertEqual(len(reviewed), 1)
         self.assertEqual(reviewed[0]["file"], "tests/test_member_broker_http_api.py")

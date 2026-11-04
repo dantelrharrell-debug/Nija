@@ -35,7 +35,8 @@ class WebCorsPolicyTests(unittest.TestCase):
     def test_wildcards_patterns_empty_and_non_origins_fail_closed(self) -> None:
         for value in ("*", "", "https://trusted.example,*", "https://*.example", "https://a.example,",
                       "https://a.example/path", "https://a.example?token=x", "https://u:p@a.example",
-                      "https://a.example#fragment", "https://a.example:bad", "file:///tmp/index.html",
+                      "https://a.example?", "https://trusted.example?", "https://a.example#fragment",
+                      "https://a.example:bad", "file:///tmp/index.html",
                       "https://a.example|https://evil.example", "https://a .example"):
             with self.subTest(value=value), patch.dict(os.environ, {"ALLOWED_ORIGINS": value}):
                 with self.assertRaises(ValueError):
@@ -73,7 +74,10 @@ class WebCorsPolicyTests(unittest.TestCase):
 
     def test_earlier_base_app_cors_cannot_reauthorize_a_denied_origin(self) -> None:
         client = self.make_client()
-        for origin in ("https://evil.example", "https://trusted.example.evil.example", "null"):
+        for origin in (
+            "https://evil.example", "https://trusted.example.evil.example",
+            "https://trusted.example?", "null",
+        ):
             response = client.get("/api/offline", headers={"Origin": origin})
             self.assertNotIn("Access-Control-Allow-Origin", response.headers)
             self.assertNotIn("Access-Control-Allow-Credentials", response.headers)

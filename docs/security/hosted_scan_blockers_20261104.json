@@ -6,6 +6,26 @@
     2095462381
   ],
   "codeql_python_and_javascript": "analysis_succeeded_not_a_claim_of_no_legacy_source_findings",
+  "credential_candidate_context_classification": {
+    "basis": "Repository paths and surrounding context only; candidate values are not retained.",
+    "category_counts": {
+      "config_placeholder": 6,
+      "generated_example_or_documentation": 56,
+      "identifier_or_digest": 41,
+      "likely_test_dummy": 168,
+      "unresolved_credential_risk": 50
+    },
+    "confirmed_live_or_active_from_repository_evidence": 0,
+    "external_owner_validation_required": true,
+    "scanner_type_counts": {
+      "Base64 High Entropy String": 8,
+      "Basic Auth Credentials": 30,
+      "Hex High Entropy String": 51,
+      "Private Key": 23,
+      "Secret Keyword": 209
+    },
+    "unreviewed_candidate_count": 321
+  },
   "container_advisories": [
     {
       "advisory_id": "CVE-2026-76642",

@@ -52,8 +52,14 @@ def build_triage(
             if name not in current_dependencies:
                 disposition = "not_installed_in_fresh_resolved_audit"
             else:
+                fresh_dependency = current_dependencies[name]
+                if "skip_reason" in fresh_dependency:
+                    raise ValueError("fresh_resolved_audit_skipped_dependency")
+                fresh_vulnerabilities = fresh_dependency.get("vulns")
+                if not isinstance(fresh_vulnerabilities, list):
+                    raise ValueError("fresh_resolved_audit_vulnerabilities_required")
                 current_ids = {
-                    identity for vulnerability in current_dependencies[name].get("vulns", [])
+                    identity for vulnerability in fresh_vulnerabilities
                     for identity in (vulnerability["id"], *vulnerability.get("aliases", []))
                 }
                 disposition = ("still_reported_by_fresh_resolved_audit" if current_ids.intersection(ids)
