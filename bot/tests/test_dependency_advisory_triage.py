@@ -67,6 +67,29 @@ class DependencyTriageTests(unittest.TestCase):
         self.assertEqual(residual["advisories"][0]["primary_advisory_id"], "PYSEC-2024-110")
         self.assertEqual(residual["advisories"][0]["severity"], "MODERATE")
 
+    def test_hosted_followup_preserves_candidates_without_secret_values_or_waivers(self) -> None:
+        path = Path(__file__).resolve().parents[2] / "docs/security/hosted_scan_blockers_20261104.json"
+        report = json.loads(path.read_text())
+        self.assertEqual(set(report["image_findings"]), {
+            "library/nija", "library/nija-api", "library/nija-dashboard", "library/nija-gateway",
+        })
+        rows = report["container_advisories"]
+        self.assertEqual(report["unique_package_advisory_rows"], len(rows))
+        self.assertEqual(report["unique_advisory_ids"], len({row["advisory_id"] for row in rows}))
+        self.assertTrue(all(set(row["images"]) <= set(report["image_findings"]) for row in rows))
+        self.assertTrue(all("requires" in row["disposition"] for row in rows))
+        candidates = report["credential_candidate_locations"]
+        self.assertEqual(report["legacy_credential_candidate_count"],
+                         sum(len(row["lines"]) for row in candidates))
+        self.assertTrue(all(set(row) == {"file", "type", "lines", "disposition"} for row in candidates))
+        unreviewed = sum(len(row["lines"]) for row in candidates
+                         if row["disposition"].startswith("unreviewed_"))
+        self.assertEqual(report["unreviewed_credential_candidate_count"], unreviewed)
+        reviewed = [row for row in candidates if not row["disposition"].startswith("unreviewed_")]
+        self.assertEqual(len(reviewed), 1)
+        self.assertEqual(reviewed[0]["file"], "tests/test_member_broker_http_api.py")
+        self.assertIn("public_dummy_fixture", reviewed[0]["disposition"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,6 +43,11 @@ ASGI access-policy regressions pass with the upgraded libraries.
 Flask-SocketIO 5.7.2 is paired with python-socketio 5.18.0: an in-process connection/event/acknowledgment
 regression exposed the old 5.3.6 session setter incompatibility with current
 Flask; the patched pair preserves threaded transport without changing handlers.
+Hosted image scanning additionally reported CVE-2026-114140 despite the PyPI
+audit not reporting it; nbconvert is patched to 7.17.2. The standalone service
+manifests also pin setuptools 84.1.0: hosted installed-environment auditing
+exposed three records in inherited setuptools 79.0.1. Fixing the inherited
+build tool is preferable to excluding it or weakening the audit.
 
 The unused direct `ecdsa` package was removed: no repository Python import/use
 was found, and the resolved dependency graph attributed it only to the direct
@@ -116,3 +121,43 @@ unavailable locally. Changed-file baseline-aware detect-secrets and workflow
 linting provide local checks; hosted CodeQL/secret/container jobs remain required.
 No advisory is dismissed, no independent approval is fabricated, and no
 production migration or live order was performed.
+
+## Hosted follow-up, not a clean release claim
+
+The review-head `ddad7f5c67055a2017e77a68edb5178008067d3b` produced successful
+main CI and Python/JavaScript CodeQL analyses. All four container scans
+successfully acquired the database from `mirror.gcr.io` and then failed on
+findings, confirming the acquisition repair and nonzero vulnerability gate.
+These results describe that head/its PR merge, not subsequent commits.
+
+`hosted_scan_blockers_20261104.json` preserves value-free metadata for the image
+findings and **322 credential candidates** in the full legacy scan: 321 remain
+unreviewed; one public dummy-only test fixture has a narrow inline annotation.
+Candidates are not confirmed leaks and have not been blanket-baselined. Their
+values are not retained. Authenticated owners must investigate genuine
+credentials and revoke/rotate any confirmed exposure; benign fixtures/digests
+need specific reviewed dispositions, not a global scan bypass.
+
+Image findings with no reported fixed version remain blocking, including
+OS/library and kernel-header advisories. A header finding does not prove that
+the container executes vulnerable kernel code, but this is not a waiver.
+Vendor fixes and deployment/host exposure review remain required. nbconvert's
+patch and the setuptools pins require fresh hosted confirmation.
+
+The enforced configuration scan exposed three PostgreSQL findings after Redis
+was hardened. PostgreSQL now uses Alpine's UID/GID 70, a read-only root,
+dropped capabilities and writable data/socket/temp mounts. A no-network,
+ephemeral Docker rehearsal initialized PostgreSQL and wrote/read a table under
+these restrictions; existing secrets/PVC/init-script bindings are preserved.
+
+Bandit's remaining three high/high-confidence hits were reviewed: two SHA-1
+uses produce stable grouping/client tags, not authentication. Marking those
+calls `usedforsecurity=False` preserves their exact digests. The fixed-literal
+terminal clear has a narrow explained B605 annotation. The full enforced local
+Bandit selection now passes. A stale member API test now requires both existing
+sanitized failure logs rather than assuming initialization is the last log;
+production error handling and secret redaction are unchanged.
+
+Independent Grype scanning now still runs after a Trivy finding when the image
+build succeeded, and raw SARIF is retained on failure. No image, legacy source
+or credential finding is declared resolved merely because a scanner executes.

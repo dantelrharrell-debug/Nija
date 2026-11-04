@@ -2027,7 +2027,7 @@
         "GHSA-xm59-rqc7-hhvf"
       ],
       "audited_version": "7.16.6",
-      "current_direct_pin": "7.17.1",
+      "current_direct_pin": "7.17.2",
       "disposition": "not_reported_by_fresh_resolved_audit",
       "exploitability": "specific_trigger_not_established",
       "package": "nbconvert",
@@ -2048,7 +2048,7 @@
         "GHSA-4c99-qj7h-p3vg"
       ],
       "audited_version": "7.16.6",
-      "current_direct_pin": "7.17.1",
+      "current_direct_pin": "7.17.2",
       "disposition": "not_reported_by_fresh_resolved_audit",
       "exploitability": "specific_trigger_not_established",
       "package": "nbconvert",
@@ -2069,7 +2069,7 @@
         "GHSA-7jqv-fw35-gmx9"
       ],
       "audited_version": "7.16.6",
-      "current_direct_pin": "7.17.1",
+      "current_direct_pin": "7.17.2",
       "disposition": "not_reported_by_fresh_resolved_audit",
       "exploitability": "specific_trigger_not_established",
       "package": "nbconvert",
@@ -3474,7 +3474,7 @@
   "affected_package_count": 27,
   "format": "nija-offline-dependency-triage-v1",
   "input_sha256": {
-    "fresh_resolved_audit_content_id": "88de0bb978a103b0655fda507616b9399eddd65e1dc3b407273626403f6e1cb3",
+    "fresh_resolved_audit_content_id": "56189f886f24d84e5b09359d6dfe5c1ff7bf9260a87758e5fa14c42f1c815c30",
     "github_severities_content_id": "83c9050159fb09a9f1b5d8e452ee3b61350ea36e8f05aa3ff6e7835e58c982af",
     "pip_audit_content_id": "60a53e20309f3e67beb53197d9239ea3da20c9299fc86551e7772e9f442b1e31"
   },

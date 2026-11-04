@@ -25,10 +25,14 @@ Engineering artifacts available for review:
   pip-audit and high-severity/high-confidence Bandit findings are not suppressed.
   Canary signing verifies the digest against the exact OIDC workflow identity
   and issuer; rollout references the scanned digest, not a mutable tag.
+  Hosted review-head scans confirmed successful trusted-mirror acquisition and
+  nonzero findings; subsequent heads still require their own evidence.
 - Full dependency triage and tested security updates across runtime, billing and
   member-credential manifests: see `security/dependency_remediation_20261104.md`.
   The resolved billing/member scans report no known vulnerabilities. The root
   scan still fails on one moderate model-library advisory; it is not waived.
+  PostgreSQL/Redis confinement preserves writable state, and independent image
+  scanners retain failure evidence instead of skipping after another finding.
 
 **External evidence and genuine owner approvals remain missing/unverified:**
 
@@ -44,6 +48,13 @@ Engineering artifacts available for review:
   enforce the relevant CI/security checks in branch protection. This session
   could read scanning results but could not read/change repository Actions
   permission settings. Reconcile the new alert inventory, not the stale 166 count.
+- [ ] Resolve remaining image/vendor findings and specifically disposition the
+  legacy credential-candidate inventory in
+  `security/hosted_scan_blockers_20261104.json`. These are open security work,
+  not missing trading authorization. Investigate/revoke any genuine exposed
+  credentials; do not blanket-baseline candidates or ignore unfixed findings.
+  Review-head CI and both CodeQL analyses passed, but security gates are not all
+  green and each subsequent release needs fresh exact-head/image results.
 - [ ] Independent human review authenticates the composition root and actual
   source objects, all thirteen provider IDs, account/key/IIBAN pins, nonce-owning
   canonical broker, Redis coverage/signature verifier and durable ledger path.

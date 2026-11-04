@@ -60,7 +60,7 @@ class FailureClusterEngine:
     @staticmethod
     def _path_hash(path: Sequence[str]) -> str:
         joined = "|".join(path) if path else "empty"
-        return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha1(joined.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
     @staticmethod
     def _is_nontrivial_rejection(trace: Dict[str, Any]) -> bool:

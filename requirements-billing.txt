@@ -6,3 +6,4 @@ SQLAlchemy==2.0.25
 psycopg2-binary==2.9.9
 stripe==7.11.0
 requests==2.33.0
+setuptools==84.1.0

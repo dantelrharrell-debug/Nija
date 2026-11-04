@@ -124,6 +124,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         guarddog = next(step for step in workflow["jobs"]["python-package-scan"]["steps"]
                         if "guarddog pypi" in step.get("run", ""))
         self.assertIn("guarddog pypi verify", guarddog["run"])
+        self.assertIn("steps.production-deps.outcome == 'success'", guarddog["if"])
         self.assertNotIn("continue-on-error", guarddog)
         self.assertNotIn("||", guarddog["run"])
 
@@ -141,6 +142,39 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("--appendonly", redis["args"])
         self.assertEqual(redis["volumeMounts"], [{"name": "redis-storage", "mountPath": "/data"}])
         self.assertEqual(pod["volumes"][0]["persistentVolumeClaim"]["claimName"], "redis-pvc")
+
+    def test_postgres_hardening_preserves_writable_state_and_socket_paths(self) -> None:
+        documents = yaml.safe_load_all((ROOT / "k8s/components/postgres/statefulset.yaml").read_text())
+        statefulset = next(doc for doc in documents if doc["kind"] == "StatefulSet")
+        pod = statefulset["spec"]["template"]["spec"]
+        self.assertEqual(pod["securityContext"]["runAsUser"], 70)
+        self.assertEqual(pod["securityContext"]["fsGroup"], 70)
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+        postgres = pod["containers"][0]
+        self.assertTrue(postgres["securityContext"]["readOnlyRootFilesystem"])
+        self.assertFalse(postgres["securityContext"]["allowPrivilegeEscalation"])
+        self.assertEqual(postgres["securityContext"]["capabilities"]["drop"], ["ALL"])
+        mounts = {mount["mountPath"]: mount["name"] for mount in postgres["volumeMounts"]}
+        self.assertEqual(mounts["/var/lib/postgresql/data"], "postgres-storage")
+        self.assertEqual(mounts["/var/run/postgresql"], "postgres-run")
+        self.assertEqual(mounts["/tmp"], "postgres-tmp")
+        volumes = {volume["name"]: volume for volume in pod["volumes"]}
+        self.assertEqual(volumes["postgres-run"]["emptyDir"], {})
+        self.assertEqual(volumes["postgres-tmp"]["emptyDir"], {})
+        self.assertEqual(statefulset["spec"]["volumeClaimTemplates"][0]["metadata"]["name"],
+                         "postgres-storage")
+
+    def test_image_findings_do_not_skip_independent_scanner_or_evidence(self) -> None:
+        workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
+        steps = workflow["jobs"]["docker-image-scan"]["steps"]
+        grype = next(step for step in steps if step.get("id") == "grype-scan")
+        self.assertIn("steps.build-image.outcome == 'success'", grype["if"])
+        self.assertIn("!cancelled()", grype["if"])
+        self.assertTrue(grype["with"]["fail-build"])
+        evidence = next(step for step in steps if step["name"] == "Retain raw container scan evidence")
+        self.assertIn("always()", evidence["if"])
+        self.assertIn("trivy-results-", evidence["with"]["path"])
+        self.assertIn("steps.grype-scan.outputs.sarif", evidence["with"]["path"])
 
 
 if __name__ == "__main__":
