@@ -1,0 +1,44 @@
+name: NIJA Trading IQ Challenge tests
+
+on:
+  pull_request:
+    paths:
+      - "web/trading-challenge/**"
+      - ".github/workflows/trading-iq-challenge.yml"
+  push:
+    branches:
+      - "feat/trading-iq-challenge-web-mvp"
+    paths:
+      - "web/trading-challenge/**"
+      - ".github/workflows/trading-iq-challenge.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  game-tests:
+    name: Game scoring and payment-boundary tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: web/trading-challenge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate JavaScript syntax
+        run: |
+          node --check public/app.js
+          node --check public/scenarios.js
+          node --check server/index.mjs
+          node --check server/scoring.mjs
+      - name: Test scoring and simulated checkout verification
+        run: npm test
+      - name: Ensure no live broker integrations are loaded
+        run: |
+          if grep -R -n -E "from .*bot/|require\(.*bot/|FORCE_TRADE=true|NIJA_DISABLE_WRITER_LOCK=true" public server; then
+            echo "Disallowed live-trading integration found"
+            exit 1
+          fi
