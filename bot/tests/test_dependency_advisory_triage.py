@@ -54,6 +54,14 @@ class DependencyTriageTests(unittest.TestCase):
             result = build_triage(audit, {"data": {}}, {}, resolved)
             self.assertEqual(result["advisories"][0]["disposition"], expected)
 
+    def test_skipped_fresh_dependency_is_not_reported_as_advisory_free(self) -> None:
+        audit = {"dependencies": [{"name": "example", "version": "1", "vulns": [
+            {"id": "PYSEC-example", "aliases": ["GHSA-example"], "fix_versions": ["2"]},
+        ]}]}
+        resolved = {"dependencies": [{"name": "example", "version": "2", "skip_reason": "not-supported"}]}
+        with self.assertRaisesRegex(ValueError, "fresh_resolved_audit_skipped_dependency"):
+            build_triage(audit, {"data": {}}, {}, resolved)
+
     def test_committed_inventory_covers_every_baseline_id_and_preserves_residual(self) -> None:
         root = Path(__file__).resolve().parents[2] / "docs/security"
         baseline = json.loads((root / "dependency_triage_20261104.json").read_text())

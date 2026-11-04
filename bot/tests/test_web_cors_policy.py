@@ -35,7 +35,8 @@ class WebCorsPolicyTests(unittest.TestCase):
     def test_wildcards_patterns_empty_and_non_origins_fail_closed(self) -> None:
         for value in ("*", "", "https://trusted.example,*", "https://*.example", "https://a.example,",
                       "https://a.example/path", "https://a.example?token=x", "https://u:p@a.example",
-                      "https://a.example#fragment", "https://a.example:bad", "file:///tmp/index.html",
+                      "https://a.example?", "https://a.example#fragment", "https://a.example:bad",
+                      "file:///tmp/index.html",
                       "https://a.example|https://evil.example", "https://a .example"):
             with self.subTest(value=value), patch.dict(os.environ, {"ALLOWED_ORIGINS": value}):
                 with self.assertRaises(ValueError):

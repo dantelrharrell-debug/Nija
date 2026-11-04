@@ -173,6 +173,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertTrue(grype["with"]["fail-build"])
         evidence = next(step for step in steps if step["name"] == "Retain raw container scan evidence")
         self.assertIn("always()", evidence["if"])
+        self.assertIn("||", evidence["if"])
+        self.assertIn("steps.grype-scan.outputs.sarif != ''", evidence["if"])
         self.assertIn("trivy-results-", evidence["with"]["path"])
         self.assertIn("steps.grype-scan.outputs.sarif", evidence["with"]["path"])
 
