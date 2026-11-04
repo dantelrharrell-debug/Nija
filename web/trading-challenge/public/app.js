@@ -164,8 +164,8 @@
       }
       window.location.assign(data.url);
     } catch (error) {
-      setPurchaseState();
       text("payment-message", error.message || "Payment setup failed. You can still play for free.");
+      setPurchaseState();
     }
   }
   function renderReport(result) {

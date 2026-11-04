@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 process.env.NODE_ENV = "test";
 process.env.PUBLIC_BASE_URL = "http://localhost:8787";
 process.env.STRIPE_SECRET_KEY = "sk_test_unit_not_real";
-const { server } = await import("../server/index.mjs");
+const { handle, server } = await import("../server/index.mjs");
 
 const realFetch = globalThis.fetch;
 let stripePaymentStatus = "unpaid";
@@ -35,6 +35,23 @@ const post = (body, requestOrigin = "http://localhost:8787", extraHeaders = {}) 
   headers: { "Content-Type": "application/json", Origin: requestOrigin, ...extraHeaders },
   body: JSON.stringify(body)
 });
+const postParsedBody = async (body) => {
+  let status;
+  let content;
+  const response = {
+    setHeader() {},
+    writeHead(code) { status = code; },
+    end(value) { content = value; }
+  };
+  await handle({
+    method: "POST",
+    url: "/api/checkout",
+    headers: { origin: "http://localhost:8787" },
+    socket: { remoteAddress: "192.0.2.50" },
+    body
+  }, response);
+  return { status, body: JSON.parse(content) };
+};
 
 test("static game loads with protective headers and does not expose paid report", async () => {
   const response = await realFetch(origin + "/");
@@ -62,6 +79,14 @@ test("checkout is for one dollar with no subscription and metadata choices", asy
   assert.equal(params.get("line_items[0][price_data][unit_amount]"), "100");
   assert.equal(params.get("metadata[answers]"), "2,2,1,0,1,1");
   assert.equal(params.get("metadata[version]"), "nija-trading-iq-v1");
+});
+test("checkout accepts parsed request bodies and retains the size limit", async () => {
+  const accepted = await postParsedBody({ version: "nija-trading-iq-v1", answers: [2,2,1,0,1,1] });
+  assert.equal(accepted.status, 200);
+  const oversized = await postParsedBody({
+    version: "nija-trading-iq-v1", answers: [2,2,1,0,1,1], extra: "x".repeat(4096)
+  });
+  assert.equal(oversized.status, 400);
 });
 test("checkout rate limits by Vercel's trusted client IP", async () => {
   process.env.VERCEL = "1";
