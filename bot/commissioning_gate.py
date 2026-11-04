@@ -351,9 +351,15 @@ class CommissioningGate(AccountOrderAdmission):
                     or not 0 < owned <= protected <= quantity
                     or not Decimal(0) < debit <= plan.maximum_cash_debit()):
                 raise AdmissionDenied("commissioning_execution_outside_approved_envelope")
-            conn.execute("""UPDATE commissioning_attempts SET state='POSTTRADE_VERIFIED',
-                broker_order_id=?,broker_event_at=? WHERE account_fingerprint=?""",
-                (evidence["broker_order_id"], event, plan.account_fingerprint))
+            updated = conn.execute("""UPDATE commissioning_attempts SET state='POSTTRADE_VERIFIED',
+                broker_order_id=?,broker_event_at=? WHERE account_fingerprint=?
+                AND (broker_order_id='' OR broker_order_id=?)
+                AND (broker_event_at IS NULL OR broker_event_at=?)""", (
+                    evidence["broker_order_id"], event, plan.account_fingerprint,
+                    evidence["broker_order_id"], event,
+                )).rowcount
+            if updated != 1:
+                raise AdmissionDenied("commissioning_execution_identity_changed")
             # Do not release account_entry_reservations here. The canonical
             # terminal reconciliation adapter must independently do that.
         logger.info("COMMISSIONING_POSTTRADE_VERIFIED fresh_execution=true broad_authority=false")
