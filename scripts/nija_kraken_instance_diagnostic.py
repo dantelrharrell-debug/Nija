@@ -213,7 +213,14 @@ def inspect_instance() -> dict:
                 process_instance = environment.get(b"RENDER_INSTANCE_ID", b"").decode("ascii")
                 if (environment.get(b"RENDER_SERVICE_ID") != SERVICE.encode()
                         or environment.get(b"RENDER_GIT_COMMIT") != commit.encode()
-                        or not render_instances_match(instance, process_instance)):
+                        or not render_instances_match(instance, process_instance)
+                        or len({
+                            value for value in (
+                                instance, process_instance,
+                                *(row["instance_id"] for row in result["processes"]),
+                            )
+                            if value != render_instance_label(value)
+                        }) > 1):
                     result["failures"].append("runtime_process_identity_conflict")
                     continue
                 if _process_start_ticks((process / "stat").read_text(), pid) != start_ticks:
