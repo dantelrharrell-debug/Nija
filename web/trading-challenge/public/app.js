@@ -8,6 +8,28 @@
   let selected = false;
   let verifiedReport = null;
   let pendingSessionId = null;
+  let checkoutReady = false;
+  const isNative = Boolean(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
+  async function checkCheckout() {
+    if (isNative) return;
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      checkoutReady = data.checkoutConfigured === true;
+    } catch {
+      checkoutReady = false;
+    }
+    if (!el("finish").classList.contains("hidden") && !pendingSessionId) setPurchaseState();
+  }
+  function setPurchaseState() {
+    const ready = !isNative && checkoutReady;
+    el("unlock").disabled = !ready;
+    el("unlock").textContent = ready ? "Unlock full report · $1.00 ↗" : "Personalized report · coming soon";
+    text("payment-message", isNative
+      ? "Native purchases require Apple or Google in-app billing. You can keep playing for free."
+      : ready ? "" : "Secure payment is being prepared. The free game remains available.");
+  }
   let virtualBalance = 10000;
   const cash = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
@@ -103,10 +125,7 @@
   }
   function finish() {
     text("free-summary", "You finished with " + cash(virtualBalance) + " in fictional capital. Short-term simulated P&L does not determine decision quality. Unlock the optional $1 analysis of risk, research, and discipline.");
-    const native = Boolean(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
-    el("unlock").disabled = native;
-    if (native) text("payment-message", "The $1 report requires Apple or Google in-app billing in a future native release. Continue practicing for free.");
-    else text("payment-message", "");
+    setPurchaseState();
     show("finish");
   }
   function start() {
@@ -124,6 +143,7 @@
   }
   async function pay() {
     if (pendingSessionId) return verifyPayment(pendingSessionId);
+    if (!checkoutReady || isNative) return;
     if (answers.length !== scenarios.length) return;
     text("payment-message", "");
     el("unlock").disabled = true;
@@ -140,8 +160,7 @@
       window.location.assign(data.url);
     } catch (error) {
       text("payment-message", error.message || "Payment setup failed. You can still play for free.");
-      el("unlock").disabled = false;
-      el("unlock").textContent = "Unlock full report · $1.00 ↗";
+      setPurchaseState();
     }
   }
   function renderReport(result) {
@@ -213,6 +232,7 @@
       show("finish");
     }
   }
+  checkCheckout();
   el("start").addEventListener("click", start);
   el("next").addEventListener("click", next);
   el("unlock").addEventListener("click", pay);
