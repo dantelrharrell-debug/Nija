@@ -154,6 +154,13 @@ dropped capabilities and writable data/socket/temp mounts. A no-network,
 ephemeral Docker rehearsal initialized PostgreSQL and wrote/read a table under
 these restrictions; existing secrets/PVC/init-script bindings are preserved.
 
+The final-commit scan also identified root-default security contexts on the API
+and founder-dashboard Kubernetes deployments. The follow-up hardens both with
+explicit non-root UIDs (matching the API image's `nija` UID), read-only roots,
+dropped capabilities, runtime-default seccomp and ephemeral `/tmp` mounts. The
+API startup entrypoint continues to run its existing database checks and
+migrations; this configuration has not been deployed.
+
 Bandit's remaining three high/high-confidence hits were reviewed: two SHA-1
 uses produce stable grouping/client tags, not authentication. Marking those
 calls `usedforsecurity=False` preserves their exact digests. The fixed-literal

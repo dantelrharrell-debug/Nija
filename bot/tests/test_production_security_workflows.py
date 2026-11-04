@@ -181,6 +181,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
         volumes = {volume["name"]: volume["emptyDir"] for volume in pod["volumes"]}
         self.assertEqual(volumes, {"dashboard-tmp": {}, "dashboard-logs": {}})
 
+    def test_api_hardening_matches_non_root_image_user_and_ephemeral_temp_storage(self) -> None:
+        documents = yaml.safe_load_all((ROOT / "k8s/components/api/deployment.yaml").read_text())
+        deployment = next(doc for doc in documents if doc["kind"] == "Deployment")
+        pod = deployment["spec"]["template"]["spec"]
+        self.assertIn("useradd -m -u 1000 nija", (ROOT / "Dockerfile.api").read_text())
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+        self.assertEqual(pod["securityContext"]["runAsUser"], 1000)
+        self.assertEqual(pod["securityContext"]["seccompProfile"]["type"], "RuntimeDefault")
+        api = pod["containers"][0]
+        self.assertTrue(api["securityContext"]["readOnlyRootFilesystem"])
+        self.assertFalse(api["securityContext"]["allowPrivilegeEscalation"])
+        self.assertTrue(api["securityContext"]["runAsNonRoot"])
+        self.assertEqual(api["securityContext"]["runAsUser"], 1000)
+        self.assertEqual(api["securityContext"]["capabilities"]["drop"], ["ALL"])
+        self.assertIn({"name": "PYTHONDONTWRITEBYTECODE", "value": "1"}, api["env"])
+        self.assertEqual(api["volumeMounts"], [{"name": "api-tmp", "mountPath": "/tmp"}])
+        self.assertEqual(pod["volumes"], [{"name": "api-tmp", "emptyDir": {}}])
+
     def test_image_findings_do_not_skip_independent_scanner_or_evidence(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
         steps = workflow["jobs"]["docker-image-scan"]["steps"]
