@@ -50,11 +50,20 @@ class ProductionReleaseManifestTests(unittest.TestCase):
             "bot.py": "pass\n",
             "start.sh": "#!/bin/sh\nexit 0\n",
         }
+        self.production_inputs = {
+            "auth/user_database.py": "database = 1\n",
+            "execution/broker_adapter.py": "adapter = 1\n",
+            "inject_git_metadata.sh": "#!/bin/sh\nexit 0\n",
+        }
         for name, raw in self.files.items():
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(raw, encoding="utf-8")
         self.base = self.commit()
+        for name, raw in self.production_inputs.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(raw, encoding="utf-8")
         (self.root / "bot/old_route.py").unlink()
         (self.root / "bot/new_route.py").write_text("route = 2\n", encoding="utf-8")
         (self.root / "scripts").mkdir()
@@ -103,7 +112,9 @@ class ProductionReleaseManifestTests(unittest.TestCase):
         self.assertEqual(manifest["source_commit"], self.source)
         self.assertEqual(manifest["base_commit"], self.base)
         self.assertEqual(manifest["deleted_files"], ["bot/old_route.py"])
-        expected = set(self.files) - {"bot/old_route.py"} | {"bot/new_route.py", "scripts/run_trivy_scan.sh"}
+        expected = (
+            set(self.files) | set(self.production_inputs) | {"bot/new_route.py", "scripts/run_trivy_scan.sh"}
+        ) - {"bot/old_route.py"}
         self.assertEqual(set(manifest["files_sha256"]), expected)
         for name, sha in manifest["files_sha256"].items():
             self.assertEqual(sha, hashlib.sha256((self.root / name).read_bytes()).hexdigest())
@@ -217,6 +228,30 @@ class ProductionReleaseManifestTests(unittest.TestCase):
                     create_manifest(self.root / "other.json", self.root, **self.bindings)
             (self.root / name).write_bytes(original)
         self.verify(digest)
+
+    def test_auth_execution_and_root_build_script_tampering_fails_closed(self) -> None:
+        digest = self.create()
+        for name in ("auth/user_database.py", "execution/broker_adapter.py", "inject_git_metadata.sh"):
+            original = (self.root / name).read_bytes()
+            (self.root / name).write_bytes(original + b"# changed\n")
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "uncommitted_production_changes"):
+                    self.verify(digest)
+                with self.assertRaisesRegex(ValueError, "uncommitted_production_changes"):
+                    create_manifest(self.root / "other.json", self.root, **self.bindings)
+            (self.root / name).write_bytes(original)
+        self.verify(digest)
+
+    def test_untracked_auth_execution_and_root_build_script_are_refused(self) -> None:
+        for name in ("auth/new_module.py", "execution/new_module.py", "new_build_step.sh"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# uncommitted production input\n", encoding="utf-8")
+            with self.subTest(name=name), self.assertRaisesRegex(
+                ValueError, "uncommitted_production_source",
+            ):
+                self.create()
+            path.unlink()
 
     def test_untracked_root_release_surface_is_refused(self) -> None:
         path = self.root / "Dockerfile.uncommitted"

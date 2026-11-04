@@ -77,9 +77,9 @@ def _source_path(value: str) -> bool:
     if "tests" in path.parts or path.name.startswith("test_"):
         return False
     if len(path.parts) == 1:
-        return path.suffix == ".py"
+        return path.suffix in {".py", ".sh"}
     return (
-        path.parts[0] in {"bot", "scripts"} and path.suffix == ".py"
+        path.parts[0] in {"auth", "bot", "execution", "scripts"} and path.suffix == ".py"
         or path.parts[0] == "scripts" and path.suffix == ".sh"
         or path.parts[0] == "k8s" and path.suffix in {".yaml", ".yml", ".json"}
     )
@@ -132,6 +132,7 @@ def _inventory(root: Path, source_commit: str, base_commit: str) -> tuple[dict[s
     # composition module could silently escape an apparently complete release.
     candidates = [
         *root.glob("bot/**/*.py"), *root.glob("scripts/**/*.py"), *root.glob("scripts/**/*.sh"),
+        *root.glob("auth/**/*.py"), *root.glob("execution/**/*.py"), *root.glob("*.sh"),
         *root.glob("requirements*.txt"), *root.glob(".github/workflows/**/*"),
         *root.glob("k8s/**/*.yaml"), *root.glob("k8s/**/*.yml"), *root.glob("k8s/**/*.json"),
         *root.glob("Dockerfile*"), *(root / name for name in ROOT_RELEASE_FILES),
