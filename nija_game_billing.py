@@ -199,7 +199,7 @@ def register_game_routes(app: Any) -> None:
 
     @app.get("/api/game/status")
     def game_status():
-        return jsonify({"checkout_available": enabled(), "price_usd": 1,
+        return jsonify({"checkout_available": enabled() and trusted_gateway(request.headers), "price_usd": 1,
                         "free_to_play": True, "billing": "one-time"})
 
     @app.post("/api/game/checkout")
