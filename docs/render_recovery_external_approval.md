@@ -158,6 +158,41 @@ pass this test.
 References: https://api-docs.render.com/reference/list-logs and
 https://render.com/docs/logging.
 
+## Process continuity and deployment approval are separate gates
+
+The inspector reports the stable Linux boot UUID, PID and raw `/proc/PID/stat`
+start ticks for each canonical process. The start timestamp comes from kernel
+`btime` and clock ticks, not repeated wall-clock-minus-uptime estimates. Process
+service, commit and instance environment must agree with the inspected target.
+The verifier takes a second SSH snapshot after log inspection and requires the
+same boot, process inventory, start ticks, configuration-presence booleans and
+instance identity. Derived start-time rounding is not used as process identity.
+Missing identities, PID reuse, restarts and boot changes block verification.
+
+Both service-qualified short IDs (`srv-d98dsr5aeets73fpbaqg-zsc58`) and full IDs containing the
+ReplicaSet component are supported. Bare suffixes and other services are not.
+Two different full IDs are conflicting even when their short suffix is equal;
+neither process continuity nor heartbeat correlation may silently collapse them.
+These checks prove continuity only across the bounded inspection, not which PID
+emitted a managed log event or future process survival.
+
+`approved_render_deployment_mismatch` is an independent critical dependency and
+blocks **before SSH**, even with corrected instance correlation. After the repair
+is merged and Render finishes deploying, the authenticated owner must repeat
+steps 3–5 above for the exact live commit and deployment ID, using a genuine new
+read-only authorization reference and the protected environment secret. Do not
+update Git to approve a deployment, auto-renew approval, change environment
+protections or treat the repair PR as authorization. Dispatch the protected
+workflow on the production release and retain its sanitized exact-commit result.
+
+Before registration or separately authorized live orders, validate every one of
+the 13 authoritative collector receipts through the existing attestation gate:
+complete source coverage, reviewed provider ownership, authenticated account
+scope, current timestamps and source-specific evidence must all pass. Offline
+fixtures, access success and registry composition are not production receipts.
+If any receipt is absent, stale, conflicting or unverifiable, keep registration
+and live-order authorization blocked; read-only approval cannot substitute for it.
+
 ## Prerequisites and limitations
 - Existing `RENDER_API_KEY` and
   `NIJA_RENDER_RECOVERY_SSH_PRIVATE_KEY` credentials must be configured by

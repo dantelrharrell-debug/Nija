@@ -118,6 +118,39 @@ def _read_regular(path: Path, limit: int, *, tail: bool = False) -> bytes:
         os.close(fd)
 
 
+def render_instance_label(instance: str) -> str:
+    """Normalize a service-qualified full or short Render instance ID."""
+    if not isinstance(instance, str):
+        raise ValueError("render_instance_identity_invalid")
+    prefix = SERVICE + "-"
+    suffix = instance[len(prefix):] if instance.startswith(prefix) else ""
+    if len(suffix) > 64 or not re.fullmatch(r"(?:[a-zA-Z0-9]+-)*[a-z0-9]{5}", suffix):
+        raise ValueError("render_instance_identity_invalid")
+    return prefix + suffix.rsplit("-", 1)[-1]
+
+
+def render_instances_match(first: str, second: str) -> bool:
+    """Accept short/full aliases, but never conflicting full instance IDs."""
+    try:
+        label = render_instance_label(first)
+        if label != render_instance_label(second):
+            return False
+        return first == second or first == label or second == label
+    except ValueError:
+        return False
+
+
+def _process_start_ticks(raw: str, pid: int) -> int:
+    """Read Linux stat field 22 without splitting a parenthesized command name."""
+    if int(raw.split("(", 1)[0].strip()) != pid:
+        raise ValueError("process_identity_changed")
+    fields = raw.rsplit(")", 1)[1].split()
+    ticks = int(fields[19])
+    if ticks <= 0:
+        raise ValueError("process_start_ticks_invalid")
+    return ticks
+
+
 def inspect_instance() -> dict:
     """Inspect the exact baseline instance without touching runtime authority."""
     if os.environ.get("RENDER_SERVICE_ID") != SERVICE:
@@ -135,12 +168,24 @@ def inspect_instance() -> dict:
         "processes": [], "log_signals": {}, "source_sha256": {}, "failures": [],
     }
     instance = os.environ.get("RENDER_INSTANCE_ID", "")
-    if re.fullmatch(r"[a-zA-Z0-9-]{1,100}", instance):
-        result["instance_id"] = instance
     try:
-        uptime = float(Path("/proc/uptime").read_text().split()[0])
-        boot = time.time() - uptime
+        render_instance_label(instance)
+        result["instance_id"] = instance
+    except ValueError:
+        result["failures"].append("runtime_instance_identity_invalid")
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot_id):
+            raise ValueError("boot_identity_invalid")
+        result["boot_id"] = boot_id
+        boot_rows = [line.split()[1] for line in Path("/proc/stat").read_text().splitlines()
+                     if line.startswith("btime ")]
+        if len(boot_rows) != 1:
+            raise ValueError("boot_time_unavailable")
+        boot = int(boot_rows[0])
         ticks = os.sysconf("SC_CLK_TCK")
+        if boot <= 0 or ticks <= 0:
+            raise ValueError("process_clock_invalid")
         for process in Path("/proc").iterdir():
             if not process.name.isdigit() or int(process.name) == os.getpid():
                 continue
@@ -151,8 +196,9 @@ def inspect_instance() -> dict:
                     b"canonical_runtime_launcher_v26.py",
                 } for arg in args):
                     continue
-                fields = (process / "stat").read_text().rsplit(")", 1)[1].split()
-                started = boot + int(fields[19]) / ticks
+                pid = int(process.name)
+                start_ticks = _process_start_ticks((process / "stat").read_text(), pid)
+                started = boot + start_ticks / ticks
                 environment = dict(
                     item.split(b"=", 1) for item in (process / "environ").read_bytes().split(b"\0")
                     if b"=" in item
@@ -164,7 +210,26 @@ def inspect_instance() -> dict:
                         "KRAKEN_API_KEY", "KRAKEN_API_SECRET", "REDIS_URL", "NIJA_REDIS_URL",
                     )
                 }
-                result["processes"].append({"started_at_epoch": started, "configured": presence})
+                process_instance = environment.get(b"RENDER_INSTANCE_ID", b"").decode("ascii")
+                if (environment.get(b"RENDER_SERVICE_ID") != SERVICE.encode()
+                        or environment.get(b"RENDER_GIT_COMMIT") != commit.encode()
+                        or not render_instances_match(instance, process_instance)
+                        or len({
+                            value for value in (
+                                instance, process_instance,
+                                *(row["instance_id"] for row in result["processes"]),
+                            )
+                            if value != render_instance_label(value)
+                        }) > 1):
+                    result["failures"].append("runtime_process_identity_conflict")
+                    continue
+                if _process_start_ticks((process / "stat").read_text(), pid) != start_ticks:
+                    result["failures"].append("runtime_process_identity_conflict")
+                    continue
+                result["processes"].append({
+                    "pid": pid, "start_ticks": start_ticks, "instance_id": process_instance,
+                    "started_at_epoch": started, "configured": presence,
+                })
             except (OSError, ValueError, IndexError):
                 result["failures"].append("runtime_process_inspection_failed")
     except (OSError, ValueError):
@@ -193,6 +258,11 @@ def inspect_instance() -> dict:
             ).hexdigest()
         except (OSError, ValueError):
             result["failures"].append("runtime_source_read_failed")
+    try:
+        if Path("/proc/sys/kernel/random/boot_id").read_text().strip() != result.get("boot_id"):
+            result["failures"].append("runtime_boot_identity_changed")
+    except OSError:
+        result["failures"].append("runtime_boot_identity_unavailable")
     return result
 
 
@@ -248,7 +318,9 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
                 or result["deployment_id"] != os.environ.get("NIJA_APPROVED_RENDER_DEPLOYMENT_ID")
                 or not result["release_branch_verified"]):
             raise ValueError("approved_deployment_mismatch")
-        if not re.fullmatch(r"[a-zA-Z0-9-]{1,100}", instance):
+        try:
+            render_instance_label(instance)
+        except ValueError:
             result["failures"].append("current_instance_identity_unavailable")
             return result
         owner = service.get("ownerId")
@@ -257,6 +329,7 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
         counts: Counter[str] = Counter()
         seen: set[str] = set()
         observed_instances: set[str] = set()
+        matching_full_instances: set[str] = set()
         result["log_rows_returned"] = 0
         # Fixed searches bound response size and avoid unrelated customer logs.
         for text in (
@@ -294,8 +367,12 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
                 observed_instance = identifiers[0]
                 if re.fullmatch(r"[a-zA-Z0-9-]{5,100}", observed_instance):
                     observed_instances.add(observed_instance)
-                if observed_instance not in {instance, SERVICE + "-" + instance.rsplit("-", 1)[-1]}:
+                if not render_instances_match(instance, observed_instance):
                     continue
+                if observed_instance != render_instance_label(observed_instance):
+                    matching_full_instances.add(observed_instance)
+                    if len(matching_full_instances) > 1:
+                        raise ValueError("render_log_instance_conflict")
                 identity = hashlib.sha256((stamp + "\0" + message).encode()).hexdigest()
                 if identity in seen:
                     continue
