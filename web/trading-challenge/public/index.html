@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#050505">
+  <meta name="description" content="Play NIJA Trading IQ: a free, interactive fictional-market challenge. Optional $1 personalized educational results. No real trades.">
+  <meta name="referrer" content="no-referrer">
+  <title>NIJA Trading IQ | Free Trading Challenge</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to challenge</a>
+  <div class="ambient" aria-hidden="true"></div>
+  <header class="header">
+    <a class="wordmark" href="https://nijaaitrading.com" aria-label="NIJA AI Trading home"><span class="brand-symbol">◈</span> NIJA <span class="brand-small">AI TRADING</span></a>
+    <span class="header-tag"><span class="dot"></span> SIMULATION ONLY</span>
+  </header>
+  <main id="main" class="shell">
+    <div class="topline"><span class="eyebrow">THE NIJA EXPERIENCE</span><span class="pill">01 / CHALLENGE SERIES</span></div>
+    <section id="intro" class="intro" aria-labelledby="hero-title">
+      <div class="intro-copy">
+        <div class="tiny-mark">TRADING IQ <span>•</span> FREE TO PLAY</div>
+        <h1 id="hero-title">The market moves.<br><em>How will you?</em></h1>
+        <p class="lede">Six rapid-fire market dilemmas. One virtual portfolio. Find out how you respond when risk, emotion, and opportunity collide.</p>
+        <div class="hero-actions"><button class="primary" id="start" type="button">Start the free challenge <span aria-hidden="true">↗</span></button><span class="microcopy">No signup. No real money. About 4 minutes.</span></div>
+        <div class="metrics"><div><strong>6</strong><span>MARKET MOMENTS</span></div><div><strong>$10K</strong><span>VIRTUAL CAPITAL</span></div><div><strong>$1</strong><span>OPTIONAL FULL REPORT</span></div></div>
+      </div>
+      <div class="preview-window" aria-hidden="true"><div class="chart-head"><span>NIJA / SIMULATED INDEX</span><span class="live-mark">● PRACTICE</span></div><div class="preview-value">10,000.00 <small>VIRTUAL USD</small></div><svg class="hero-chart" viewBox="0 0 500 240" preserveAspectRatio="none"><defs><linearGradient id="a" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#d4af37" stop-opacity=".28"/><stop offset="1" stop-color="#d4af37" stop-opacity="0"/></linearGradient></defs><path d="M0 180 L40 148 L80 171 L120 111 L160 130 L200 91 L240 122 L280 80 L320 98 L360 50 L400 70 L440 32 L500 45 L500 240 L0 240 Z" fill="url(#a)"/><path d="M0 180 L40 148 L80 171 L120 111 L160 130 L200 91 L240 122 L280 80 L320 98 L360 50 L400 70 L440 32 L500 45" fill="none" stroke="#f4d06f" stroke-width="3"/></svg><div class="chart-footer"><span>MARKET SIGNAL</span><strong>DECISION PENDING</strong></div></div>
+    </section>
+    <section id="play" class="play hidden" aria-labelledby="round-title">
+      <div class="progress-line"><span id="round-counter">ROUND 1 OF 6</span><span id="streak">DISCIPLINE STREAK 0</span></div>
+      <div class="meter"><div id="progress-bar" class="meter-fill"></div></div>
+      <div class="game-grid">
+        <div class="market-panel"><div class="panel-top"><span id="round-tag" class="eyebrow"></span><span>FICTIONAL MARKET</span></div><h2 id="round-title"></h2><p id="round-caption" class="subcopy"></p><div class="market-bar"><span id="headline"></span></div><svg id="chart" viewBox="0 0 640 240" role="img" aria-label="Illustrative fictional price movement"></svg><div class="market-note"><span>◉ SIMULATED CHART</span><span>Not live market data</span></div></div>
+        <div class="choices-panel"><div class="step-label">YOUR DECISION</div><h3 id="question"></h3><div id="options" class="options"></div><div id="feedback" class="feedback hidden" role="status" aria-live="polite"></div><button id="next" class="primary next hidden" type="button">Next market moment <span aria-hidden="true">→</span></button></div>
+      </div>
+    </section>
+    <section id="finish" class="finish hidden" aria-labelledby="finish-title">
+      <div class="finish-mark" aria-hidden="true">✦</div><span class="eyebrow">CHALLENGE COMPLETE</span><h2 id="finish-title">You made the calls.<br><em>Now learn from them.</em></h2><p id="free-summary" class="lede"></p>
+      <div class="report-preview"><div class="report-heading"><span>NIJA PERSONALIZED TRADING IQ REPORT</span><span class="report-lock">◈ OPTIONAL UNLOCK</span></div><div class="locked-score">??<small>/100</small></div><div class="blur-lines"><span></span><span></span><span></span></div><p>Get your score, risk breakdown, six decision reviews, and your next learning step.</p></div>
+      <div class="finish-actions"><button id="unlock" class="primary" type="button">Unlock full report · $1.00 <span aria-hidden="true">↗</span></button><button id="replay" class="secondary" type="button">Play again for free</button></div><p class="billing-note">One-time purchase. No subscription. The free game is always available. Web checkout uses Stripe; in-app purchases are not yet available.</p><p id="payment-message" class="error" role="alert" aria-live="polite"></p>
+    </section>
+    <section id="report" class="report hidden" aria-labelledby="report-title"><span class="eyebrow">YOUR PERSONALIZED RESULTS</span><h2 id="report-title">Your Trading IQ report</h2><div id="report-content"></div><button id="report-replay" class="secondary" type="button">Try the challenge again</button></section>
+    <section id="loading" class="loading hidden" role="status" aria-live="polite"><div class="loader"></div><p>Checking your purchase securely…</p></section>
+    <footer><p>NIJA AI Trading LLC · Educational game only. All assets, prices and outcomes are fictional. No brokerage access, real orders, prizes, or investment advice.</p><nav aria-label="Footer"><a href="https://nijaaitrading.com">NIJA Home</a><a href="https://nijaaitrading.com/privacy-policy">Privacy</a><a href="https://nijaaitrading.com/terms-of-service">Terms</a></nav></footer>
+  </main>
+  <script src="/scenarios.js"></script>
+  <script src="/app.js" defer></script>
+</body>
+</html>
