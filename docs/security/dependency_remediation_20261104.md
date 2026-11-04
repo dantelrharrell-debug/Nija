@@ -161,6 +161,14 @@ dropped capabilities, runtime-default seccomp and ephemeral `/tmp` mounts. The
 API startup entrypoint continues to run its existing database checks and
 migrations; this configuration has not been deployed.
 
+The image policy scan also flagged dashboard images running as root and
+unnecessary apt recommendations. The founder and read-only realtime dashboards
+now use UID 10001, with the founder's existing log path kept writable; gateway
+apt installation omits recommendations. The API gateway's non-root conversion
+remains blocked on an owner decision: its auth SQLite database defaults to a
+relative path under `/app`, so the durable writable data path must be approved
+before changing its runtime identity.
+
 Bandit's remaining three high/high-confidence hits were reviewed: two SHA-1
 uses produce stable grouping/client tags, not authentication. Marking those
 calls `usedforsecurity=False` preserves their exact digests. The fixed-literal

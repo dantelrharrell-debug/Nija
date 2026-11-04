@@ -199,6 +199,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(api["volumeMounts"], [{"name": "api-tmp", "mountPath": "/tmp"}])
         self.assertEqual(pod["volumes"], [{"name": "api-tmp", "emptyDir": {}}])
 
+    def test_dashboard_images_use_non_root_users_and_required_writable_paths(self) -> None:
+        dashboard = (ROOT / "Dockerfile.dashboard").read_text()
+        self.assertIn("USER dashboard", dashboard)
+        self.assertIn("--no-install-recommends", dashboard)
+        self.assertIn("chown dashboard:dashboard /app/logs", dashboard)
+        realtime = (ROOT / "Dockerfile.realtime-dashboard").read_text()
+        self.assertIn("USER dashboard", realtime)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", realtime)
+        gateway = (ROOT / "Dockerfile.gateway").read_text()
+        self.assertIn("--no-install-recommends", gateway)
+
     def test_image_findings_do_not_skip_independent_scanner_or_evidence(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
         steps = workflow["jobs"]["docker-image-scan"]["steps"]
