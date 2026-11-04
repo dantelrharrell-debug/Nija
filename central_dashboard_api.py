@@ -53,7 +53,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend access
+CORS(app, allow_private_network=False)  # Enable CORS for frontend access
 
 # Global state
 _dashboard_state = {

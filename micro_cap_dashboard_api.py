@@ -381,7 +381,7 @@ def create_app() -> Flask:
         Configured Flask application
     """
     app = Flask(__name__)
-    CORS(app)
+    CORS(app, allow_private_network=False)
     
     # Initialize dashboard API
     dashboard_api = MicroCapDashboardAPI()

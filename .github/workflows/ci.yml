@@ -152,7 +152,17 @@ jobs:
           COINBASE_API_SECRET: ""
           COINBASE_PEM_CONTENT: ""
         run: |
+          if ! command -v redis-server >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends redis-server
+          fi
+          redis-server --version
           python -m pytest -q \
+            bot/tests/test_production_security_workflows.py \
+            bot/tests/test_web_cors_policy.py \
+            bot/tests/test_dependency_advisory_triage.py \
+            bot/tests/test_production_release_manifest.py \
+            bot/tests/test_kraken_evidence_composition.py \
             tests/test_kraken_authenticated_identity_v480.py \
             tests/test_kraken_identity_read_timing.py \
             tests/test_kraken_identity_request_recovery_v491.py \

@@ -362,7 +362,7 @@ if __name__ == "__main__":
     
     # Create Flask app
     app = Flask(__name__)
-    CORS(app)
+    CORS(app, allow_private_network=False)
     
     # Register routes
     register_command_center_routes(app)

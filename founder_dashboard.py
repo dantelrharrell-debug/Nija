@@ -401,7 +401,7 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> Flask:
         Configured Flask application
     """
     app = Flask(__name__)
-    CORS(app)
+    CORS(app, allow_private_network=False)
 
     # Initialize infrastructure
     setup_centralized_logging(log_level='INFO', enable_aggregator=True)

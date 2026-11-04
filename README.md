@@ -9,6 +9,12 @@ POSTTRADE_VERIFIED. Production activation and dispatch guards remain unchanged;
 independent integration/deployment approval and exact live-order approval are
 still required. No live trade or deployment is authorized by this proposal.
 
+The [single commissioning checklist](docs/production_commissioning_checklist.md)
+tracks the implemented evidence-provider composition, security remediation,
+release/backup/rollback package and exact remaining authenticated evidence and
+owner approvals. Production registration and activation remain disabled; the
+remaining moderate model-library advisory is not waived.
+
 ## Recovery milestone — October 21, 2026 (Pacific)
 
 **Deployed recovery progress is confirmed. Live trading authorization remains incomplete.** This dated checkpoint supersedes earlier status summaries below; retain those sections as incident history.

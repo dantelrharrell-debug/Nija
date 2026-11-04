@@ -544,6 +544,7 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     ]
     CORS(
         app,
+        allow_private_network=False,
         resources={
             r"/api/billing/verify": {"origins": allowed_origins, "methods": ["GET"]},
             r"/api/billing/checkout": {"origins": allowed_origins, "methods": ["POST"]},

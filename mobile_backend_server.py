@@ -26,6 +26,7 @@ from pricing_api import pricing_api
 from stripe_billing_api import stripe_billing_api
 from justcall_api import justcall_api
 from commercial_pricing_runtime_patch import install_commercial_pricing_runtime_patch
+from web_cors_policy import allowed_web_origins
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,14 +36,7 @@ logger = logging.getLogger(__name__)
 
 app = base_app
 
-_DEFAULT_ORIGINS = "https://nijaaitrading.com,https://www.nijaaitrading.com"
-_allowed_origins = [
-    origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
-    if origin.strip()
-]
-if "*" in _allowed_origins:
-    logger.warning("Wildcard mobile CORS is enabled; production should use explicit origins")
+_allowed_origins = allowed_web_origins()
 
 socketio = SocketIO(
     app,
@@ -54,6 +48,7 @@ socketio = SocketIO(
 
 CORS(
     app,
+    allow_private_network=False,
     resources={
         r"/api/*": {
             "origins": _allowed_origins,

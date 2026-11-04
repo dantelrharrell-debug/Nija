@@ -93,32 +93,40 @@ jobs:
 
       - name: Install checksum-pinned Trivy
         run: bash scripts/install_pinned_trivy.sh
-        continue-on-error: true
 
       - name: Scan the canary image with Trivy
         run: |
-          trivy image \
+          bash scripts/run_trivy_scan.sh image \
             --format sarif \
             --output trivy-results.sarif \
             --severity CRITICAL,HIGH \
-            "${{ steps.primary-tag.outputs.image }}"
-        continue-on-error: true
+            "${{ steps.primary-tag.outputs.image }}@${{ steps.build.outputs.digest }}"
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
         with:
           sarif_file: 'trivy-results.sarif'
-        continue-on-error: true
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
       - name: Sign container image
         run: |
-          cosign sign --yes "${{ steps.primary-tag.outputs.image }}@${{ steps.build.outputs.digest }}"
-        env:
-          COSIGN_EXPERIMENTAL: 1
+          set -euo pipefail
+          image="${{ steps.primary-tag.outputs.image }}@${{ steps.build.outputs.digest }}"
+          cosign sign --yes "$image"
+          cosign verify \
+            --certificate-identity "https://github.com/${{ github.workflow_ref }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$image" > cosign-verification.json
+
+      - name: Retain release signature verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-signature-${{ github.sha }}
+          path: cosign-verification.json
+          if-no-files-found: error
 
   deploy-canary:
     name: Deploy Canary
@@ -153,7 +161,7 @@ jobs:
         id: deploy
         run: |
           set -euo pipefail
-          export CANARY_IMAGE="${{ needs.build-and-scan.outputs.image-tag }}"
+          export CANARY_IMAGE="${{ needs.build-and-scan.outputs.image-tag }}@${{ needs.build-and-scan.outputs.image-digest }}"
           export CANARY_PERCENTAGE="${{ github.event.inputs.canary_percentage || '10' }}"
           envsubst < k8s/canary/deployment-canary.yaml | kubectl apply -f -
           envsubst < k8s/canary/traffic-split.yaml | kubectl apply -f -
@@ -274,7 +282,7 @@ jobs:
         run: |
           set -euo pipefail
           kubectl set image deployment/nija-stable \
-            nija=${{ needs.build-and-scan.outputs.image-tag }} \
+            nija=${{ needs.build-and-scan.outputs.image-tag }}@${{ needs.build-and-scan.outputs.image-digest }} \
             -n nija
           kubectl rollout status deployment/nija-stable -n nija --timeout=5m
           kubectl delete deployment nija-canary -n nija --ignore-not-found=true

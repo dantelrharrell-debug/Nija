@@ -44,6 +44,7 @@ jobs:
         fi
 
     - name: Build Docker image
+      id: build-image
       env:
         GH_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
@@ -58,42 +59,42 @@ jobs:
 
     - name: Run Trivy vulnerability scanner
       run: |
-        trivy image \
+        bash scripts/run_trivy_scan.sh image \
           --format sarif \
           --output "trivy-results-${{ matrix.dockerfile }}.sarif" \
           --severity CRITICAL,HIGH \
-          --exit-code 0 \
           "${{ steps.image-name.outputs.image }}"
 
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
-      if: success()
+      if: ${{ always() && hashFiles(format('trivy-results-{0}.sarif', matrix.dockerfile)) != '' }}
       with:
         sarif_file: 'trivy-results-${{ matrix.dockerfile }}.sarif'
         category: 'trivy-${{ matrix.dockerfile }}'
 
     - name: Run Trivy vulnerability scanner (table format)
+      if: ${{ !cancelled() && steps.build-image.outcome == 'success' }}
       run: |
-        trivy image \
+        bash scripts/run_trivy_scan.sh image \
           --format table \
-          --severity CRITICAL,HIGH,MEDIUM \
-          --exit-code 0 \
+          --severity CRITICAL,HIGH \
           "${{ steps.image-name.outputs.image }}"
 
     # Refresh the Grype scanner: v3 bundled an obsolete 0.74.4 release whose
     # stale vulnerability database caused scans to error. Keep DB age checks on.
     - name: Run Grype vulnerability scanner
+      if: ${{ !cancelled() && steps.build-image.outcome == 'success' }}
       uses: anchore/scan-action@v7.4.0
       id: grype-scan
       with:
         image: ${{ steps.image-name.outputs.image }}
-        fail-build: false
+        fail-build: true
         severity-cutoff: high
         cache-db: false
 
-    # An operational scanner failure or missing/malformed SARIF is a hard error.
-    # Known vulnerabilities remain reportable, per the existing fail-build policy.
+    # Operational failures and HIGH/CRITICAL findings are both hard errors.
     - name: Validate Grype scan output
+      if: always() && steps.grype-scan.outputs.sarif != ''
       env:
         GRYPE_SARIF: ${{ steps.grype-scan.outputs.sarif }}
       run: |
@@ -103,52 +104,67 @@ jobs:
 
     - name: Upload Grype scan results
       uses: github/codeql-action/upload-sarif@v3
+      if: always() && steps.grype-scan.outputs.sarif != ''
       with:
         sarif_file: ${{ steps.grype-scan.outputs.sarif }}
         category: 'grype-${{ matrix.dockerfile }}'
 
+    - name: Retain raw container scan evidence
+      uses: actions/upload-artifact@v4
+      if: ${{ always() && (hashFiles(format('trivy-results-{0}.sarif', matrix.dockerfile)) != '' || steps.grype-scan.outputs.sarif != '') }}
+      with:
+        name: container-scan-${{ matrix.dockerfile }}
+        path: |
+          trivy-results-${{ matrix.dockerfile }}.sarif
+          ${{ steps.grype-scan.outputs.sarif }}
+
   python-package-scan:
     name: Python Package Security Scan
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        requirements: [requirements.txt, requirements-billing.txt, requirements-member-broker.txt]
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
     - name: Install dependencies
+      id: production-deps
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install -r "${{ matrix.requirements }}"
 
     - name: Run pip-audit for vulnerability scanning
       run: |
-        pip install pip-audit
-        pip-audit --desc --output pip-audit-report.json --format json || true
-        pip-audit --desc || echo "::warning::Vulnerabilities found in Python packages"
+        pip install pip-audit==2.10.1
+        pip-audit --desc --output pip-audit-report.json --format json
 
     - name: Upload pip-audit report
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: pip-audit-report
+        name: pip-audit-report-${{ matrix.requirements }}
         path: pip-audit-report.json
 
     - name: Scan for malicious packages with PyPI Guardian
+      if: ${{ !cancelled() && steps.production-deps.outcome == 'success' }}
       run: |
+        set -euo pipefail
         pip install guarddog
-        guarddog pypi scan requirements.txt --output-format json --exit-non-zero-on-finding 2>&1 | tee guarddog-report.json || echo "::warning::Suspicious packages detected"
-      continue-on-error: true
+        guarddog pypi verify "${{ matrix.requirements }}" --output-format json --exit-non-zero-on-finding > guarddog-report.json
 
     - name: Upload GuardDog report
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: guarddog-report
+        name: guarddog-report-${{ matrix.requirements }}
         path: guarddog-report.json
 
   build-artifact-scan:
@@ -160,7 +176,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -213,7 +229,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
