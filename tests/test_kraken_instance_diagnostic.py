@@ -15,6 +15,7 @@ from unittest.mock import patch
 from scripts.nija_kraken_instance_diagnostic import (
     SERVICE, RELEASE_BRANCH, IDENTITY_REQUEST, _read_regular, classify_log, identity_probe,
     inspect_instance, inspect_render_api, report_succeeded,
+    _process_start_ticks, render_instance_label, render_instances_match,
 )
 
 BASELINE = "a" * 40
@@ -63,6 +64,106 @@ class InstanceDiagnosticTests(unittest.TestCase):
             with patch.dict("os.environ", environment, clear=True), patch.object(Path, "iterdir") as scan:
                 self.assertEqual(inspect_instance()["reason"], reason)
                 scan.assert_not_called()
+
+    def test_service_qualified_full_short_ids_and_conflicts(self) -> None:
+        short = SERVICE + "-zsc58"
+        full = SERVICE + "-7d458c8976-zsc58"
+        for value in (short, full):
+            self.assertEqual(render_instance_label(value), short)
+            self.assertTrue(render_instances_match(value, short))
+            self.assertTrue(render_instances_match(value, full))
+        self.assertFalse(render_instances_match(full, SERVICE + "-different-zsc58"))
+        for invalid in (None, "", "zsc58", "srv-other-zsc58", SERVICE + "-xyz98-extra6"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                render_instance_label(invalid)
+            self.assertFalse(render_instances_match(full, invalid))
+
+    def test_stat_start_ticks_use_field_22_and_validate_pid(self) -> None:
+        raw = "101 (python command ) with spaces) S " + "0 " * 18 + "12345 0"
+        self.assertEqual(_process_start_ticks(raw, 101), 12345)
+        for invalid in (raw.replace("101 ", "102 ", 1), raw.replace("12345", "0"), "101 (python) S"):
+            with self.subTest(raw=invalid), self.assertRaises((ValueError, IndexError)):
+                _process_start_ticks(invalid, 101)
+
+    def _inspect_synthetic_process(self, *, clock=1700000200, process_environment=None,
+                                   restart=False, boot_changed=False) -> dict:
+        """Inspect synthetic procfs without accessing production or broker clients."""
+        instance = SERVICE + "-7d458c8976-zsc58"
+        environment = {
+            "RENDER_SERVICE_ID": SERVICE, "RENDER_GIT_COMMIT": BASELINE,
+            "RENDER_INSTANCE_ID": instance,
+        }
+        child = environment if process_environment is None else process_environment
+        encoded = b"\0".join(key.encode() + b"=" + value.encode() for key, value in child.items())
+        reads = {"stat": 0, "boot": 0}
+
+        def read_text(path, *args, **kwargs):
+            if str(path) == "/proc/sys/kernel/random/boot_id":
+                reads["boot"] += 1
+                return ("87654321" if boot_changed and reads["boot"] > 1 else "12345678") + (
+                    "-1234-1234-1234-123456789abc\n"
+                )
+            if str(path) == "/proc/stat":
+                return "cpu 0 0\nbtime 1700000000\n"
+            if str(path) == "/proc/101/stat":
+                reads["stat"] += 1
+                ticks = 12346 if restart and reads["stat"] > 1 else 12345
+                return "101 (python command) S " + "0 " * 18 + str(ticks) + " 0"
+            raise AssertionError("unexpected synthetic read: " + str(path))
+
+        def read_bytes(path):
+            if path.name == "cmdline":
+                return b"python\0/app/main.py\0"
+            if path.name == "environ":
+                return encoded
+            raise AssertionError("unexpected synthetic read: " + str(path))
+
+        def regular(path, limit, **kwargs):
+            if str(path).endswith(("nija.log", "nija.log.1")):
+                raise FileNotFoundError()
+            return b"synthetic-source"
+
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+            Path, "iterdir", return_value=iter([Path("/proc/101")]),
+        ), patch.object(Path, "read_text", read_text), patch.object(
+            Path, "read_bytes", read_bytes,
+        ), patch("os.getpid", return_value=999), patch("os.sysconf", return_value=100), patch(
+            "time.time", return_value=clock,
+        ), patch("scripts.nija_kraken_instance_diagnostic._read_regular", side_effect=regular):
+            return inspect_instance()
+
+    def test_inspector_reports_stable_boot_and_raw_ticks_without_uptime_drift(self) -> None:
+        before = self._inspect_synthetic_process()
+        after = self._inspect_synthetic_process(clock=1700000210)
+        self.assertEqual(before["boot_id"], "12345678-1234-1234-1234-123456789abc")
+        self.assertEqual(before["boot_id"], after["boot_id"])
+        self.assertEqual(before["processes"], after["processes"])
+        self.assertEqual(before["processes"][0]["pid"], 101)
+        self.assertEqual(before["processes"][0]["start_ticks"], 12345)
+        self.assertEqual(before["processes"][0]["started_at_epoch"], 1700000123.45)
+
+    def test_inspector_rejects_conflicting_process_service_commit_or_instance(self) -> None:
+        environment = {
+            "RENDER_SERVICE_ID": SERVICE, "RENDER_GIT_COMMIT": BASELINE,
+            "RENDER_INSTANCE_ID": SERVICE + "-7d458c8976-zsc58",
+        }
+        for field, value in (
+            ("RENDER_SERVICE_ID", "srv-other"), ("RENDER_GIT_COMMIT", "b" * 40),
+            ("RENDER_INSTANCE_ID", SERVICE + "-different-zsc58"),
+            ("RENDER_INSTANCE_ID", ""),
+        ):
+            with self.subTest(field=field, value=value):
+                report = self._inspect_synthetic_process(process_environment={**environment, field: value})
+                self.assertIn("runtime_process_identity_conflict", report["failures"])
+                self.assertEqual(report["processes"], [])
+                self.assertFalse(report["allow_new_orders"])
+
+    def test_inspector_rejects_pid_reuse_and_boot_change_during_scan(self) -> None:
+        restart = self._inspect_synthetic_process(restart=True)
+        self.assertIn("runtime_process_identity_conflict", restart["failures"])
+        self.assertEqual(restart["processes"], [])
+        changed = self._inspect_synthetic_process(boot_changed=True)
+        self.assertIn("runtime_boot_identity_changed", changed["failures"])
 
     def test_api_missing_authorization_never_requests(self) -> None:
         for environment, reason in (({}, "render_api_credential_unavailable"),):

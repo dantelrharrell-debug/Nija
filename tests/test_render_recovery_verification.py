@@ -16,11 +16,13 @@ from scripts.nija_render_recovery_verification import (
     MANIFEST, OUTCOMES, RELEASE_BRANCH, SERVICE, SOURCE_PATHS, VerificationDenied,
     _command, _read_ssh_report, _read_render_instance_logs,
     _verify_render_instance_app_logs, load_reviewed_approval, run_verification,
-    verify_baseline, verify_runtime,
+    verify_baseline, verify_runtime, verify_process_continuity,
 )
 
 PIN = "a" * 40
 REF = "refs/heads/" + RELEASE_BRANCH
+BOOT_ID = "12345678-1234-1234-1234-123456789abc"
+INSTANCE = SERVICE + "-7d458c8976-zsc58"
 
 
 class RecoveryVerificationTests(unittest.TestCase):
@@ -40,8 +42,13 @@ class RecoveryVerificationTests(unittest.TestCase):
         }
         self.runtime = {
             "status": "DIAGNOSTIC_ONLY", "service_id": SERVICE, "failures": [],
-            "commit": PIN, "observed_at_epoch": time.time(), "processes": [{"started_at_epoch": time.time()}],
-            "instance_id": "synthetic-instance", "broker_requests": False,
+            "commit": PIN, "observed_at_epoch": time.time(),
+            "boot_id": BOOT_ID,
+            "processes": [{
+                "pid": 101, "start_ticks": 12345, "started_at_epoch": time.time() - 120,
+                "instance_id": INSTANCE, "configured": {},
+            }],
+            "instance_id": INSTANCE, "broker_requests": False,
             "state_changed": False, "allow_new_orders": False,
             "source_sha256": self.approval["source_sha256"],
         }
@@ -195,7 +202,7 @@ class RecoveryVerificationTests(unittest.TestCase):
             **self.runtime,
             "observed_at_epoch": now,
             "instance_id": SERVICE + "-7d458c8976-zsc58",
-            "processes": [{"started_at_epoch": now - 120, "configured": {}}],
+            "processes": [{**self.runtime["processes"][0], "started_at_epoch": now - 120}],
             "failures": ["current_process_log_evidence_unavailable"],
             "log_signals": {},
         }
@@ -304,6 +311,123 @@ class RecoveryVerificationTests(unittest.TestCase):
             return_value=wrong,
         ), self.assertRaises(VerificationDenied):
             _verify_render_instance_app_logs(self.approval, remote)
+
+    def test_full_and_short_ssh_and_log_ids_are_supported(self) -> None:
+        for ssh in (INSTANCE, SERVICE + "-zsc58"):
+            for logged in (INSTANCE, SERVICE + "-zsc58"):
+                with self.subTest(ssh=ssh, logged=logged):
+                    remote = self._remote_missing_local_logs()
+                    remote["instance_id"] = ssh
+                    rows = self._synthetic_app_rows(remote["observed_at_epoch"], logged)
+                    with patch(
+                        "scripts.nija_render_recovery_verification._read_render_instance_logs",
+                        return_value=rows,
+                    ):
+                        self.assertTrue(_verify_render_instance_app_logs(self.approval, remote))
+
+    def test_conflicting_full_log_ids_with_same_short_suffix_are_denied(self) -> None:
+        remote = self._remote_missing_local_logs()
+        for ssh in (INSTANCE, SERVICE + "-zsc58"):
+            with self.subTest(ssh=ssh):
+                remote["instance_id"] = ssh
+                rows = self._synthetic_app_rows(remote["observed_at_epoch"], INSTANCE)
+                rows[1]["labels"][1]["value"] = SERVICE + "-different-zsc58"
+                with patch(
+                    "scripts.nija_render_recovery_verification._read_render_instance_logs",
+                    return_value=rows,
+                ), self.assertRaisesRegex(VerificationDenied, "render_instance_log_scope_mismatch"):
+                    _verify_render_instance_app_logs(self.approval, remote)
+        remote["instance_id"] = SERVICE + "-zsc58"
+        rows = self._synthetic_app_rows(remote["observed_at_epoch"], SERVICE + "-different-zsc58")
+        with patch(
+            "scripts.nija_render_recovery_verification._read_render_instance_logs", return_value=rows,
+        ), self.assertRaisesRegex(VerificationDenied, "render_instance_log_scope_mismatch"):
+            _verify_render_instance_app_logs(self.approval, remote)
+
+    def test_stable_boot_pid_and_ticks_ignore_wall_clock_rounding(self) -> None:
+        after = copy.deepcopy(self.runtime)
+        after["observed_at_epoch"] += 1
+        after["processes"][0]["started_at_epoch"] += 0.02
+        after["instance_id"] = SERVICE + "-zsc58"
+        after["processes"][0]["instance_id"] = SERVICE + "-zsc58"
+        verify_process_continuity(self.runtime, after)
+
+    def test_process_restart_boot_change_and_conflicting_identity_are_denied(self) -> None:
+        changes = (
+            ("boot_id", "87654321-1234-1234-1234-123456789abc"),
+            ("instance_id", SERVICE + "-different-zsc58"),
+            ("pid", 102), ("start_ticks", 12346),
+            ("configured", {"REDIS_URL": True}),
+        )
+        for key, value in changes:
+            with self.subTest(key=key):
+                after = copy.deepcopy(self.runtime)
+                if key in ("boot_id", "instance_id"):
+                    after[key] = value
+                    if key == "instance_id":
+                        after["processes"][0][key] = value
+                else:
+                    after["processes"][0][key] = value
+                with self.assertRaisesRegex(VerificationDenied, "runtime_process_continuity_changed"):
+                    verify_process_continuity(self.runtime, after)
+
+    def test_missing_malformed_or_duplicate_process_identity_is_denied(self) -> None:
+        for field, value in (
+            ("pid", None), ("pid", True), ("start_ticks", None), ("start_ticks", True),
+            ("start_ticks", 0), ("instance_id", SERVICE + "-different-zsc58"),
+            ("started_at_epoch", float("nan")), ("configured", {"REDIS_URL": "true"}),
+        ):
+            with self.subTest(field=field, value=value):
+                remote = copy.deepcopy(self.runtime)
+                remote["processes"][0][field] = value
+                with self.assertRaisesRegex(VerificationDenied, "runtime_process_identity_invalid"):
+                    verify_runtime(self.approval, remote)
+        for changes in (
+            {"boot_id": None}, {"boot_id": "not-a-boot-id"},
+            {"instance_id": SERVICE + "-zsc58", "processes": [
+                self.runtime["processes"][0],
+                {**self.runtime["processes"][0], "pid": 102, "instance_id": SERVICE + "-different-zsc58"},
+            ]},
+            {"processes": self.runtime["processes"] * 2},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(VerificationDenied):
+                verify_runtime(self.approval, {**self.runtime, **changes})
+
+    def test_process_change_during_log_read_revokes_all_verification(self) -> None:
+        before = self._remote_missing_local_logs()
+        after = copy.deepcopy(before)
+        after["processes"][0]["start_ticks"] += 1
+        with patch.dict(os.environ, {"GITHUB_REF": REF}, clear=True), patch(
+            "scripts.nija_render_recovery_verification.load_reviewed_approval", return_value=self.approval,
+        ), patch(
+            "scripts.nija_render_recovery_verification.inspect_render_api", return_value=self.evidence,
+        ), patch(
+            "scripts.nija_render_recovery_verification._runtime", side_effect=[before, after],
+        ) as ssh, patch(
+            "scripts.nija_render_recovery_verification._verify_render_instance_app_logs", return_value=True,
+        ), patch("scripts.nija_render_recovery_verification._command", return_value=b"synthetic-source"):
+            outcome = run_verification()
+        self.assertEqual(ssh.call_count, 2)
+        self.assertIn("runtime_process_continuity_changed", outcome["failures"])
+        for name in OUTCOMES[1:]:
+            self.assertFalse(outcome[name])
+        self.assertFalse(outcome["allow_new_orders"])
+
+    def test_approval_mismatch_blocks_before_runtime_and_is_not_auto_repaired(self) -> None:
+        approved = copy.deepcopy(self.approval)
+        with patch.dict(os.environ, {"GITHUB_REF": REF}, clear=True), patch(
+            "scripts.nija_render_recovery_verification.load_reviewed_approval", return_value=self.approval,
+        ), patch(
+            "scripts.nija_render_recovery_verification.inspect_render_api",
+            return_value={**self.evidence, "deployment_id": "dep-new"},
+        ), patch("scripts.nija_render_recovery_verification._runtime") as ssh, patch(
+            "scripts.nija_render_recovery_verification._command", return_value=b"synthetic-source",
+        ):
+            outcome = run_verification()
+        ssh.assert_not_called()
+        self.assertEqual(self.approval, approved)
+        self.assertEqual(outcome["failures"], ["approved_render_deployment_mismatch"])
+        self.assertFalse(outcome["CERTIFICATION_COMPLETE"])
 
     def test_instance_log_fallback_cannot_mask_other_missing_proofs(self) -> None:
         remote = self._remote_missing_local_logs()

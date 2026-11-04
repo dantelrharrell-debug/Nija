@@ -20,6 +20,7 @@ from urllib.request import Request, urlopen
 
 from scripts.nija_kraken_instance_diagnostic import (
     RELEASE_BRANCH, SERVICE, SOURCE_PATHS, inspect_render_api, report_succeeded,
+    render_instance_label, render_instances_match,
 )
 
 MANIFEST = Path("ops/recovery/render_readonly_baseline.json")
@@ -46,6 +47,8 @@ SAFE_RUNTIME_EVIDENCE_FAILURES = frozenset({
     "runtime_process_inspection_failed", "process_inventory_unavailable",
     "runtime_log_read_failed", "current_process_log_evidence_unavailable",
     "canonical_runtime_process_not_found", "runtime_source_read_failed",
+    "runtime_instance_identity_invalid", "runtime_process_identity_conflict",
+    "runtime_boot_identity_changed", "runtime_boot_identity_unavailable",
 })
 
 
@@ -178,6 +181,63 @@ def verify_runtime(
         raise VerificationDenied("runtime_evidence_stale")
     if report.get("source_sha256") != approval["source_sha256"]:
         raise VerificationDenied("runtime_source_digest_mismatch")
+    _runtime_process_identity(report)
+
+
+def _runtime_process_identity(report: dict) -> dict[int, tuple]:
+    """Validate stable boot/PID/start-tick identity, not derived wall-clock equality."""
+    boot_id = report.get("boot_id")
+    if (not isinstance(boot_id, str)
+            or not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot_id)):
+        raise VerificationDenied("runtime_process_identity_invalid")
+    instance = report.get("instance_id")
+    try:
+        render_instance_label(instance)
+    except ValueError:
+        raise VerificationDenied("runtime_process_identity_invalid") from None
+    rows = report.get("processes")
+    if not isinstance(rows, list) or not rows:
+        raise VerificationDenied("runtime_process_identity_invalid")
+    identities = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise VerificationDenied("runtime_process_identity_invalid")
+        pid, ticks = row.get("pid"), row.get("start_ticks")
+        started, configured = row.get("started_at_epoch"), row.get("configured")
+        observed = report.get("observed_at_epoch")
+        if (type(pid) is not int or pid <= 0 or pid in identities
+                or type(ticks) is not int or ticks <= 0
+                or type(started) not in (int, float) or type(observed) not in (int, float)
+                or not 0 < started <= observed
+                or not isinstance(configured, dict)
+                or any(not isinstance(key, str) or type(value) is not bool for key, value in configured.items())
+                or not render_instances_match(instance, row.get("instance_id"))):
+            raise VerificationDenied("runtime_process_identity_invalid")
+        identities[pid] = (ticks, row["instance_id"], configured)
+    full_instances = {value for value in [instance, *(row["instance_id"] for row in rows)]
+                      if value != render_instance_label(value)}
+    if len(full_instances) > 1:
+        raise VerificationDenied("runtime_process_identity_invalid")
+    return identities
+
+
+def verify_process_continuity(before: dict, after: dict) -> None:
+    """Reject restarts, PID reuse, boot changes and conflicting instance identities."""
+    first, second = _runtime_process_identity(before), _runtime_process_identity(after)
+    if (before["boot_id"] != after["boot_id"]
+            or not render_instances_match(before["instance_id"], after["instance_id"])
+            or before["observed_at_epoch"] > after["observed_at_epoch"]
+            or first.keys() != second.keys()):
+        raise VerificationDenied("runtime_process_continuity_changed")
+    for pid, (ticks, instance, configured) in first.items():
+        other_ticks, other_instance, other_configured = second[pid]
+        if (ticks != other_ticks or configured != other_configured
+                or not render_instances_match(instance, other_instance)):
+            raise VerificationDenied("runtime_process_continuity_changed")
+    all_instances = [before["instance_id"], after["instance_id"]]
+    all_instances.extend(row["instance_id"] for report in (before, after) for row in report["processes"])
+    if len({value for value in all_instances if value != render_instance_label(value)}) > 1:
+        raise VerificationDenied("runtime_process_continuity_changed")
 
 
 def _utc_query_time(stamp: float) -> str:
@@ -219,20 +279,16 @@ def _read_render_instance_logs(instance_label: str, start: float, end: float) ->
 
 
 def _render_log_instance_label(instance: str) -> str:
-    """Return Render's short label for a full SSH instance ID."""
-    prefix = SERVICE + "-"
-    suffix = instance[len(prefix):] if instance.startswith(prefix) else ""
-    if len(suffix) > 64 or not re.fullmatch(r"(?:[a-zA-Z0-9]+-)+[a-z0-9]{5}", suffix):
-        raise VerificationDenied("render_instance_log_context_mismatch")
-    return prefix + suffix.rsplit("-", 1)[-1]
+    """Return Render's short label for either supported SSH instance form."""
+    try:
+        return render_instance_label(instance)
+    except ValueError:
+        raise VerificationDenied("render_instance_log_context_mismatch") from None
 
 
 def _render_log_instance_matches(full: str, logged: str) -> bool:
     """Match the full SSH ID or its final-slug Render app-log label."""
-    try:
-        return logged in (full, _render_log_instance_label(full))
-    except VerificationDenied:
-        return False
+    return render_instances_match(full, logged)
 
 
 def _canonical_heartbeat(message: str) -> bool | None:
@@ -295,8 +351,11 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
     end = min(now, observed + 15)
     if end - start < 3:
         raise VerificationDenied("render_instance_log_window_insufficient")
+    _runtime_process_identity(report)
     rows = _read_render_instance_logs(instance_label, start, end)
     heartbeats = set()
+    full_instances = {value for value in [instance, *(row["instance_id"] for row in processes)]
+                      if value != instance_label}
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("labels"), list):
             raise VerificationDenied("render_instance_log_response_invalid")
@@ -309,6 +368,10 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
             labels[label["name"]] = label["value"]
         if (labels.get("resource") != SERVICE or not _render_log_instance_matches(instance, labels.get("instance", ""))
                 or labels.get("type") != "app"):
+            raise VerificationDenied("render_instance_log_scope_mismatch")
+        if labels["instance"] != instance_label:
+            full_instances.add(labels["instance"])
+        if len(full_instances) > 1:
             raise VerificationDenied("render_instance_log_scope_mismatch")
         msg, timestamp = row.get("message"), row.get("timestamp")
         if (not isinstance(msg, str) or len(msg) > 8192
@@ -463,6 +526,15 @@ def run_verification() -> dict:
         verify_runtime(
             approval, report, render_instance_app_logs_verified=render_app_log_proof,
         )
+        after = _runtime(approval)
+        verify_runtime(
+            approval, after, render_instance_app_logs_verified=render_app_log_proof,
+        )
+        verify_process_continuity(report, after)
+        verify_runtime(
+            approval, report, render_instance_app_logs_verified=render_app_log_proof,
+        )
+        result["runtime_process_continuity_verified"] = True
         # A deployment may change during SSH; recheck independent live metadata.
         verify_baseline(approval, inspect_render_api(deployment_only=True), workflow_ref=os.environ["GITHUB_REF"])
         result["RUNTIME_ACCESS_VERIFIED"] = True
