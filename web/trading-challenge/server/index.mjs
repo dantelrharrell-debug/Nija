@@ -7,7 +7,7 @@ import { scoreReport, validAnswers, VERSION } from "./scoring.mjs";
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 const PORT = Number(process.env.PORT || 8787);
-const BASE_URL = (process.env.PUBLIC_BASE_URL || "http://localhost:" + PORT).replace(/\/$/, "");
+const BASE_URL = (process.env.PUBLIC_BASE_URL || (process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "http://localhost:" + PORT)).replace(/\/$/, "");
 const BASE_ORIGIN = new URL(BASE_URL).origin;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 const approvedFiles = {
@@ -19,7 +19,7 @@ const approvedFiles = {
 };
 const traffic = new Map();
 
-if (process.env.NODE_ENV === "production" && (!process.env.PUBLIC_BASE_URL || !BASE_URL.startsWith("https://"))) {
+if (process.env.NODE_ENV === "production" && (!process.env.PUBLIC_BASE_URL && !process.env.VERCEL_URL || !BASE_URL.startsWith("https://"))) {
   throw new Error("Production requires an explicit HTTPS PUBLIC_BASE_URL");
 }
 
@@ -134,7 +134,7 @@ async function handle(req, res) {
 const server = http.createServer((req, res) => {
   handle(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: "Internal server error." }); else res.end(); });
 });
-if (process.env.NODE_ENV !== "test") {
+if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
   server.listen(PORT, "0.0.0.0", () => console.log("NIJA Trading IQ listening on port", PORT));
 }
-export { server };
+export { server, handle };
