@@ -33,6 +33,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from admin_access_fastapi import install_admin_access
+from web_cors_policy import allowed_web_origins
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
@@ -97,23 +98,12 @@ app = FastAPI(
 # CORS configuration
 install_admin_access(app)
 
-allowed_origins = os.getenv('ALLOWED_ORIGINS', '*')
-if allowed_origins == '*':
-    logger.warning("⚠️  SECURITY WARNING: CORS is configured to allow ALL origins (*)")
-    logger.warning("⚠️  For production, set ALLOWED_ORIGINS environment variable")
-    logger.warning("⚠️  Example: ALLOWED_ORIGINS=https://app.example.com,https://mobile.example.com")
-    logger.warning("⚠️  Disabling credentials for wildcard CORS (security requirement)")
-
-# Parse origins from comma-separated string or use wildcard
-origins_list = allowed_origins.split(',') if allowed_origins != '*' else ["*"]
-
-# When using wildcard origins, credentials must be disabled for security
-allow_credentials = allowed_origins != '*'
+origins_list = allowed_web_origins()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins_list,
-    allow_credentials=allow_credentials,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

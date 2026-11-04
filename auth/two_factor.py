@@ -24,6 +24,7 @@ from typing import Optional, List, Tuple, Dict
 from datetime import datetime
 
 import pyotp
+from .storage import auth_database_path
 
 logger = logging.getLogger("nija.auth.two_factor")
 
@@ -42,8 +43,8 @@ class TwoFactorAuth:
     Backup codes are hashed before storage.
     """
 
-    def __init__(self, db_path: str = "users.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = auth_database_path(db_path)
         self._init_tables()
         logger.info("TwoFactorAuth initialized")
 
@@ -305,7 +306,7 @@ class TwoFactorAuth:
 _instance: Optional[TwoFactorAuth] = None
 
 
-def get_two_factor_auth(db_path: str = "users.db") -> TwoFactorAuth:
+def get_two_factor_auth(db_path: Optional[str] = None) -> TwoFactorAuth:
     """Return the module-level TwoFactorAuth singleton."""
     global _instance
     if _instance is None:

@@ -33,6 +33,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from datetime import datetime, timedelta
+from .storage import auth_database_path
 
 logger = logging.getLogger("nija.auth.email_service")
 
@@ -58,8 +59,8 @@ class EmailService:
     Transactional email sender with SQLite token persistence.
     """
 
-    def __init__(self, db_path: str = "users.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = auth_database_path(db_path)
         self._init_tables()
         smtp_available = bool(SMTP_HOST and SMTP_USERNAME and SMTP_PASSWORD)
         if smtp_available:
@@ -295,7 +296,7 @@ class EmailService:
 _instance: Optional[EmailService] = None
 
 
-def get_email_service(db_path: str = "users.db") -> EmailService:
+def get_email_service(db_path: Optional[str] = None) -> EmailService:
     """Return the module-level EmailService singleton."""
     global _instance
     if _instance is None:
