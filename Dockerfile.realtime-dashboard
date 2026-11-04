@@ -12,12 +12,18 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY realtime_dashboard_api.py /app/realtime_dashboard_api.py
 
+RUN groupadd --gid 10001 dashboard && \
+    useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
+        --shell /usr/sbin/nologin dashboard
+
 EXPOSE 9000
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV DASHBOARD_PORT=9000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://localhost:9000/health || exit 1
 
+USER dashboard
 CMD ["python", "realtime_dashboard_api.py"]

@@ -2,7 +2,7 @@
 ARG PYTHON_BASE=python:3.11-slim
 FROM ${PYTHON_BASE}
 
-RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git redis-tools && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
 WORKDIR /app
 COPY requirements.txt .
