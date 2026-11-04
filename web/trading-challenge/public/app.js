@@ -7,6 +7,7 @@
   let answers = [];
   let selected = false;
   let verifiedReport = null;
+  let pendingSessionId = null;
 
   function show(id) {
     panels.forEach((name) => el(name).classList.toggle("hidden", name !== id));
@@ -101,7 +102,7 @@
     show("finish");
   }
   function start() {
-    answers = []; round = 0; selected = false; verifiedReport = null;
+    answers = []; round = 0; selected = false; verifiedReport = null; pendingSessionId = null;
     window.history.replaceState({}, "", window.location.pathname);
     renderRound();
   }
@@ -112,6 +113,7 @@
     else finish();
   }
   async function pay() {
+    if (pendingSessionId) return verifyPayment(pendingSessionId);
     if (answers.length !== scenarios.length) return;
     text("payment-message", "");
     el("unlock").disabled = true;
@@ -190,10 +192,14 @@
       const response = await fetch("/api/results?session_id=" + encodeURIComponent(sessionId), { cache: "no-store" });
       const data = await response.json();
       if (!response.ok || !data.report) throw Error(data.error || "Could not verify this purchase.");
+      pendingSessionId = null;
       renderReport(data.report);
     } catch (error) {
-      start();
-      text("payment-message", error.message + " If you have paid, keep your Stripe receipt and contact NIJA support.");
+      pendingSessionId = sessionId;
+      text("free-summary", "Your payment result could not be verified yet. Please retry verification without buying again.");
+      text("payment-message", (error.message || "Verification unavailable.") + " Keep your receipt and contact NIJA support if it persists.");
+      el("unlock").disabled = false;
+      el("unlock").textContent = "Retry report verification";
       show("finish");
     }
   }
