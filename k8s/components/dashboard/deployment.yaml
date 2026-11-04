@@ -83,6 +83,8 @@ spec:
         volumeMounts:
         - name: dashboard-tmp
           mountPath: /tmp
+        - name: dashboard-logs
+          mountPath: /app/logs
         resources:
           requests:
             cpu: 300m
@@ -108,4 +110,6 @@ spec:
           failureThreshold: 3
       volumes:
       - name: dashboard-tmp
+        emptyDir: {}
+      - name: dashboard-logs
         emptyDir: {}
