@@ -36,7 +36,12 @@
   function show(id) {
     panels.forEach((name) => el(name).classList.toggle("hidden", name !== id));
     if (id !== "intro") {
-      el(id).scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+      const panel = el(id);
+      const headingId = panel.getAttribute("aria-labelledby");
+      const target = headingId ? el(headingId) : panel;
+      target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+      panel.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
     }
   }
   function text(id, value) { el(id).textContent = String(value); }
