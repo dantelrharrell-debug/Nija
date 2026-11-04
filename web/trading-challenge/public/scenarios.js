@@ -14,9 +14,9 @@
       prices: [30,32,31,35,34,40,45,43,51,54,59,65],
       question: "What is your next move?",
       options: [
-        { label: "Go all in before it climbs more", feedback: "Chasing a move with all your capital concentrates risk." },
-        { label: "Size a small position with a defined exit", feedback: "Position limits and exit planning reduce downside exposure." },
-        { label: "Wait for a setup that fits your plan", feedback: "Waiting for evidence avoids acting only on excitement." }
+        { label: "Go all in before it climbs more", virtualDelta: 120, feedback: "Chasing a move with all your capital concentrates risk." },
+        { label: "Size a small position with a defined exit", virtualDelta: -80, feedback: "Position limits and exit planning reduce downside exposure." },
+        { label: "Wait for a setup that fits your plan", virtualDelta: 0, feedback: "Waiting for evidence avoids acting only on excitement." }
       ]
     },
     {
@@ -26,9 +26,9 @@
       prices: [70,68,72,69,65,58,54,48,42,39,31,28],
       question: "How do you respond?",
       options: [
-        { label: "Double the position to win the loss back", feedback: "Adding size to a losing position can compound risk." },
-        { label: "Ignore your exit and hope for a rebound", feedback: "Hoping replaces the predefined exit with uncertainty." },
-        { label: "Follow the exit rule and reassess", feedback: "Following a defined risk limit preserves decision discipline." }
+        { label: "Double the position to win the loss back", virtualDelta: -500, feedback: "Adding size to a losing position can compound risk." },
+        { label: "Ignore your exit and hope for a rebound", virtualDelta: -240, feedback: "Hoping replaces the predefined exit with uncertainty." },
+        { label: "Follow the exit rule and reassess", virtualDelta: -60, feedback: "Following a defined risk limit preserves decision discipline." }
       ]
     },
     {
@@ -38,9 +38,9 @@
       prices: [38,40,43,39,46,42,45,41,47,44,48,46],
       question: "Which portfolio choice is more resilient?",
       options: [
-        { label: "Put everything into one popular asset", feedback: "A single position exposes the whole account to one outcome." },
-        { label: "Spread exposures and keep a cash reserve", feedback: "Diversification and liquidity help avoid single-outcome dependence." },
-        { label: "Open many highly correlated positions", feedback: "Multiple positions are not true diversification when they move together." }
+        { label: "Put everything into one popular asset", virtualDelta: -340, feedback: "A single position exposes the whole account to one outcome." },
+        { label: "Spread exposures and keep a cash reserve", virtualDelta: 40, feedback: "Diversification and liquidity help avoid single-outcome dependence." },
+        { label: "Open many highly correlated positions", virtualDelta: -110, feedback: "Multiple positions are not true diversification when they move together." }
       ]
     },
     {
@@ -50,9 +50,9 @@
       prices: [35,36,35,39,48,44,50,43,52,47,42,40],
       question: "What do you do with the information?",
       options: [
-        { label: "Verify the source before changing a plan", feedback: "Independent verification limits the influence of false headlines." },
-        { label: "Buy immediately because others are buying", feedback: "Crowd activity is not evidence the claim is true." },
-        { label: "Treat the screenshot as confirmed news", feedback: "Unverified screenshots can omit important context." }
+        { label: "Verify the source before changing a plan", virtualDelta: 0, feedback: "Independent verification limits the influence of false headlines." },
+        { label: "Buy immediately because others are buying", virtualDelta: 210, feedback: "Crowd activity is not evidence the claim is true." },
+        { label: "Treat the screenshot as confirmed news", virtualDelta: -180, feedback: "Unverified screenshots can omit important context." }
       ]
     },
     {
@@ -62,9 +62,9 @@
       prices: [38,44,40,50,42,53,45,54,43,56,47,52],
       question: "Which maximum loss is the most conservative?",
       options: [
-        { label: "$1,000 (10% of the portfolio)", feedback: "A 10% loss budget on one idea creates large drawdown exposure." },
-        { label: "$100 (1% of the portfolio)", feedback: "A 1% example illustrates smaller defined risk per decision." },
-        { label: "$500 (5% of the portfolio)", feedback: "Five percent can still add up quickly across several losses." }
+        { label: "$1,000 (10% of the portfolio)", virtualDelta: -860, feedback: "A 10% loss budget on one idea creates large drawdown exposure." },
+        { label: "$100 (1% of the portfolio)", virtualDelta: -55, feedback: "A 1% example illustrates smaller defined risk per decision." },
+        { label: "$500 (5% of the portfolio)", virtualDelta: -370, feedback: "Five percent can still add up quickly across several losses." }
       ]
     },
     {
@@ -74,9 +74,9 @@
       prices: [56,52,55,50,54,48,46,51,45,47,44,45],
       question: "What will you do next?",
       options: [
-        { label: "Increase size on the next idea to recover fast", feedback: "Revenge trading turns frustration into added exposure." },
-        { label: "Pause, review notes, and wait for a valid setup", feedback: "Reviewing decisions helps separate process from short-term results." },
-        { label: "Keep trading to avoid missing opportunities", feedback: "Unplanned activity can increase mistakes after losses." }
+        { label: "Increase size on the next idea to recover fast", virtualDelta: -640, feedback: "Revenge trading turns frustration into added exposure." },
+        { label: "Pause, review notes, and wait for a valid setup", virtualDelta: 0, feedback: "Reviewing decisions helps separate process from short-term results." },
+        { label: "Keep trading to avoid missing opportunities", virtualDelta: -130, feedback: "Unplanned activity can increase mistakes after losses." }
       ]
     }
   ];
