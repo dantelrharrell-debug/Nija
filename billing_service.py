@@ -926,6 +926,10 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     # Use the app-owned store during startup; current_app has no context yet.
     register_course_routes(app, app.config["BILLING_STORE"])
     register_course_portal(app, app.config["BILLING_STORE"])
+
+    # Optional NIJA Trading Challenge report, isolated from membership and trading.
+    from nija_game_billing import register_game_routes
+    register_game_routes(app)
     register_onboarding_routes(app, app.config["BILLING_STORE"])
 
     # Restricted, GET-only revenue reporting; no changes to Checkout or Stripe webhooks.
