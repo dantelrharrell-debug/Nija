@@ -248,6 +248,19 @@ class CommissioningGateTests(unittest.TestCase):
         with self.assertRaisesRegex(AdmissionDenied, "expired"):
             self.consume()
 
+    def test_signed_approval_uses_private_payload_snapshot(self):
+        self.approval["expires_at_epoch"] = NOW + 1
+        records = self.records()
+        self.gate.read_approval = lambda: records
+
+        def mutate_after_readback():
+            records["approval"]["payload"]["expires_at_epoch"] = NOW + 200
+            return NOW + 2
+
+        self.clock.side_effect = mutate_after_readback
+        with self.assertRaisesRegex(AdmissionDenied, "future_expired_or_stale"):
+            self.gate._approval(self.candidate, self.plan)
+
     def test_slow_pretrade_cannot_outlive_signed_approval(self):
         def slow(candidate, conn):
             self.clock.return_value = NOW + 61
@@ -308,6 +321,38 @@ class CommissioningGateTests(unittest.TestCase):
         self.evidence = None
         with self.assertRaises(AdmissionDenied):
             self.gate.verify_posttrade(self.candidate, self.plan)
+
+    def test_completed_state_rejects_changed_order_or_event_time(self):
+        self.consume()
+        self.fill()
+        self.gate.verify_posttrade(self.candidate, self.plan)
+        original_order_id = self.evidence["broker_order_id"]
+        original_event = self.evidence["broker_event_at_epoch"]
+
+        for field, value, order_id, event in (
+            ("broker_order_id", "different-order", "different-order", original_event),
+            ("broker_event_at_epoch", original_event + 0.5, original_order_id, original_event + 0.5),
+        ):
+            with self.subTest(field=field):
+                self.evidence[field] = value
+                self.outcome = OrderOutcome(
+                    self.candidate.account, "verified", event, NOW + 2, order_id, True, True,
+                )
+                with self.assertRaisesRegex(AdmissionDenied, "readback_changed"):
+                    self.gate.verify_posttrade(self.candidate, self.plan)
+                self.evidence[field] = (
+                    original_order_id if field == "broker_order_id" else original_event
+                )
+                self.outcome = OrderOutcome(
+                    self.candidate.account, "verified", original_event, NOW + 2, original_order_id, True, True,
+                )
+
+        self.assertEqual(self.gate.verify_posttrade(self.candidate, self.plan).state, "POSTTRADE_VERIFIED")
+        with sqlite3.connect(self.path) as conn:
+            pinned = conn.execute(
+                "SELECT broker_order_id,broker_event_at FROM commissioning_attempts"
+            ).fetchone()
+        self.assertEqual(pinned, (original_order_id, original_event))
 
     def test_broker_fill_without_matching_ledger_outcome_is_blocked(self):
         self.consume()
