@@ -329,6 +329,7 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
         counts: Counter[str] = Counter()
         seen: set[str] = set()
         observed_instances: set[str] = set()
+        matching_full_instances: set[str] = set()
         result["log_rows_returned"] = 0
         # Fixed searches bound response size and avoid unrelated customer logs.
         for text in (
@@ -368,6 +369,10 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
                     observed_instances.add(observed_instance)
                 if not render_instances_match(instance, observed_instance):
                     continue
+                if observed_instance != render_instance_label(observed_instance):
+                    matching_full_instances.add(observed_instance)
+                    if len(matching_full_instances) > 1:
+                        raise ValueError("render_log_instance_conflict")
                 identity = hashlib.sha256((stamp + "\0" + message).encode()).hexdigest()
                 if identity in seen:
                     continue

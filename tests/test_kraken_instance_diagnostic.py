@@ -245,6 +245,37 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 self.assertNotIn("synthetic-only", json.dumps(report))
                 self.assertFalse(report["allow_new_orders"])
 
+    def test_api_logs_reject_conflicting_full_ids_across_queries(self) -> None:
+        responses = [
+            {"id": SERVICE, "ownerId": "tea-synthetic", "branch": RELEASE_BRANCH},
+            [{"deploy": {
+                "id": "dep-synthetic", "status": "live",
+                "commit": {"id": BASELINE}, "createdAt": "2026-11-02T00:00:00Z",
+            }}],
+            {"logs": [{
+                "timestamp": "2026-11-02T00:00:01Z",
+                "message": "KRAKEN_INITIALIZATION",
+                "labels": [{"name": "instance", "value": SERVICE + "-7d458c8976-zsc58"}],
+            }]},
+            {"logs": [{
+                "timestamp": "2026-11-02T00:00:02Z",
+                "message": "KRAKEN_INITIALIZATION",
+                "labels": [{"name": "instance", "value": SERVICE + "-different-zsc58"}],
+            }]},
+        ] + [{"logs": []}] * 7
+        with patch.dict(os.environ, {
+            "RENDER_API_KEY": "synthetic-only",
+            "EXPECTED_RENDER_INSTANCE": SERVICE + "-zsc58",
+            "NIJA_APPROVED_RENDER_DEPLOYMENT_ID": "dep-synthetic",
+        }, clear=True), patch(
+            "scripts.nija_kraken_instance_diagnostic.urlopen",
+            side_effect=[io.BytesIO(json.dumps(row).encode()) for row in responses],
+        ):
+            report = inspect_render_api()
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertEqual(report["log_signals"], {})
+        self.assertIn("render_api_response_unverified", report["failures"])
+
     def test_deployment_discovery_does_not_require_instance_or_approved_pin(self) -> None:
         responses = [
             {"id": SERVICE, "branch": RELEASE_BRANCH},

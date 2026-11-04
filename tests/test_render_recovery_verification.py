@@ -344,6 +344,30 @@ class RecoveryVerificationTests(unittest.TestCase):
         ), self.assertRaisesRegex(VerificationDenied, "render_instance_log_scope_mismatch"):
             _verify_render_instance_app_logs(self.approval, remote)
 
+    def test_log_identity_is_checked_against_both_ssh_snapshots(self) -> None:
+        before = self._remote_missing_local_logs()
+        short = SERVICE + "-zsc58"
+        before["instance_id"] = short
+        before["processes"][0]["instance_id"] = short
+        logs = self._synthetic_app_rows(before["observed_at_epoch"], INSTANCE)
+        verified_full_instances = set()
+        with patch(
+            "scripts.nija_render_recovery_verification._read_render_instance_logs",
+            return_value=logs,
+        ):
+            self.assertTrue(_verify_render_instance_app_logs(
+                self.approval, before, verified_full_instances=verified_full_instances,
+            ))
+        self.assertEqual(verified_full_instances, {INSTANCE})
+
+        after = copy.deepcopy(before)
+        after["instance_id"] = SERVICE + "-different-zsc58"
+        after["processes"][0]["instance_id"] = after["instance_id"]
+        with self.assertRaisesRegex(VerificationDenied, "runtime_process_continuity_changed"):
+            verify_process_continuity(
+                before, after, verified_full_instances=verified_full_instances,
+            )
+
     def test_stable_boot_pid_and_ticks_ignore_wall_clock_rounding(self) -> None:
         after = copy.deepcopy(self.runtime)
         after["observed_at_epoch"] += 1

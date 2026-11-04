@@ -221,7 +221,9 @@ def _runtime_process_identity(report: dict) -> dict[int, tuple]:
     return identities
 
 
-def verify_process_continuity(before: dict, after: dict) -> None:
+def verify_process_continuity(
+    before: dict, after: dict, *, verified_full_instances: set[str] | None = None,
+) -> None:
     """Reject restarts, PID reuse, boot changes and conflicting instance identities."""
     first, second = _runtime_process_identity(before), _runtime_process_identity(after)
     if (before["boot_id"] != after["boot_id"]
@@ -236,6 +238,8 @@ def verify_process_continuity(before: dict, after: dict) -> None:
             raise VerificationDenied("runtime_process_continuity_changed")
     all_instances = [before["instance_id"], after["instance_id"]]
     all_instances.extend(row["instance_id"] for report in (before, after) for row in report["processes"])
+    if verified_full_instances:
+        all_instances.extend(verified_full_instances)
     if len({value for value in all_instances if value != render_instance_label(value)}) > 1:
         raise VerificationDenied("runtime_process_continuity_changed")
 
@@ -314,7 +318,9 @@ def _canonical_heartbeat(message: str) -> bool | None:
     return all(fields.get(k) == v for k, v in expected.items())
 
 
-def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
+def _verify_render_instance_app_logs(
+    approval: dict, report: dict, *, verified_full_instances: set[str] | None = None,
+) -> bool:
     """Correlate authenticated Render app heartbeat to SSH instance/process times.
 
     Only supplements the missing local-file classification, never broker proof.
@@ -393,6 +399,8 @@ def _verify_render_instance_app_logs(approval: dict, report: dict) -> bool:
             heartbeats.add(observed_log_at)
     if len(heartbeats) < 2 or max(heartbeats) - min(heartbeats) < 3:
         raise VerificationDenied("render_current_instance_heartbeat_unverified")
+    if verified_full_instances is not None:
+        verified_full_instances.update(full_instances)
     return True
 
 
@@ -520,8 +528,11 @@ def run_verification() -> dict:
         # pinned, bounded same-instance heartbeat can corroborate this exact
         # missing-file issue; all other runtime failures still block.
         render_app_log_proof = False
+        render_app_log_full_instances: set[str] = set()
         if report.get("failures") == ["current_process_log_evidence_unavailable"]:
-            render_app_log_proof = _verify_render_instance_app_logs(approval, report)
+            render_app_log_proof = _verify_render_instance_app_logs(
+                approval, report, verified_full_instances=render_app_log_full_instances,
+            )
             result["render_instance_app_log_evidence_verified"] = render_app_log_proof
         verify_runtime(
             approval, report, render_instance_app_logs_verified=render_app_log_proof,
@@ -530,7 +541,9 @@ def run_verification() -> dict:
         verify_runtime(
             approval, after, render_instance_app_logs_verified=render_app_log_proof,
         )
-        verify_process_continuity(report, after)
+        verify_process_continuity(
+            report, after, verified_full_instances=render_app_log_full_instances,
+        )
         verify_runtime(
             approval, report, render_instance_app_logs_verified=render_app_log_proof,
         )
