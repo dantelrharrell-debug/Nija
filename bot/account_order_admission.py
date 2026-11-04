@@ -71,23 +71,27 @@ class AccountOrderAdmission:
     def install_schema(self) -> None:
         """Explicit migration on an existing ledger; grants no authorization."""
         with self._transaction() as conn:
-            for table in ("trade_ledger", "open_positions", "completed_trades", "strategy_order_intents"):
-                if not conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-                ).fetchone():
-                    raise AdmissionDenied("canonical_ledger_schema_missing:" + table)
-            conn.execute("""CREATE TABLE IF NOT EXISTS account_entry_reservations (
-                token TEXT PRIMARY KEY,
-                account TEXT NOT NULL,
-                credential_fingerprint TEXT NOT NULL,
-                writer_generation INTEGER NOT NULL,
-                intent_digest TEXT NOT NULL,
-                state TEXT NOT NULL CHECK(state IN ('reserved','submitting','reconciled')),
-                created_at REAL NOT NULL,
-                UNIQUE(account, intent_digest)
-            )""")
-            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS account_entry_single_unresolved
-                ON account_entry_reservations(account) WHERE state != 'reconciled'""")
+            self._install_schema(conn)
+
+    def _install_schema(self, conn: sqlite3.Connection) -> None:
+        """Create the reservation table inside a caller-owned migration transaction."""
+        for table in ("trade_ledger", "open_positions", "completed_trades", "strategy_order_intents"):
+            if not conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone():
+                raise AdmissionDenied("canonical_ledger_schema_missing:" + table)
+        conn.execute("""CREATE TABLE IF NOT EXISTS account_entry_reservations (
+            token TEXT PRIMARY KEY,
+            account TEXT NOT NULL,
+            credential_fingerprint TEXT NOT NULL,
+            writer_generation INTEGER NOT NULL,
+            intent_digest TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('reserved','submitting','reconciled')),
+            created_at REAL NOT NULL,
+            UNIQUE(account, intent_digest)
+        )""")
+        conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS account_entry_single_unresolved
+            ON account_entry_reservations(account) WHERE state != 'reconciled'""")
 
     def _check_pending_ledger(self, candidate: Candidate, conn: sqlite3.Connection) -> None:
         """Reject unresolved Kraken accounting directly from the locked ledger.

@@ -101,8 +101,8 @@ class CommissioningGate(AccountOrderAdmission):
 
     def install_schema(self) -> None:
         """Explicit migration only; never called at import or runtime startup."""
-        super().install_schema()
         with self._transaction() as conn:
+            self._install_schema(conn)
             conn.execute("""CREATE TABLE IF NOT EXISTS commissioning_attempts (
                 account_fingerprint TEXT PRIMARY KEY, account TEXT NOT NULL UNIQUE,
                 credential_fingerprint TEXT NOT NULL, writer_generation INTEGER NOT NULL,
@@ -112,6 +112,26 @@ class CommissioningGate(AccountOrderAdmission):
                 state TEXT NOT NULL CHECK(state IN ('CONTROLLED_FIRST_TRADE','POSTTRADE_VERIFIED')),
                 broker_order_id TEXT NOT NULL DEFAULT '', broker_event_at REAL
             )""")
+            for table, required in (
+                ("account_entry_reservations", {
+                    "token", "account", "credential_fingerprint", "writer_generation",
+                    "intent_digest", "state", "created_at",
+                }),
+                ("commissioning_attempts", {
+                    "account_fingerprint", "account", "credential_fingerprint",
+                    "writer_generation", "plan_digest", "release_id", "approval_id",
+                    "approval_sha256", "token", "submitted_at", "state",
+                    "broker_order_id", "broker_event_at",
+                }),
+            ):
+                obj = conn.execute(
+                    "SELECT type FROM sqlite_master WHERE name=?", (table,)
+                ).fetchone()
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(" + table + ")").fetchall()
+                }
+                if obj != ("table",) or not required.issubset(columns):
+                    raise AdmissionDenied("commissioning_ledger_migration_invalid:" + table)
 
     def reserve(self, candidate: Candidate) -> Reservation:
         """Forbid inherited generic admission as a commissioning shortcut."""

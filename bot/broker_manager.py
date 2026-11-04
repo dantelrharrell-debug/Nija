@@ -9460,6 +9460,13 @@ class KrakenBroker(BaseBroker):
                 f"Kraken hard-stopped ({self.account_identifier}): {self._hard_stop_reason}"
             )
 
+        if method == "AddOrder":
+            commissioning_validator = getattr(self, "_commissioning_order_request_validator", None)
+            if commissioning_validator is not None:
+                if not callable(commissioning_validator):
+                    raise RuntimeError("Kraken commissioning order validator is invalid")
+                commissioning_validator(method, params or {})
+
         # ── Gateway mode (Phase B) ─────────────────────────────────────────────
         # When NIJA_KRAKEN_GATEWAY_URL is set, forward this private call to the
         # Kraken Execution Gateway instead of calling Kraken directly.  The
