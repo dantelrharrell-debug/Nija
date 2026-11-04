@@ -378,6 +378,34 @@ class CommissioningGateTests(unittest.TestCase):
         with self.assertRaises(sqlite3.DatabaseError):
             self.consume()
 
+    def test_commissioning_schema_migration_rolls_back_atomically_and_recovers(self):
+        path = Path(self.temp.name) / "migration.db"
+        with sqlite3.connect(path) as conn:
+            for table in ("open_positions", "completed_trades", "strategy_order_intents"):
+                conn.execute("CREATE TABLE " + table + " (id INTEGER)")
+            conn.execute("CREATE TABLE trade_ledger (user_id TEXT, order_id TEXT, position_id TEXT, action TEXT)")
+            conn.execute("CREATE VIEW commissioning_attempts AS SELECT 1 AS incompatible")
+        gate = self.make_gate()
+        gate.ledger = path
+        with self.assertRaisesRegex(AdmissionDenied, "migration_invalid:commissioning_attempts"):
+            gate.install_schema()
+        with sqlite3.connect(path) as conn:
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='account_entry_reservations'"
+            ).fetchone())
+            self.assertEqual(conn.execute(
+                "SELECT type FROM sqlite_master WHERE name='commissioning_attempts'"
+            ).fetchone(), ("view",))
+            conn.execute("DROP VIEW commissioning_attempts")
+        gate.install_schema()
+        with sqlite3.connect(path) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT type FROM sqlite_master WHERE name='account_entry_reservations'"
+            ).fetchone(), ("table",))
+            self.assertEqual(conn.execute(
+                "SELECT type FROM sqlite_master WHERE name='commissioning_attempts'"
+            ).fetchone(), ("table",))
+
 
 if __name__ == "__main__":
     unittest.main()
