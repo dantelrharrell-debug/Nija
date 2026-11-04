@@ -166,10 +166,13 @@ class CommissioningGate(AccountOrderAdmission):
     def _approval(
         self, candidate: Candidate, plan: StartupVerificationPlan,
     ) -> tuple[str, str, float]:
+        import json
+
         records = self.read_approval()
         if not isinstance(records, dict) or set(records) != {"approval", "status"}:
             raise AdmissionDenied("commissioning_signed_approval_and_status_required")
         frozen = _canonical(records)
+        records = json.loads(frozen)
         envelope = records["approval"]
         if not isinstance(envelope, dict) or not isinstance(envelope.get("payload"), dict):
             raise AdmissionDenied("commissioning_signed_first_order_required")
