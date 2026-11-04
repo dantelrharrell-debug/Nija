@@ -1,5 +1,14 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Commissioning proposal — not installed or deployed
+
+The cold-start order-or-fill proof dependency is documented in
+[COMMISSIONING_REVIEW.md](COMMISSIONING_REVIEW.md). A review-only durable gate
+separates PRETRADE_READY, one separately signed CONTROLLED_FIRST_TRADE, and
+POSTTRADE_VERIFIED. Production activation and dispatch guards remain unchanged;
+independent integration/deployment approval and exact live-order approval are
+still required. No live trade or deployment is authorized by this proposal.
+
 ## Recovery milestone — October 21, 2026 (Pacific)
 
 **Deployed recovery progress is confirmed. Live trading authorization remains incomplete.** This dated checkpoint supersedes earlier status summaries below; retain those sections as incident history.
