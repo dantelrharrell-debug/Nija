@@ -43,6 +43,8 @@ EXPOSE 8000
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+# Public filesystem path only; contains no credential or authentication token.
+# trivy:ignore:DS-0031
 ENV NIJA_AUTH_USER_DB_PATH=/data/auth/users.db
 
 USER 10001:10001
