@@ -368,6 +368,31 @@ class RecoveryVerificationTests(unittest.TestCase):
                 before, after, verified_full_instances=verified_full_instances,
             )
 
+    def test_log_full_identity_conflict_revokes_orchestrated_verification(self) -> None:
+        before = self._remote_missing_local_logs()
+        short = SERVICE + "-zsc58"
+        before["instance_id"] = short
+        before["processes"][0]["instance_id"] = short
+        after = copy.deepcopy(before)
+        conflicting = SERVICE + "-different-zsc58"
+        after["instance_id"] = conflicting
+        after["processes"][0]["instance_id"] = conflicting
+        rows = self._synthetic_app_rows(before["observed_at_epoch"], INSTANCE)
+        with patch.dict(os.environ, {"GITHUB_REF": REF}, clear=True), patch(
+            "scripts.nija_render_recovery_verification.load_reviewed_approval", return_value=self.approval,
+        ), patch(
+            "scripts.nija_render_recovery_verification.inspect_render_api", return_value=self.evidence,
+        ), patch(
+            "scripts.nija_render_recovery_verification._runtime", side_effect=[before, after],
+        ), patch(
+            "scripts.nija_render_recovery_verification._read_render_instance_logs", return_value=rows,
+        ), patch("scripts.nija_render_recovery_verification._command", return_value=b"synthetic-source"):
+            outcome = run_verification()
+        self.assertIn("runtime_process_continuity_changed", outcome["failures"])
+        for name in OUTCOMES[1:]:
+            self.assertFalse(outcome[name])
+        self.assertFalse(outcome["allow_new_orders"])
+
     def test_stable_boot_pid_and_ticks_ignore_wall_clock_rounding(self) -> None:
         after = copy.deepcopy(self.runtime)
         after["observed_at_epoch"] += 1

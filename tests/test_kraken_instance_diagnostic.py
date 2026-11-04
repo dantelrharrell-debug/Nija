@@ -86,9 +86,10 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 _process_start_ticks(invalid, 101)
 
     def _inspect_synthetic_process(self, *, clock=1700000200, process_environment=None,
-                                   restart=False, boot_changed=False) -> dict:
+                                   restart=False, boot_changed=False, extra_instance=None,
+                                   inspector_instance=None) -> dict:
         """Inspect synthetic procfs without accessing production or broker clients."""
-        instance = SERVICE + "-7d458c8976-zsc58"
+        instance = inspector_instance or SERVICE + "-7d458c8976-zsc58"
         environment = {
             "RENDER_SERVICE_ID": SERVICE, "RENDER_GIT_COMMIT": BASELINE,
             "RENDER_INSTANCE_ID": instance,
@@ -105,6 +106,8 @@ class InstanceDiagnosticTests(unittest.TestCase):
                 )
             if str(path) == "/proc/stat":
                 return "cpu 0 0\nbtime 1700000000\n"
+            if str(path) == "/proc/102/stat":
+                return "102 (python command) S " + "0 " * 18 + "12345 0"
             if str(path) == "/proc/101/stat":
                 reads["stat"] += 1
                 ticks = 12346 if restart and reads["stat"] > 1 else 12345
@@ -115,6 +118,11 @@ class InstanceDiagnosticTests(unittest.TestCase):
             if path.name == "cmdline":
                 return b"python\0/app/main.py\0"
             if path.name == "environ":
+                if path.parent.name == "102":
+                    return b"\0".join(
+                        key.encode() + b"=" + value.encode()
+                        for key, value in {**environment, "RENDER_INSTANCE_ID": extra_instance}.items()
+                    )
                 return encoded
             raise AssertionError("unexpected synthetic read: " + str(path))
 
@@ -124,7 +132,9 @@ class InstanceDiagnosticTests(unittest.TestCase):
             return b"synthetic-source"
 
         with patch.dict(os.environ, environment, clear=True), patch.object(
-            Path, "iterdir", return_value=iter([Path("/proc/101")]),
+            Path, "iterdir", return_value=iter(
+                [Path("/proc/101"), Path("/proc/102")] if extra_instance else [Path("/proc/101")]
+            ),
         ), patch.object(Path, "read_text", read_text), patch.object(
             Path, "read_bytes", read_bytes,
         ), patch("os.getpid", return_value=999), patch("os.sysconf", return_value=100), patch(
@@ -164,6 +174,19 @@ class InstanceDiagnosticTests(unittest.TestCase):
         self.assertEqual(restart["processes"], [])
         changed = self._inspect_synthetic_process(boot_changed=True)
         self.assertIn("runtime_boot_identity_changed", changed["failures"])
+
+    def test_short_inspector_rejects_multiple_conflicting_full_process_ids(self) -> None:
+        environment = {
+            "RENDER_SERVICE_ID": SERVICE, "RENDER_GIT_COMMIT": BASELINE,
+            "RENDER_INSTANCE_ID": SERVICE + "-7d458c8976-zsc58",
+        }
+        report = self._inspect_synthetic_process(
+            process_environment=environment, extra_instance=SERVICE + "-different-zsc58",
+            inspector_instance=SERVICE + "-zsc58",
+        )
+        self.assertIn("runtime_process_identity_conflict", report["failures"])
+        self.assertEqual(len(report["processes"]), 1)
+        self.assertFalse(report_succeeded(report))
 
     def test_api_missing_authorization_never_requests(self) -> None:
         for environment, reason in (({}, "render_api_credential_unavailable"),):
