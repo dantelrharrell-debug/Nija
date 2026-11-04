@@ -1,0 +1,31 @@
+name: Render manual release hold
+
+on:
+  pull_request:
+  push:
+    branches: [main, release/justcall-handoff-only-20261017]
+
+permissions:
+  contents: read
+
+jobs:
+  repository-release-hold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install only offline validation dependencies
+        working-directory: /tmp
+        run: python -m pip install PyYAML==6.0.3 pytest==8.2.2
+      - name: Verify explicit repository hold and denial regressions
+        run: |
+          python -P scripts/check_render_release_hold.py render.yaml
+          python -P -m pytest -q tests/test_render_release_hold.py

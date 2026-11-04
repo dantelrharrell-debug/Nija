@@ -211,14 +211,25 @@ When opening a PR, follow `.github/pull_request_template.md`. Minimally verify:
 
 ## Deployment
 
-- Platform: **Railway** (primary), Render (secondary)
+- Platform: **Render**. Railway configuration is historical; do not reconnect it or create a second deployment authority.
 - Container: Docker (`python:3.11-slim`)
 - Start command: `bash scripts/production_bootstrap.sh`
 - Health check: `GET /healthz`
 - Replicas: 1 (single-writer enforced by Redis distributed lock)
 - Restart policy: `ON_FAILURE`, max 3 retries
 
-To deploy: push to `main`. Railway auto-deploys on push.
+Merging or pushing source is not production deployment authorization. Keep the
+trading service's Render auto-deploy trigger off, both in `render.yaml` and in
+the live service settings. A repository change does not prove the live setting
+changed. Do not sync the complete Blueprint merely to change this setting:
+other fields can differ from the approved runtime configuration.
+
+Before deployment, require successful mandatory checks on the exact release
+commit and image digest, required independent review, verified backup/restore
+evidence, and separate owner approval for the exact release and any migration.
+Live orders additionally require the separate authenticated exact-order approval
+and the canonical commissioning controls. Never infer either approval from a
+merge, passing CI, this file, or a request to repair the system.
 
 ---
 
