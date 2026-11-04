@@ -164,6 +164,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(statefulset["spec"]["volumeClaimTemplates"][0]["metadata"]["name"],
                          "postgres-storage")
 
+    def test_dashboard_hardening_runs_non_root_with_ephemeral_temp_storage(self) -> None:
+        documents = yaml.safe_load_all((ROOT / "k8s/components/dashboard/deployment.yaml").read_text())
+        deployment = next(doc for doc in documents if doc["kind"] == "Deployment")
+        pod = deployment["spec"]["template"]["spec"]
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+        self.assertEqual(pod["securityContext"]["runAsUser"], 10001)
+        self.assertEqual(pod["securityContext"]["seccompProfile"]["type"], "RuntimeDefault")
+        dashboard = pod["containers"][0]
+        self.assertTrue(dashboard["securityContext"]["readOnlyRootFilesystem"])
+        self.assertFalse(dashboard["securityContext"]["allowPrivilegeEscalation"])
+        self.assertEqual(dashboard["securityContext"]["capabilities"]["drop"], ["ALL"])
+        self.assertEqual(dashboard["volumeMounts"], [{"name": "dashboard-tmp", "mountPath": "/tmp"}])
+        self.assertEqual(pod["volumes"], [{"name": "dashboard-tmp", "emptyDir": {}}])
+
     def test_image_findings_do_not_skip_independent_scanner_or_evidence(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
         steps = workflow["jobs"]["docker-image-scan"]["steps"]
@@ -175,6 +189,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("always()", evidence["if"])
         self.assertIn("||", evidence["if"])
         self.assertIn("steps.grype-scan.outputs.sarif != ''", evidence["if"])
+        self.assertIn("hashFiles", evidence["if"])
+        self.assertIn("steps.grype-scan.outputs.sarif", evidence["if"])
         self.assertIn("trivy-results-", evidence["with"]["path"])
         self.assertIn("steps.grype-scan.outputs.sarif", evidence["with"]["path"])
 

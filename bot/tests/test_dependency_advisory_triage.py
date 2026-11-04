@@ -93,6 +93,12 @@ class DependencyTriageTests(unittest.TestCase):
         unreviewed = sum(len(row["lines"]) for row in candidates
                          if row["disposition"].startswith("unreviewed_"))
         self.assertEqual(report["unreviewed_credential_candidate_count"], unreviewed)
+        classification = report["credential_candidate_context_classification"]
+        self.assertEqual(classification["unreviewed_candidate_count"], 321)
+        self.assertEqual(sum(classification["category_counts"].values()), 321)
+        self.assertEqual(sum(classification["scanner_type_counts"].values()), 321)
+        self.assertEqual(classification["confirmed_live_or_active_from_repository_evidence"], 0)
+        self.assertTrue(classification["external_owner_validation_required"])
         reviewed = [row for row in candidates if not row["disposition"].startswith("unreviewed_")]
         self.assertEqual(len(reviewed), 1)
         self.assertEqual(reviewed[0]["file"], "tests/test_member_broker_http_api.py")
