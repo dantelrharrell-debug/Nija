@@ -5,6 +5,11 @@
 environment fallback, activation callback, or execution-marker publisher.
 Importing it does not migrate a database or start a worker.
 
+The canonical engineering/external-evidence action tracker is
+[`docs/production_commissioning_checklist.md`](docs/production_commissioning_checklist.md).
+It packages offline release inventory, isolated backup/restore rehearsal and
+rollback requirements; it grants no deployment, migration or order approval.
+
 ## Confirmed cold-start dependency
 
 `preactivation_readiness_convergence_v16_patch._collect_proofs()` requires

@@ -1,0 +1,3486 @@
+{
+  "advisories": [
+    {
+      "aliases": [
+        "CVE-2026-64847",
+        "GHSA-5p39-cfhj-2xmp"
+      ],
+      "audited_version": "4.11.0",
+      "current_direct_pin": "4.14.2",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "anyio",
+      "primary_advisory_id": "PYSEC-2026-4024",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "4.14.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-5p39-cfhj-2xmp"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-63374",
+        "GHSA-82r6-8w77-94w6"
+      ],
+      "audited_version": "4.11.0",
+      "current_direct_pin": "4.14.2",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "anyio",
+      "primary_advisory_id": "PYSEC-2026-4025",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "4.14.2"
+      ],
+      "severity": "CRITICAL",
+      "severity_source_ids": [
+        "GHSA-82r6-8w77-94w6"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.3.0",
+      "current_direct_pin": "6.4.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "bleach",
+      "primary_advisory_id": "GHSA-8rfp-98v4-mmr6",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "6.4.0"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-8rfp-98v4-mmr6"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.3.0",
+      "current_direct_pin": "6.4.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "bleach",
+      "primary_advisory_id": "GHSA-g75f-g53v-794x",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-g75f-g53v-794x"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.3.0",
+      "current_direct_pin": "6.4.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "bleach",
+      "primary_advisory_id": "GHSA-gj48-438w-jh9v",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "6.4.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-gj48-438w-jh9v"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-6q48-6c7w-9gw2"
+      ],
+      "audited_version": "2025.11.12",
+      "current_direct_pin": "2026.10.23",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "certifi",
+      "primary_advisory_id": "PYSEC-2026-4320",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2026.10.18"
+      ],
+      "severity": "CRITICAL",
+      "severity_source_ids": [
+        "GHSA-6q48-6c7w-9gw2"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "46.0.3",
+      "current_direct_pin": "50.0.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "cryptography",
+      "primary_advisory_id": "GHSA-537c-gmf6-5ccf",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "48.0.1"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-537c-gmf6-5ccf"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-26007",
+        "GHSA-r6ph-v2qm-q3c2"
+      ],
+      "audited_version": "46.0.3",
+      "current_direct_pin": "50.0.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "cryptography",
+      "primary_advisory_id": "PYSEC-2026-2141",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "46.0.5"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-r6ph-v2qm-q3c2"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-34073",
+        "GHSA-m959-cc7f-wv43"
+      ],
+      "audited_version": "46.0.3",
+      "current_direct_pin": "50.0.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "cryptography",
+      "primary_advisory_id": "PYSEC-2026-35",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "46.0.6"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-m959-cc7f-wv43"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-69247",
+        "GHSA-g6cj-pr64-35w5"
+      ],
+      "audited_version": "46.0.3",
+      "current_direct_pin": "50.0.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "cryptography",
+      "primary_advisory_id": "PYSEC-2026-3552",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "50.0.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-g6cj-pr64-35w5"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-69249",
+        "GHSA-jwv3-5hgf-82ww"
+      ],
+      "audited_version": "46.0.3",
+      "current_direct_pin": "50.0.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "cryptography",
+      "primary_advisory_id": "PYSEC-2026-3553",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "49.0.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-jwv3-5hgf-82ww"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-69248",
+        "GHSA-m2h6-j472-rp4c"
+      ],
+      "audited_version": "46.0.3",
+      "current_direct_pin": "50.0.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "cryptography",
+      "primary_advisory_id": "PYSEC-2026-3554",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "49.0.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-m2h6-j472-rp4c"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-39892",
+        "GHSA-p423-j2cm-9vmq"
+      ],
+      "audited_version": "46.0.3",
+      "current_direct_pin": "50.0.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "cryptography",
+      "primary_advisory_id": "PYSEC-2026-36",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "46.0.7"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-p423-j2cm-9vmq"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-23342",
+        "GHSA-wj6h-64fc-37mp"
+      ],
+      "audited_version": "0.19.1",
+      "current_direct_pin": null,
+      "disposition": "not_installed_in_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "ecdsa",
+      "primary_advisory_id": "PYSEC-2026-1325",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-wj6h-64fc-37mp"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-33936",
+        "GHSA-9f5j-8jwj-x28g"
+      ],
+      "audited_version": "0.19.1",
+      "current_direct_pin": null,
+      "disposition": "not_installed_in_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "ecdsa",
+      "primary_advisory_id": "PYSEC-2026-2467",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "0.19.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-9f5j-8jwj-x28g"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2023-29483",
+        "GHSA-3rq5-2g8h-59hc",
+        "PYSEC-2026-2472"
+      ],
+      "audited_version": "0.35.1",
+      "current_direct_pin": "0.40.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "eventlet",
+      "primary_advisory_id": "PYSEC-2026-1307",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "0.35.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-3rq5-2g8h-59hc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-58068",
+        "GHSA-hw6f-rjfj-j7j7"
+      ],
+      "audited_version": "0.35.1",
+      "current_direct_pin": "0.40.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "eventlet",
+      "primary_advisory_id": "PYSEC-2026-1350",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "0.40.3"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-hw6f-rjfj-j7j7"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2023-29483",
+        "GHSA-3rq5-2g8h-59hc"
+      ],
+      "audited_version": "0.35.1",
+      "current_direct_pin": "0.40.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "eventlet",
+      "primary_advisory_id": "PYSEC-2026-2472",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "0.35.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-3rq5-2g8h-59hc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-1681",
+        "GHSA-84pr-m4jr-85g5"
+      ],
+      "audited_version": "4.0.0",
+      "current_direct_pin": "6.0.5",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "flask-cors",
+      "primary_advisory_id": "PYSEC-2024-271",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "4.0.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-84pr-m4jr-85g5"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-6221",
+        "GHSA-hxwh-jpp2-84pm",
+        "PYSEC-2024-260"
+      ],
+      "audited_version": "4.0.0",
+      "current_direct_pin": "6.0.5",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "conditional_browser_private_network_path_confirmed",
+      "package": "flask-cors",
+      "primary_advisory_id": "PYSEC-2024-71",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "4.0.2"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-hxwh-jpp2-84pm"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-6866",
+        "GHSA-43qf-4rqw-9q2g"
+      ],
+      "audited_version": "4.0.0",
+      "current_direct_pin": "6.0.5",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "flask-cors",
+      "primary_advisory_id": "PYSEC-2026-1383",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.0.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-43qf-4rqw-9q2g"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-6839",
+        "GHSA-7rxf-gvfg-47g4"
+      ],
+      "audited_version": "4.0.0",
+      "current_direct_pin": "6.0.5",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "flask-cors",
+      "primary_advisory_id": "PYSEC-2026-1384",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.0.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-7rxf-gvfg-47g4"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-6844",
+        "GHSA-8vgw-p6qm-5gr7"
+      ],
+      "audited_version": "4.0.0",
+      "current_direct_pin": "6.0.5",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "flask-cors",
+      "primary_advisory_id": "PYSEC-2026-1385",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.0.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-8vgw-p6qm-5gr7"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-fx3j-rwgx-fr94"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "CVE-2026-110855",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-fx3j-rwgx-fr94"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-m64x-33q8-m5h7"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "CVE-2026-110856",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-m64x-33q8-m5h7"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-w8jc-g24h-crhw"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "CVE-2026-110857",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-w8jc-g24h-crhw"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-f9j4-qggq-h239"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "CVE-2026-110858",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-f9j4-qggq-h239"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-23mf-xhv8-69c2"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "CVE-2026-110859",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-23mf-xhv8-69c2"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-83vg-56qc-22m7"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "CVE-2026-114145",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.1"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-83vg-56qc-22m7"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-42215",
+        "GHSA-rpm5-65cw-6hj4"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-2160",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.47"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-rpm5-65cw-6hj4"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-42284",
+        "GHSA-x2qx-6953-8485"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-2161",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.47"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-x2qx-6953-8485"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44243",
+        "GHSA-7545-fcxq-7j24"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-2162",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.48"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-7545-fcxq-7j24"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44244",
+        "GHSA-v87r-6q3f-2j67"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-2163",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.49"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-v87r-6q3f-2j67"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-76221",
+        "GHSA-jm78-9fvv-mhgr"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3783",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.58"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-jm78-9fvv-mhgr"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-76222",
+        "GHSA-hmq2-w58f-27jc"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3784",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.58"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-hmq2-w58f-27jc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-78675",
+        "GHSA-7833-fr7j-v32q"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3785",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.59"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-7833-fr7j-v32q"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-78676",
+        "GHSA-284h-m62q-gf8w"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3786",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.59"
+      ],
+      "severity": "CRITICAL",
+      "severity_source_ids": [
+        "GHSA-284h-m62q-gf8w"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-78677",
+        "GHSA-8mcc-hrx5-hvxc"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3787",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.59"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-8mcc-hrx5-hvxc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-78678",
+        "GHSA-5xxx-qhh7-9287"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3788",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.59"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-5xxx-qhh7-9287"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-67325",
+        "GHSA-2f96-g7mh-g2hx"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3836",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.51"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-2f96-g7mh-g2hx"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-78679",
+        "GHSA-3wxw-xv34-2frg"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3837",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.59"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-3wxw-xv34-2frg"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-76219",
+        "GHSA-4gmw-gg2m-w46p"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3838",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.58"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-4gmw-gg2m-w46p"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-67323",
+        "GHSA-956x-8gvw-wg5v"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3839",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.51"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-956x-8gvw-wg5v"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-76218",
+        "GHSA-9rj7-rf2p-w77r"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3840",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.58"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-9rj7-rf2p-w77r"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-76217",
+        "GHSA-hh9p-6wh2-4mfc"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3841",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.58"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-hh9p-6wh2-4mfc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-76220",
+        "GHSA-wvpp-8hx9-p66j"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3843",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.58"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-wvpp-8hx9-p66j"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-73619",
+        "GHSA-539m-9xh6-q6rr"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3948",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.57"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-539m-9xh6-q6rr"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-73620",
+        "GHSA-3f7w-8rr8-f37f"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3949",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.57"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-3f7w-8rr8-f37f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-73621",
+        "GHSA-p538-c434-8v24"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3950",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.56"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-p538-c434-8v24"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-73622",
+        "GHSA-94p4-4cq8-9g67"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3951",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.55"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-94p4-4cq8-9g67"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-73623",
+        "GHSA-6p8h-3wgx-97gf"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3952",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.54"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-6p8h-3wgx-97gf"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-73625",
+        "GHSA-r9mr-m37c-5fr3"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3953",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.54"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-r9mr-m37c-5fr3"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-67326",
+        "GHSA-mv93-w799-cj2w"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3980",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.50"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-mv93-w799-cj2w"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-69097",
+        "GHSA-3rp5-jjmw-4wv2"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3981",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.53"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-3rp5-jjmw-4wv2"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-87817",
+        "GHSA-239g-whfq-7xj9"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3982",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.60"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-239g-whfq-7xj9"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-87819",
+        "GHSA-g5vv-9gxw-82hx"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3984",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.60"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-g5vv-9gxw-82hx"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-73624",
+        "GHSA-fjr4-x663-mwxc"
+      ],
+      "audited_version": "3.1.45",
+      "current_direct_pin": "3.2.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "gitpython",
+      "primary_advisory_id": "PYSEC-2026-3995",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.1.54"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-fjr4-x663-mwxc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-45409",
+        "GHSA-65pc-fj4g-8rjx"
+      ],
+      "audited_version": "3.11",
+      "current_direct_pin": "3.20",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "idna",
+      "primary_advisory_id": "PYSEC-2026-215",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "3.15"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-65pc-fj4g-8rjx"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-40110",
+        "GHSA-24qx-w28j-9m6p"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-2187",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.18.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-24qx-w28j-9m6p"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-5422",
+        "GHSA-gf7q-q4j7-hp7c"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-2532",
+      "priority": "UNVERIFIED",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.18.2"
+      ],
+      "severity": "UNKNOWN",
+      "severity_source_ids": []
+    },
+    {
+      "aliases": [
+        "CVE-2026-6657",
+        "GHSA-v42x-x7jp-845h"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-3472",
+      "priority": "UNVERIFIED",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [],
+      "severity": "UNKNOWN",
+      "severity_source_ids": []
+    },
+    {
+      "aliases": [
+        "CVE-2026-44727",
+        "GHSA-fcw5-x6j4-ccmp"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-366",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.20.0"
+      ],
+      "severity": "CRITICAL",
+      "severity_source_ids": [
+        "GHSA-fcw5-x6j4-ccmp"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-86049",
+        "GHSA-c3mw-737p-c7g2"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-4054",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.21.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-c3mw-737p-c7g2"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-61669",
+        "GHSA-qh7q-6qm3-653w"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-67",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.18.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-qh7q-6qm3-653w"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-35397",
+        "GHSA-5789-5fc7-67v3"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-68",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.18.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-5789-5fc7-67v3"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-40934",
+        "GHSA-5mrq-x3x5-8v8f"
+      ],
+      "audited_version": "2.17.0",
+      "current_direct_pin": "2.21.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyter-server",
+      "primary_advisory_id": "PYSEC-2026-69",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.18.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-5mrq-x3x5-8v8f"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-vmhf-c436-hxj4"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "CVE-2026-67338",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.9"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-vmhf-c436-hxj4"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-whvh-wf3x-g77j"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "CVE-2026-73626",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.10",
+        "4.6.2"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-whvh-wf3x-g77j"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "GHSA-h5v5-8746-g7mm",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.10",
+        "4.6.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-h5v5-8746-g7mm"
+      ]
+    },
+    {
+      "aliases": [
+        "BIT-jupyterlab-2026-42266",
+        "CVE-2026-42266",
+        "GHSA-37w4-hwhx-4rc4"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-164",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.7"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-37w4-hwhx-4rc4"
+      ]
+    },
+    {
+      "aliases": [
+        "BIT-jupyter-base-notebook-2026-42557",
+        "BIT-jupyter-notebook-2026-42557",
+        "BIT-jupyterlab-2026-42557",
+        "CVE-2026-42557",
+        "GHSA-mqcg-5x36-vfcg",
+        "PYSEC-2026-2681"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-2537",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.7"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-mqcg-5x36-vfcg"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-40171",
+        "GHSA-rch3-82jr-f9w9"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-2538",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.7"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-rch3-82jr-f9w9"
+      ]
+    },
+    {
+      "aliases": [
+        "BIT-jupyterlab-2026-73416",
+        "CVE-2026-73416",
+        "GHSA-89vp-jrxv-24w8"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-3670",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.10",
+        "4.6.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-89vp-jrxv-24w8"
+      ]
+    },
+    {
+      "aliases": [
+        "BIT-jupyterlab-2026-73415",
+        "CVE-2026-73415",
+        "GHSA-gx64-gj6p-pc4c"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-3671",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.10",
+        "4.6.2"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-gx64-gj6p-pc4c"
+      ]
+    },
+    {
+      "aliases": [
+        "BIT-jupyterlab-2026-73417",
+        "CVE-2026-73417",
+        "GHSA-pppj-hq3g-57pj"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-3672",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.10",
+        "4.6.2"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-pppj-hq3g-57pj"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102904",
+        "GHSA-3325-v43h-43rv"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-4055",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.11",
+        "4.6.4"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-3325-v43h-43rv"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102830",
+        "GHSA-3jqq-pw4j-pqcj"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-4056",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.11",
+        "4.6.4"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-3jqq-pw4j-pqcj"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102831",
+        "GHSA-6966-vjj6-99xv"
+      ],
+      "audited_version": "4.5.0",
+      "current_direct_pin": "4.5.11",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab",
+      "primary_advisory_id": "PYSEC-2026-4057",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "4.5.11",
+        "4.6.4"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-6966-vjj6-99xv"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-54528",
+        "GHSA-436q-jwfr-rm2h"
+      ],
+      "audited_version": "0.51.2",
+      "current_direct_pin": "0.54.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab-git",
+      "primary_advisory_id": "PYSEC-2026-2539",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "0.54.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-436q-jwfr-rm2h"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-54527",
+        "GHSA-f962-v9hr-pfg5",
+        "PYSEC-2026-2541"
+      ],
+      "audited_version": "0.51.2",
+      "current_direct_pin": "0.54.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "jupyterlab-git",
+      "primary_advisory_id": "PYSEC-2026-2540",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "0.54.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-f962-v9hr-pfg5"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-h7ww-273w-6cm8"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "CVE-2026-115355",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-h7ww-273w-6cm8"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44896",
+        "GHSA-58cw-g322-p94v"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-168",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-58cw-g322-p94v"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44708",
+        "GHSA-8g87-j6q8-g93x"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2206",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-8g87-j6q8-g93x"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44897",
+        "GHSA-v87v-83h2-53w7"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2207",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-v87v-83h2-53w7"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44898",
+        "GHSA-6269-cqxg-mhhv"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2208",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-6269-cqxg-mhhv"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44899",
+        "GHSA-ccfx-mfmx-2fx9"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2209",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-ccfx-mfmx-2fx9"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59922",
+        "GHSA-c8j7-8cv4-2xmq"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2210",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-c8j7-8cv4-2xmq"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59923",
+        "GHSA-8c25-4j27-2rv3"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2211",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-8c25-4j27-2rv3"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59924",
+        "GHSA-r4rv-85jg-w4mf"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2212",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-r4rv-85jg-w4mf"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59925",
+        "GHSA-4j32-57v6-6g45"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2213",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-4j32-57v6-6g45"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59926",
+        "GHSA-g97x-gvcm-x72h"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2214",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-g97x-gvcm-x72h"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59927",
+        "GHSA-8mpj-m6qm-5qr8"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2215",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-8mpj-m6qm-5qr8"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59928",
+        "GHSA-ffq3-xpv3-j92q"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2216",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-ffq3-xpv3-j92q"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59929",
+        "GHSA-qfrw-5rxm-mhh2"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2217",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-qfrw-5rxm-mhh2"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-59930",
+        "GHSA-2hm2-hc3v-44h9"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2218",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-2hm2-hc3v-44h9"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-33079",
+        "GHSA-8mp2-v27r-99xp"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2651",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.2.1"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-8mp2-v27r-99xp"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-49851",
+        "GHSA-qcq2-496w-v96p"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.3.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "mistune",
+      "primary_advisory_id": "PYSEC-2026-2652",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "3.3.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-qcq2-496w-v96p"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-53000",
+        "GHSA-xm59-rqc7-hhvf"
+      ],
+      "audited_version": "7.16.6",
+      "current_direct_pin": "7.17.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "nbconvert",
+      "primary_advisory_id": "PYSEC-2026-1691",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "7.17.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-xm59-rqc7-hhvf"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-39377",
+        "GHSA-4c99-qj7h-p3vg"
+      ],
+      "audited_version": "7.16.6",
+      "current_direct_pin": "7.17.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "nbconvert",
+      "primary_advisory_id": "PYSEC-2026-2229",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "7.17.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-4c99-qj7h-p3vg"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-39378",
+        "GHSA-7jqv-fw35-gmx9"
+      ],
+      "audited_version": "7.16.6",
+      "current_direct_pin": "7.17.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "nbconvert",
+      "primary_advisory_id": "PYSEC-2026-2230",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "7.17.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-7jqv-fw35-gmx9"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-4539",
+        "GHSA-5239-wwwm-4pmq"
+      ],
+      "audited_version": "2.19.2",
+      "current_direct_pin": "2.20.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pygments",
+      "primary_advisory_id": "PYSEC-2026-2987",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.20.0"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-5239-wwwm-4pmq"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "GHSA-pxh4-856f-4h89",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-pxh4-856f-4h89"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-45768"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2025-183",
+      "priority": "UNVERIFIED",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [],
+      "severity": "UNKNOWN",
+      "severity_source_ids": []
+    },
+    {
+      "aliases": [
+        "CVE-2026-32597",
+        "GHSA-752w-5fwx-jx9f"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-120",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.12.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-752w-5fwx-jx9f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48522",
+        "GHSA-993g-76c3-p5m4"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-175",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.13.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-993g-76c3-p5m4"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48523",
+        "GHSA-jq35-7prp-9v3f"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-176",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.12.1",
+        "2.13.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-jq35-7prp-9v3f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48524",
+        "GHSA-fhv5-28vv-h8m8"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-177",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.13.0"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-fhv5-28vv-h8m8"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48525",
+        "GHSA-w7vc-732c-9m39"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-178",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.13.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-w7vc-732c-9m39"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48526",
+        "GHSA-xgmm-8j9v-c9wx"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-179",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.13.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-xgmm-8j9v-c9wx"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-101917",
+        "GHSA-2gx3-rcp4-g85q"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4140",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-2gx3-rcp4-g85q"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-101918",
+        "GHSA-42vr-xj54-vc7v"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4141",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.15.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-42vr-xj54-vc7v"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102267",
+        "GHSA-9v7f-9g4p-ffgj"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4144",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-9v7f-9g4p-ffgj"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102268",
+        "GHSA-ffc3-869f-jxw9"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4145",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "CRITICAL",
+      "severity_source_ids": [
+        "GHSA-ffc3-869f-jxw9"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102269",
+        "GHSA-hxm8-2xgr-2p9m"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4147",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-hxm8-2xgr-2p9m"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102270",
+        "GHSA-jwrc-g2q2-pq5p"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4148",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-jwrc-g2q2-pq5p"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102271",
+        "GHSA-p4g4-x82p-q773"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4149",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-p4g4-x82p-q773"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102274",
+        "GHSA-w6j9-cwv2-h6wq"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4152",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.14.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-w6j9-cwv2-h6wq"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102275",
+        "GHSA-x33g-cr3x-6449"
+      ],
+      "audited_version": "2.10.1",
+      "current_direct_pin": "2.15.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pyjwt",
+      "primary_advisory_id": "PYSEC-2026-4183",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.15.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-x33g-cr3x-6449"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-71176",
+        "GHSA-6w46-j5rx-g56g"
+      ],
+      "audited_version": "8.2.2",
+      "current_direct_pin": "9.0.3",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "pytest",
+      "primary_advisory_id": "PYSEC-2026-1845",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "9.0.3"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-6w46-j5rx-g56g"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-28684",
+        "GHSA-mf9w-mj56-hr94"
+      ],
+      "audited_version": "1.0.0",
+      "current_direct_pin": "1.2.2",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "python-dotenv",
+      "primary_advisory_id": "PYSEC-2026-2270",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "1.2.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-mf9w-mj56-hr94"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-61765",
+        "GHSA-g8c6-8fjj-2r4m"
+      ],
+      "audited_version": "5.11.1",
+      "current_direct_pin": "5.18.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "python-socketio",
+      "primary_advisory_id": "PYSEC-2026-1854",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "5.14.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-g8c6-8fjj-2r4m"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48804",
+        "GHSA-5w7q-77mv-v69f"
+      ],
+      "audited_version": "5.11.1",
+      "current_direct_pin": "5.18.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "python-socketio",
+      "primary_advisory_id": "PYSEC-2026-3042",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "5.16.2"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-5w7q-77mv-v69f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-25645",
+        "GHSA-gc5v-m9x4-r6x2"
+      ],
+      "audited_version": "2.32.5",
+      "current_direct_pin": "2.33.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "requests",
+      "primary_advisory_id": "PYSEC-2026-2275",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.33.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-gc5v-m9x4-r6x2"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-5206",
+        "GHSA-jw8x-6495-233v"
+      ],
+      "audited_version": "1.3.2",
+      "current_direct_pin": "1.3.2",
+      "disposition": "still_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "scikit-learn",
+      "primary_advisory_id": "PYSEC-2024-110",
+      "priority": "P3",
+      "production_exposure": "installed_trading_model_library_vulnerable_vectorizer_path_not_established",
+      "reported_fix_versions": [
+        "1.5.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-jw8x-6495-233v"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "80.9.0",
+      "current_direct_pin": "84.1.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "setuptools",
+      "primary_advisory_id": "GHSA-xmj3-9gf7-h52w",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "84.1.0"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-xmj3-9gf7-h52w"
+      ]
+    },
+    {
+      "aliases": [
+        "BIT-setuptools-2026-59890",
+        "CVE-2026-59890",
+        "GHSA-h35f-9h28-mq5c"
+      ],
+      "audited_version": "80.9.0",
+      "current_direct_pin": "84.1.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "setuptools",
+      "primary_advisory_id": "PYSEC-2026-3447",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "83.0.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-h35f-9h28-mq5c"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-49476",
+        "GHSA-2wc2-fm75-p42x"
+      ],
+      "audited_version": "2.8",
+      "current_direct_pin": "2.9.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "soupsieve",
+      "primary_advisory_id": "PYSEC-2026-3071",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.8.4"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-2wc2-fm75-p42x"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-49477",
+        "GHSA-836r-79rf-4m37"
+      ],
+      "audited_version": "2.8",
+      "current_direct_pin": "2.9.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "soupsieve",
+      "primary_advisory_id": "PYSEC-2026-3072",
+      "priority": "P2",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.8.4"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-836r-79rf-4m37"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-86000",
+        "GHSA-gjv8-xp57-g29c"
+      ],
+      "audited_version": "2.8",
+      "current_direct_pin": "2.9.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "soupsieve",
+      "primary_advisory_id": "PYSEC-2026-4170",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.9.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-gjv8-xp57-g29c"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-85999",
+        "GHSA-j934-xhv5-fg8f"
+      ],
+      "audited_version": "2.8",
+      "current_direct_pin": "2.9.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "soupsieve",
+      "primary_advisory_id": "PYSEC-2026-4171",
+      "priority": "P3",
+      "production_exposure": "installed_tooling_or_library_exposure_unconfirmed",
+      "reported_fix_versions": [
+        "2.9.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-j934-xhv5-fg8f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48710",
+        "GHSA-86qp-5c8j-p5mr",
+        "X41-2026-002"
+      ],
+      "audited_version": "0.36.3",
+      "current_direct_pin": "1.3.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "starlette",
+      "primary_advisory_id": "PYSEC-2026-161",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.0.1"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-86qp-5c8j-p5mr"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-54121",
+        "GHSA-2c2j-9gv5-cj73"
+      ],
+      "audited_version": "0.36.3",
+      "current_direct_pin": "1.3.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "starlette",
+      "primary_advisory_id": "PYSEC-2026-1941",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "0.47.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-2c2j-9gv5-cj73"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-47874",
+        "GHSA-f96h-pmfr-66vw"
+      ],
+      "audited_version": "0.36.3",
+      "current_direct_pin": "1.3.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "starlette",
+      "primary_advisory_id": "PYSEC-2026-1943",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "0.40.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-f96h-pmfr-66vw"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48817",
+        "GHSA-x746-7m8f-x49c"
+      ],
+      "audited_version": "0.36.3",
+      "current_direct_pin": "1.3.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "starlette",
+      "primary_advisory_id": "PYSEC-2026-2280",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.1.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-x746-7m8f-x49c"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-48818",
+        "GHSA-wqp7-x3pw-xc5r"
+      ],
+      "audited_version": "0.36.3",
+      "current_direct_pin": "1.3.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "starlette",
+      "primary_advisory_id": "PYSEC-2026-2281",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.1.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-wqp7-x3pw-xc5r"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-54282",
+        "GHSA-jp82-jpqv-5vv3"
+      ],
+      "audited_version": "0.36.3",
+      "current_direct_pin": "1.3.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "starlette",
+      "primary_advisory_id": "PYSEC-2026-248",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.3.0"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-jp82-jpqv-5vv3"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-54283",
+        "GHSA-82w8-qh3p-5jfq"
+      ],
+      "audited_version": "0.36.3",
+      "current_direct_pin": "1.3.1",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "starlette",
+      "primary_advisory_id": "PYSEC-2026-249",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.3.1"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-82w8-qh3p-5jfq"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-r4j5-9xpp-3985"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "CVE-2026-115927",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.6"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-r4j5-9xpp-3985"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-pcg2-g6cj-q92c"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "CVE-2026-116577",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.6"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-pcg2-g6cj-q92c"
+      ]
+    },
+    {
+      "aliases": [
+        "GHSA-pw9p-v7r6-gx4p"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "CVE-2026-116578",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.6"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-pw9p-v7r6-gx4p"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "GHSA-3hv7-mjh2-fv65",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.9"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-3hv7-mjh2-fv65"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "GHSA-8423-8fgw-73vq",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.8"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-8423-8fgw-73vq"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "GHSA-c2m8-h5v5-343r",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.9"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-c2m8-h5v5-343r"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "GHSA-chx6-46f5-w4vp",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.9"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-chx6-46f5-w4vp"
+      ]
+    },
+    {
+      "aliases": [],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "GHSA-pw6j-qg29-8w7f",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.7"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-pw6j-qg29-8w7f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-67724",
+        "GHSA-pr2v-jx2c-wg9f"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2025-265",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.3"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-pr2v-jx2c-wg9f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-67725",
+        "GHSA-c98p-7wgm-6p64"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2025-266",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.3"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-c98p-7wgm-6p64"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-67726",
+        "GHSA-jhmp-mqwm-3gq8"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2025-267",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.3"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-jhmp-mqwm-3gq8"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-31958",
+        "GHSA-qjxf-f2mg-c6mc"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2026-140",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.5"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-qjxf-f2mg-c6mc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-35536",
+        "GHSA-78cv-mqj4-43f7",
+        "GHSA-fqwm-6jpj-5wxc"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2026-2287",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.5"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-78cv-mqj4-43f7",
+        "GHSA-fqwm-6jpj-5wxc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-49853",
+        "GHSA-3x9g-8vmp-wqvf"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2026-3387",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.6"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-3x9g-8vmp-wqvf"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-49854",
+        "GHSA-cx3h-4qpv-8hc9"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2026-3388",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.6"
+      ],
+      "severity": "LOW",
+      "severity_source_ids": [
+        "GHSA-cx3h-4qpv-8hc9"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-49855",
+        "GHSA-mgf9-4vpg-hj56"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2026-3389",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.6"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-mgf9-4vpg-hj56"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-82397",
+        "GHSA-mpf4-983q-p7j4"
+      ],
+      "audited_version": "6.5.2",
+      "current_direct_pin": "6.6",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "tornado",
+      "primary_advisory_id": "PYSEC-2026-3928",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "6.5.8"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-mpf4-983q-p7j4"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2023-43804",
+        "GHSA-v845-jxx5-vc9f"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2023-192",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.26.17",
+        "2.0.6"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-v845-jxx5-vc9f"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2023-45803",
+        "GHSA-g4mx-q9vg-27p4"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2023-212",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.26.18",
+        "2.0.7"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-g4mx-q9vg-27p4"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-44431",
+        "GHSA-qccp-gfcp-xxvc"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-141",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.7.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-qccp-gfcp-xxvc"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-66471",
+        "GHSA-2xpw-w6gg-jr37"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-1994",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.6.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-2xpw-w6gg-jr37"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2024-37891",
+        "GHSA-34jh-p97f-mpxf"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-1995",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "1.26.19",
+        "2.2.2"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-34jh-p97f-mpxf"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-21441",
+        "GHSA-38jv-5279-wg99"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-1996",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.6.3"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-38jv-5279-wg99"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-66418",
+        "GHSA-gm62-xv2j-4w53"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-1998",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.6.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-gm62-xv2j-4w53"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2025-50181",
+        "GHSA-pq67-6m6q-mj2v"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-1999",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.5.0"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-pq67-6m6q-mj2v"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-97687",
+        "GHSA-8988-9cw3-xx77"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-4175",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.8.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-8988-9cw3-xx77"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-97689",
+        "GHSA-vxq7-64xx-v4gw"
+      ],
+      "audited_version": "1.26.12",
+      "current_direct_pin": "2.8.0",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "urllib3",
+      "primary_advisory_id": "PYSEC-2026-4177",
+      "priority": "P1",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "2.8.0"
+      ],
+      "severity": "HIGH",
+      "severity_source_ids": [
+        "GHSA-vxq7-64xx-v4gw"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-21860",
+        "GHSA-87hc-h4r5-73f7"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.1.9",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "werkzeug",
+      "primary_advisory_id": "PYSEC-2026-2044",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "3.1.5"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-87hc-h4r5-73f7"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-27199",
+        "GHSA-29vq-49wr-vm6x"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.1.9",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "werkzeug",
+      "primary_advisory_id": "PYSEC-2026-2320",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "3.1.6"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-29vq-49wr-vm6x"
+      ]
+    },
+    {
+      "aliases": [
+        "CVE-2026-102598",
+        "GHSA-g6x2-hccm-hh4m"
+      ],
+      "audited_version": "3.1.4",
+      "current_direct_pin": "3.1.9",
+      "disposition": "not_reported_by_fresh_resolved_audit",
+      "exploitability": "specific_trigger_not_established",
+      "package": "werkzeug",
+      "primary_advisory_id": "PYSEC-2026-4312",
+      "priority": "P3",
+      "production_exposure": "installed_runtime_network_or_auth_stack",
+      "reported_fix_versions": [
+        "3.1.9"
+      ],
+      "severity": "MODERATE",
+      "severity_source_ids": [
+        "GHSA-g6x2-hccm-hh4m"
+      ]
+    }
+  ],
+  "affected_package_count": 27,
+  "format": "nija-offline-dependency-triage-v1",
+  "input_sha256": {
+    "fresh_resolved_audit_content_id": "88de0bb978a103b0655fda507616b9399eddd65e1dc3b407273626403f6e1cb3",
+    "github_severities_content_id": "83c9050159fb09a9f1b5d8e452ee3b61350ea36e8f05aa3ff6e7835e58c982af",
+    "pip_audit_content_id": "60a53e20309f3e67beb53197d9239ea3da20c9299fc86551e7772e9f442b1e31"
+  },
+  "note": "Primary IDs are not alias-deduplicated incidents. Pin changes are not a clean rescan.",
+  "raw_advisory_record_count": 264,
+  "resolved_package_count": 215,
+  "unique_primary_advisory_ids": 167,
+  "unknown_severity_rows": 3
+}

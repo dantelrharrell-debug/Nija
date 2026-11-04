@@ -29,6 +29,7 @@ from functools import wraps
 import secrets
 
 from user_trade_reporting import TradeHistoryQueryError
+from web_cors_policy import allowed_web_origins
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
 from execution import get_permission_validator, UserPermissions
@@ -61,13 +62,8 @@ install_admin_access(app, protected_prefixes=(
     "/api/safety/emergency-stop",
 ))
 
-_allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')
-if '*' in _allowed_origins:
-    logger.warning(
-        "ALLOWED_ORIGINS is set to '*' (wildcard). "
-        "Restrict to specific domains in production by setting the ALLOWED_ORIGINS env var."
-    )
-CORS(app, resources={r"/api/*": {"origins": _allowed_origins}})
+_allowed_origins = allowed_web_origins()
+CORS(app, resources={r"/api/*": {"origins": _allowed_origins}}, allow_private_network=False)
 
 # Configuration – JWT secret loaded from secrets backend (env / AWS / Vault)
 app.config['SECRET_KEY'] = get_jwt_secret()
@@ -268,7 +264,7 @@ def detailed_status():
         'service': 'NIJA Cloud API',
         'version': '1.0.0',
         'components': {
-            'api_key_manager': 'available' if api_key_manager else 'unavailable',
+            'api_key_manager': 'available' if api_key_manager else 'unavailable',  # pragma: allowlist secret
             'user_manager': 'available' if user_manager else 'unavailable',
             'permission_validator': 'available' if permission_validator else 'unavailable'
         }

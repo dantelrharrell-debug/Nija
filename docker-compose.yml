@@ -123,7 +123,7 @@ services:
       # Server
       PORT: 8000
       DEBUG: ${DEBUG:-false}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://nijaaitrading.com,https://www.nijaaitrading.com}
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:-}
       # Rate Limiting
       RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-100}
