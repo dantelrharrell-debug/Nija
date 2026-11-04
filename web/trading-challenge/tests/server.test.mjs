@@ -30,9 +30,9 @@ globalThis.fetch = async (input, options = {}) => {
 const start = await new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
 const origin = "http://127.0.0.1:" + start;
 const sessionId = "cs_test_abcdefgh12345678";
-const post = (body, requestOrigin = "http://localhost:8787") => realFetch(origin + "/api/checkout", {
+const post = (body, requestOrigin = "http://localhost:8787", extraHeaders = {}) => realFetch(origin + "/api/checkout", {
   method: "POST",
-  headers: { "Content-Type": "application/json", Origin: requestOrigin },
+  headers: { "Content-Type": "application/json", Origin: requestOrigin, ...extraHeaders },
   body: JSON.stringify(body)
 });
 
@@ -62,6 +62,26 @@ test("checkout is for one dollar with no subscription and metadata choices", asy
   assert.equal(params.get("line_items[0][price_data][unit_amount]"), "100");
   assert.equal(params.get("metadata[answers]"), "2,2,1,0,1,1");
   assert.equal(params.get("metadata[version]"), "nija-trading-iq-v1");
+});
+test("checkout rate limits by Vercel's trusted client IP", async () => {
+  process.env.VERCEL = "1";
+  const body = { version: "nija-trading-iq-v1", answers: [2,2,1,0,1,1] };
+  for (let i = 0; i < 30; i++) {
+    assert.equal((await post(body, undefined, { "x-vercel-forwarded-for": "198.51.100.10" })).status, 200);
+  }
+  assert.equal((await post(body, undefined, { "x-vercel-forwarded-for": "198.51.100.10" })).status, 429);
+  assert.equal((await post(body, undefined, { "x-vercel-forwarded-for": "198.51.100.11" })).status, 200);
+  delete process.env.VERCEL;
+});
+test("standalone deployments use forwarded IPs only with an explicit proxy-hop count", async () => {
+  process.env.TRUSTED_PROXY_HOPS = "1";
+  const body = { version: "nija-trading-iq-v1", answers: [2,2,1,0,1,1] };
+  for (let i = 0; i < 30; i++) {
+    assert.equal((await post(body, undefined, { "x-forwarded-for": "198.51.100.20" })).status, 200);
+  }
+  assert.equal((await post(body, undefined, { "x-forwarded-for": "198.51.100.20" })).status, 429);
+  assert.equal((await post(body, undefined, { "x-forwarded-for": "198.51.100.21" })).status, 200);
+  delete process.env.TRUSTED_PROXY_HOPS;
 });
 test("an unpaid Stripe session cannot unlock results", async () => {
   stripePaymentStatus = "unpaid";

@@ -1,6 +1,7 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { scoreReport, validAnswers, VERSION } from "./scoring.mjs";
@@ -73,7 +74,18 @@ async function stripeRequest(route, options = {}) {
 }
 function rateLimit(req) {
   const now = Date.now();
-  const ip = req.socket.remoteAddress || "unknown";
+  const vercelIp = req.headers["x-vercel-forwarded-for"];
+  const trustedProxyHops = Number(process.env.TRUSTED_PROXY_HOPS || 0);
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const forwardedAddresses = typeof forwardedFor === "string"
+    ? forwardedFor.split(",").map(address => address.trim())
+    : [];
+  const forwardedIp = Number.isSafeInteger(trustedProxyHops) && trustedProxyHops > 0
+    ? forwardedAddresses[forwardedAddresses.length - trustedProxyHops]
+    : "";
+  const ip = process.env.VERCEL && typeof vercelIp === "string" && isIP(vercelIp.trim())
+    ? vercelIp.trim()
+    : isIP(forwardedIp || "") ? forwardedIp : req.socket.remoteAddress || "unknown";
   const prior = traffic.get(ip) || [];
   const active = prior.filter(time => now - time < 3600000);
   if (traffic.size > 5000) traffic.clear();

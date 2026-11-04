@@ -36,8 +36,10 @@ Set environment variables in the deployment provider's **secret settings**, neve
 | `PUBLIC_BASE_URL` | Stable HTTPS origin, e.g. `https://game.nijaaitrading.com`, for production |
 | `NODE_ENV` | Set to `production` in production; process fails closed without an HTTPS public URL |
 | `PORT` | Optional for the standalone Node server; Vercel ignores it |
+| `TRUSTED_PROXY_HOPS` | Optional for a standalone server behind a trusted reverse proxy; set to the exact number of proxies in front of the server |
 
 The temporary Vercel preview hostname can be obtained from `VERCEL_URL` if `PUBLIC_BASE_URL` is not set in preview. Ensure preview and production have separate payment credentials.
+Vercel checkout rate limits use its `x-vercel-forwarded-for` client-IP header. Standalone deployments use the socket address unless `TRUSTED_PROXY_HOPS` is set; only enable it when the server is reachable exclusively through the configured trusted proxy chain.
 
 **Release checklist:**
 
