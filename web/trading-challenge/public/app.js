@@ -8,6 +8,8 @@
   let selected = false;
   let verifiedReport = null;
   let pendingSessionId = null;
+  let virtualBalance = 10000;
+  const cash = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
   function show(id) {
     panels.forEach((name) => el(name).classList.toggle("hidden", name !== id));
@@ -56,6 +58,7 @@
   function renderRound() {
     selected = false;
     const s = scenarios[round];
+    text("balance", cash(virtualBalance));
     text("round-counter", "ROUND " + (round + 1) + " OF " + scenarios.length);
     text("streak", "DECISIONS MADE " + answers.length);
     el("progress-bar").style.width = (100 * round / scenarios.length) + "%";
@@ -80,6 +83,11 @@
     selected = true;
     const s = scenarios[round];
     answers.push(index);
+    const change = s.options[index].virtualDelta;
+    virtualBalance += change;
+    text("balance", cash(virtualBalance));
+    text("balance-delta", (change >= 0 ? "+" : "−") + cash(Math.abs(change)) + " · fictional outcome");
+    el("balance-delta").classList.toggle("negative", change < 0);
     Array.from(el("options").children).forEach((button, i) => {
       button.disabled = true;
       button.classList.toggle("selected", i === index);
@@ -94,7 +102,7 @@
     el("progress-bar").style.width = 100 * answers.length / scenarios.length + "%";
   }
   function finish() {
-    text("free-summary", "You navigated six simulated market moments. Your choices covered risk, research, and trading discipline. Your free feedback stays yours—unlock the optional personalized breakdown for $1.");
+    text("free-summary", "You finished with " + cash(virtualBalance) + " in fictional capital. Short-term simulated P&L does not determine decision quality. Unlock the optional $1 analysis of risk, research, and discipline.");
     const native = Boolean(window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform());
     el("unlock").disabled = native;
     if (native) text("payment-message", "The $1 report requires Apple or Google in-app billing in a future native release. Continue practicing for free.");
@@ -102,7 +110,9 @@
     show("finish");
   }
   function start() {
-    answers = []; round = 0; selected = false; verifiedReport = null; pendingSessionId = null;
+    answers = []; round = 0; selected = false; verifiedReport = null; pendingSessionId = null; virtualBalance = 10000;
+    text("balance-delta", "Simulation starts here");
+    el("balance-delta").classList.remove("negative");
     window.history.replaceState({}, "", window.location.pathname);
     renderRound();
   }
