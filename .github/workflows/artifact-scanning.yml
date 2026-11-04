@@ -26,6 +26,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Install checksum-pinned Trivy
+      run: bash scripts/install_pinned_trivy.sh
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -54,13 +57,13 @@ jobs:
           .
 
     - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-      with:
-        image-ref: ${{ steps.image-name.outputs.image }}
-        format: 'sarif'
-        output: 'trivy-results-${{ matrix.dockerfile }}.sarif'
-        severity: 'CRITICAL,HIGH'
-        exit-code: '0'  # Don't fail build, just report
+      run: |
+        trivy image \
+          --format sarif \
+          --output "trivy-results-${{ matrix.dockerfile }}.sarif" \
+          --severity CRITICAL,HIGH \
+          --exit-code 0 \
+          "${{ steps.image-name.outputs.image }}"
 
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
@@ -70,12 +73,12 @@ jobs:
         category: 'trivy-${{ matrix.dockerfile }}'
 
     - name: Run Trivy vulnerability scanner (table format)
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ steps.image-name.outputs.image }}
-        format: 'table'
-        severity: 'CRITICAL,HIGH,MEDIUM'
-        exit-code: '0'
+      run: |
+        trivy image \
+          --format table \
+          --severity CRITICAL,HIGH,MEDIUM \
+          --exit-code 0 \
+          "${{ steps.image-name.outputs.image }}"
 
     # Refresh the Grype scanner: v3 bundled an obsolete 0.74.4 release whose
     # stale vulnerability database caused scans to error. Keep DB age checks on.

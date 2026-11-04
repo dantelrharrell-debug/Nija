@@ -91,13 +91,17 @@ jobs:
             GIT_BRANCH=${{ github.ref_name }}
             BUILD_TIMESTAMP=${{ github.event.head_commit.timestamp }}
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ steps.primary-tag.outputs.image }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
+      - name: Install checksum-pinned Trivy
+        run: bash scripts/install_pinned_trivy.sh
+        continue-on-error: true
+
+      - name: Scan the canary image with Trivy
+        run: |
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            "${{ steps.primary-tag.outputs.image }}"
         continue-on-error: true
 
       - name: Upload Trivy results to GitHub Security
