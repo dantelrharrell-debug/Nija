@@ -109,6 +109,48 @@ class WebCorsPolicyTests(unittest.TestCase):
         finally:
             client.disconnect()
 
+    def test_socket_session_ack_disconnect_and_reconnect(self) -> None:
+        from flask import session
+
+        app = Flask(__name__)
+        app.config["SECRET_KEY"] = "offline-session-fixture"  # pragma: allowlist secret
+        socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=["https://trusted.example"])
+
+        @app.get("/offline-login")
+        def login():
+            session["user_id"] = "offline-user"
+            return {"ok": True}
+
+        @socketio.on("connect")
+        def connect(auth=None):
+            return session.get("user_id") == "offline-user"
+
+        @socketio.on("offline_session")
+        def session_event():
+            return {"user_id": session.get("user_id")}
+
+        denied = socketio.test_client(app)
+        self.assertFalse(denied.is_connected())
+        http_client = app.test_client()
+        http_client.get("/offline-login")
+        for _ in range(2):
+            client = socketio.test_client(app, flask_test_client=http_client)
+            self.assertTrue(client.is_connected())
+            self.assertEqual(client.emit("offline_session", callback=True), {"user_id": "offline-user"})
+            client.disconnect()
+            self.assertFalse(client.is_connected())
+        # Test the actual Engine.IO CORS boundary, not the in-process client.
+        response = http_client.get("/socket.io/?EIO=4&transport=polling",
+                                   headers={"Origin": "https://evil.example"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_fastapi_gateway_uses_the_same_exact_origin_policy(self) -> None:
+        tree = ast.parse((ROOT / "api_gateway.py").read_text())
+        assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Name) and target.id == "origins_list"
+                                  for target in node.targets))
+        self.assertEqual(ast.unparse(assignment.value), "allowed_web_origins()")
+
 
 if __name__ == "__main__":
     unittest.main()

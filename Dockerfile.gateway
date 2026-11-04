@@ -24,6 +24,17 @@ COPY auth/ ./auth/
 COPY execution/ ./execution/
 COPY user_control.py .
 COPY vault/ ./vault/
+COPY admin_access.py admin_access_fastapi.py user_live_trading_access.py ./
+COPY web_cors_policy.py billing_store.py paid_user_state.py ./
+COPY bot/position_source_constants.py ./
+# Namespace package containing Redis helpers only; omit trading startup hooks.
+COPY bot/redis_runtime.py bot/redis_env.py bot/startup_env.py ./bot/
+
+# Authentication state must be mounted persistently here before production use.
+# No startup copy/migration from a legacy users.db is performed.
+RUN groupadd --gid 10001 nija-gateway \
+    && useradd --uid 10001 --gid 10001 --no-create-home nija-gateway \
+    && install -d -m 0700 -o 10001 -g 10001 /data/auth
 
 # Expose port
 EXPOSE 8000
@@ -31,6 +42,10 @@ EXPOSE 8000
 # Set environment variables
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV NIJA_AUTH_USER_DB_PATH=/data/auth/users.db
+
+USER 10001:10001
 
 # Run API Gateway
 CMD ["python", "api_gateway.py"]
