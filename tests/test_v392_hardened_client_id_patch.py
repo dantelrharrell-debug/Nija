@@ -44,3 +44,19 @@ def test_unknown_client_id_implementation_fails_without_partial_write(tmp_path, 
     with pytest.raises(RuntimeError, match="_client_id anchor"):
         patcher.patch_native_client_id_recovery()
     assert target.read_text() == source
+
+
+@pytest.mark.parametrize("legacy_count,hardened_count", [(2, 1), (1, 2), (2, 2), (2, 0), (0, 2), (1, 1)])
+def test_duplicate_variants_fail_without_partial_write(tmp_path, monkeypatch, legacy_count, hardened_count):
+    source = (ROOT / "bot/runtime_kraken_native_margin_backup_v380_patch.py").read_text()
+    start = source.index("def _client_id(")
+    end = source.index("def _submit_reduce_only(", start)
+    hardened = source[start:end]
+    legacy = hardened.replace(", usedforsecurity=False", "")
+    source = source[:start] + legacy * legacy_count + hardened * hardened_count + source[end:]
+    target = tmp_path / "native.py"
+    target.write_text(source)
+    monkeypatch.setattr(patcher, "NATIVE", target)
+    with pytest.raises(RuntimeError, match="_client_id anchor"):
+        patcher.patch_native_client_id_recovery()
+    assert target.read_text() == source
