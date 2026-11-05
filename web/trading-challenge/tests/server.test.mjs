@@ -77,6 +77,14 @@ const postParsedBody = async (body) => {
   return { status, body: JSON.parse(content) };
 };
 
+async function freshReceiptCookie() {
+  const response = await post({ version: "nija-trading-iq-v1", answers: [2,2,1,0,1,1] });
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get("set-cookie")?.split(";")[0] || "";
+  assert.match(cookie, /^nija-iq-report-local=[a-f0-9]{64}$/);
+  return cookie;
+}
+
 test("static game loads with protective headers and does not expose paid report", async () => {
   const response = await realFetch(origin + "/");
   assert.equal(response.status, 200);
@@ -138,16 +146,18 @@ test("standalone deployments use forwarded IPs only with an explicit proxy-hop c
 });
 test("an unpaid Stripe session cannot unlock results", async () => {
   stripePaymentStatus = "unpaid";
+  const cookie = await freshReceiptCookie();
   const response = await realFetch(origin + "/api/results?session_id=" + sessionId,
-    { headers: { Cookie: receiptCookie } });
+    { headers: { Cookie: cookie } });
   assert.equal(response.status, 403);
   assert.equal((await response.json()).report, undefined);
 });
 test("the paid result is computed from Stripe's server-side metadata", async () => {
   stripePaymentStatus = "paid";
   metadataAnswers = "2,2,1,0,1,1";
+  const cookie = await freshReceiptCookie();
   const response = await realFetch(origin + "/api/results?session_id=" + sessionId,
-    { headers: { Cookie: receiptCookie } });
+    { headers: { Cookie: cookie } });
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.report.score, 100);
@@ -157,8 +167,9 @@ test("the paid result is computed from Stripe's server-side metadata", async () 
 test("invalid metadata cannot be converted into a paid report", async () => {
   stripePaymentStatus = "paid";
   metadataAnswers = "2,2,1,0,1,9";
+  const cookie = await freshReceiptCookie();
   const response = await realFetch(origin + "/api/results?session_id=" + sessionId,
-    { headers: { Cookie: receiptCookie } });
+    { headers: { Cookie: cookie } });
   assert.equal(response.status, 422);
 });
 test("a shared Stripe receipt URL cannot unlock reports in another browser", async () => {
@@ -173,8 +184,9 @@ test("a shared Stripe receipt URL cannot unlock reports in another browser", asy
 test("a refunded purchase loses report access even if its browser proof matches", async () => {
   stripePaymentStatus = "paid";
   stripeRefunded = true;
+  const cookie = await freshReceiptCookie();
   const response = await realFetch(origin + "/api/results?session_id=" + sessionId,
-    { headers: { Cookie: receiptCookie } });
+    { headers: { Cookie: cookie } });
   assert.equal(response.status, 403);
   stripeRefunded = false;
 });
