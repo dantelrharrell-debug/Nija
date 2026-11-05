@@ -65,6 +65,10 @@ def create_app(service: Sandbox) -> Any:
 
     @app.before_request
     def protect() -> Any:
+        # Render probes must not consume the shared, persistent API quota.
+        # Exact path and GET only: no exemption for payment/report/ownership APIs.
+        if request.method == "GET" and request.path == "/healthz" and request.endpoint == "enabled_health":
+            return None
         if request.path == "/sandbox/stripe/webhook":
             return None
         if request.method != "GET" and request.headers.get("Origin") != service.config.origin:
