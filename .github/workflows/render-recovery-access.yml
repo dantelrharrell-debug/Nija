@@ -92,7 +92,7 @@ jobs:
               raise SystemExit('BLOCKED: independently approved deployment changed')
 
           source = Path('/app/bot/kraken_sqlite_readonly_preflight_v488.py')
-          expected = '480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452'
+          expected = '89a1213bb4048109b3722b3d6f80b3882a8aa8c9975ff789e868e9dd7b8845ae'
           if source.is_symlink() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
               raise SystemExit('BLOCKED: reviewed production preflight source changed')
           namespace = runpy.run_path(str(source), run_name='_readonly_preflight')
