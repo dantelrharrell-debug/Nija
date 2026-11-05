@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -201,3 +202,21 @@ def from_environment() -> Any:
     if manifest.digest != os.environ.get("NIJA_IQ_SANDBOX_MANIFEST_SHA256"):
         raise Denied("reviewed_manifest_pin_required")
     return create_app(Sandbox(config, manifest, StripeGateway(config.key), report_builder))
+    # A manifest's source_sha256 is not evidence on its own: pin the actual
+    # owner-exported IONOS source bytes before accepting a payment run.
+    source_export = Path(os.environ["NIJA_IQ_SANDBOX_SOURCE_EXPORT"])
+    if source_export.is_symlink() or not source_export.is_file():
+        raise Denied("reviewed_ionos_source_export_required")
+    source_digest = hashlib.sha256()
+    with source_export.open("rb") as source_stream:
+        for chunk in iter(lambda: source_stream.read(1024 * 1024), b""):
+            source_digest.update(chunk)
+    if source_digest.hexdigest() != manifest.source_sha256:
+        raise Denied("reviewed_ionos_source_export_required")
+    adapter = Path(os.environ["NIJA_IQ_SANDBOX_REPORT_ADAPTER"])
+    if digest(adapter.read_text()) != os.environ.get("NIJA_IQ_SANDBOX_REPORT_ADAPTER_SHA256"):
+        raise Denied("reviewed_original_report_adapter_required")
+    spec = importlib.util.spec_from_file_location("private_iq_report", adapter)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return create_app(Sandbox(config, manifest, StripeGateway(config.key), module.build_report))

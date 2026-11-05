@@ -5,6 +5,8 @@ on:
       - 'game_sandbox/**'
       - 'tests/test_game_sandbox.py'
       - 'tests/fixtures/ionos_served_ui_reference.mjs'
+      - 'tests/test_game_sandbox_source_pin.py'
+      - 'tests/test_game_sandbox_client.mjs'
       - '.github/workflows/game-sandbox.yml'
   workflow_dispatch:
 permissions:
@@ -28,4 +30,14 @@ jobs:
       - run: node --test game_sandbox/ionos_parity.test.mjs
       - run: python -m bandit -q -r game_sandbox
       - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/fixtures/ionos_served_ui_reference.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox*.py
+      - run: python -m pytest tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py -q
+      - run: node --check game_sandbox/client.mjs
+      - run: node --check tests/test_game_sandbox_client.mjs
+      - run: node --test tests/test_game_sandbox_client.mjs
+      - run: python -m bandit -q -r game_sandbox
+      - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_client.mjs
       - run: pip-audit -r game_sandbox/requirements.txt
