@@ -57,10 +57,26 @@ export class SandboxReportClient {
   async complete(answers) {
     return this.request('runs/' + this.runId + '/complete', 'POST', { answers });
   }
+  async completePublishedGame({mode, level, dayNum, decisions}) {
+    if (!Array.isArray(decisions) || decisions.length !== 72) throw new Error('complete_72_decisions_first');
+    // Existing game decLog entries are {action: buy|sell|hold, stop: boolean}.
+    // Copy exactly those fields; no client scores, labels or report data sent.
+    const challenges = Array.from({length: 6}, (_, index) => decisions.slice(index * 12, (index + 1) * 12)
+      .map(({action, stop}) => ({action, stop})));
+    return this.complete({mode, level, dayNum: mode === 'standard' ? 0 : dayNum, challenges});
+  }
   async checkout() {
     return this.request('runs/' + this.runId + '/checkout', 'POST', {});
   }
+  async downloadHtml() {
+    const result = (await this.request(`runs/${this.runId}/report`)).report;
+    if (typeof result?.download_html !== 'string') throw new Error('download_unavailable');
+    return result.download_html;
+  }
   async report() {
+    // A return URL cannot unlock the report. Pending webhook => retry visibly; never charge again.
+    const result = (await this.request(`runs/${this.runId}/report`)).report;
+    return result?.report ?? result;
     // The return URL cannot unlock a report. Pending webhook => retry visibly;
     // never charge again. Server rechecks entitlement and refund/dispute state.
     return (await this.request('runs/' + this.runId + '/report')).report;

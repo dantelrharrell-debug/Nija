@@ -4,7 +4,10 @@ on:
     paths:
       - 'game_sandbox/**'
       - 'tests/test_game_sandbox.py'
+      - 'tests/fixtures/ionos_served_ui_reference.mjs'
       - 'tests/test_game_sandbox_source_pin.py'
+      - 'tests/test_game_sandbox_provider_receipts.py'
+      - 'tests/fixtures/stripe_iq72_sandbox.py'
       - 'tests/test_game_sandbox_client.mjs'
       - '.github/workflows/game-sandbox.yml'
   workflow_dispatch:
@@ -20,15 +23,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: pip install -r game_sandbox/requirements.txt pytest bandit detect-secrets pip-audit
+      - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox.py
+      - run: python -m pytest tests/test_game_sandbox.py -q
+      - run: node --test game_sandbox/ionos_parity.test.mjs
+      - run: python -m bandit -q -r game_sandbox
+      - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/fixtures/ionos_served_ui_reference.mjs
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox*.py
-      - run: python -m pytest tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py -q
+      - run: python -m pytest tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_provider_receipts.py -q
       - run: node --check game_sandbox/client.mjs
       - run: node --check tests/test_game_sandbox_client.mjs
       - run: node --test tests/test_game_sandbox_client.mjs
       - run: python -m bandit -q -r game_sandbox
-      - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_client.mjs
+      - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_provider_receipts.py tests/fixtures/stripe_iq72_sandbox.py game_sandbox/sandbox_offer.json tests/test_game_sandbox_client.mjs
       - run: pip-audit -r game_sandbox/requirements.txt

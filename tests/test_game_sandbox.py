@@ -506,3 +506,99 @@ def test_unbound_own_checkout_is_retried_not_lost(setup):
         service.webhook(*delivery)
     with service.db() as db:
         assert db.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
+def test_recovered_game_runs_through_owned_payment_and_existing_report(setup):
+    from game_sandbox.ionos import PublishedGame, build_published_report
+
+    old, stripe, _, _, _, _, _ = setup
+    service = Sandbox(old.config, PublishedGame(), stripe, build_published_report)
+    run, owner, csrf = service.start(True)
+    payload = {
+        "mode": "standard",
+        "level": "beginner",
+        "dayNum": 0,
+        "challenges": [[{"action": "hold", "stop": False} for _ in range(12)] for _ in range(6)],
+    }
+    service.complete(run, owner, csrf, payload)
+    service.checkout(run, owner, csrf)
+    sid = next(iter(stripe.sessions))
+    stripe.pay(sid)
+    with pytest.raises(Denied, match="webhook"):
+        service.report(run, owner)
+    service.webhook(*signed(service.config, "checkout.session.completed", stripe.sessions[sid]))
+    result = service.report(run, owner)
+    assert result["report"]["tradingIQ"] == 50
+    assert len(result["report"]["challenges"]) == 6
+    assert sum(len(c["decisions"]) for c in result["report"]["challenges"]) == 72
+    assert "<script" not in result["download_html"]
+    assert service.report(run, owner) == result
+    assert stripe.calls == 1
+
+
+def test_published_payload_rejects_old_shapes_and_tampering():
+    from game_sandbox.ionos import PublishedGame
+
+    game = PublishedGame()
+    valid = {
+        "mode": "standard",
+        "level": "advanced",
+        "dayNum": 0,
+        "challenges": [[{"action": "buy", "stop": True} for _ in range(12)] for _ in range(6)],
+    }
+    assert len(json.loads(game.answers(valid))["challenges"]) == 6
+    for invalid in (
+        [{"roundId": "round_0", "choice": 1}] * 72,
+        dict(valid, score=100),
+        dict(valid, dayNum=True),
+        dict(valid, challenges=valid["challenges"][:1]),
+        dict(valid, challenges=[[{"action": "buy", "stop": 1}] * 12] * 6),
+    ):
+        with pytest.raises(Denied):
+            game.answers(invalid)
+
+
+def test_canonical_environment_factory_needs_no_export_or_custom_adapter(setup, monkeypatch):
+    from game_sandbox.app import from_environment
+    from game_sandbox.ionos import PublishedGame
+
+    config = setup[0].config
+    settings = {
+        "NIJA_IQ_SANDBOX_DATABASE": config.database,
+        "NIJA_IQ_SANDBOX_ORIGIN": config.origin,
+        "NIJA_IQ_SANDBOX_STRIPE_KEY": config.key,
+        "NIJA_IQ_SANDBOX_WEBHOOK_SECRET": config.webhook_secret,
+        "NIJA_IQ_SANDBOX_PRICE_ID": config.price,
+        "NIJA_IQ_SANDBOX_PRODUCT_ID": config.product,
+        "NIJA_IQ_SANDBOX_ENABLED": "true",
+        "NIJA_IQ_SANDBOX_GAME": "published72",
+        "NIJA_IQ_SANDBOX_MANIFEST_SHA256": PublishedGame().digest,
+    }
+    for key, value in settings.items():
+        monkeypatch.setenv(key, value)
+    assert from_environment().test_client().get("/sandbox/health").json["live_payments"] is False
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_MANIFEST_SHA256", "wrong")
+    with pytest.raises(Denied, match="manifest_pin"):
+        from_environment()
+
+
+def test_original_report_receives_no_secrets_and_never_uses_a_shell(monkeypatch):
+    from game_sandbox.ionos import build_published_report
+    import subprocess
+    from unittest.mock import Mock
+
+    payload = {
+        "mode": "standard",
+        "level": "beginner",
+        "dayNum": 0,
+        "challenges": [[{"action": "hold", "stop": False} for _ in range(12)] for _ in range(6)],
+    }
+    response = {"report": {"challenges": [{"decisions": [{}] * 12} for _ in range(6)]}, "download_html": "safe"}
+    fake = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(response), ""))
+    monkeypatch.setenv("A_PRIVATE_SECRET", "not-for-node")
+    monkeypatch.setattr(subprocess, "run", fake)
+    build_published_report(payload)
+    assert fake.call_args.kwargs["shell"] is False
+    assert set(fake.call_args.kwargs["env"]) == {"PATH"}
+    assert fake.call_args.args[0][0].startswith("/")
+    assert json.loads(fake.call_args.kwargs["input"]) == payload

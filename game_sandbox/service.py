@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS limits (owner_hash TEXT PRIMARY KEY, started INTEGER 
 class Sandbox:
     """Durable owner/run/payment boundary with a single Checkout per run."""
 
-    def __init__(self, config: Config, manifest: Manifest, stripe: Any, report_builder: Callable[[list[dict]], dict]):
+    def __init__(self, config: Config, manifest: Manifest, stripe: Any, report_builder: Callable[[Any], dict]):
         config.validate()
         self.config, self.manifest, self.stripe, self.report_builder = config, manifest, stripe, report_builder
         target = Path(config.database)
