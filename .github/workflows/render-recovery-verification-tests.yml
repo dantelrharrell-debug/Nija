@@ -8,6 +8,10 @@ on:
       - 'scripts/render_runtime_build_sources.py'
       - 'scripts/apply*'
       - 'Dockerfile'
+      - 'requirements.txt'
+      - 'bot/failure_cluster_engine.py'
+      - 'bot/runtime_kraken_native_margin_backup_v380_patch.py'
+      - 'tests/test_v392_hardened_client_id_patch.py'
       - 'ops/recovery/render_readonly_baseline.json'
       - 'tests/test_kraken_instance_diagnostic.py'
       - 'tests/test_render_recovery_verification.py'
@@ -44,6 +48,9 @@ jobs:
       - name: Exercise isolated ledger, protective exits, writer, nonce and all 13 evidence checks
         run: |
           python -m pytest -q \
+            tests/test_v392_hardened_client_id_patch.py \
+            bot/tests/test_failure_cluster_engine.py \
+            bot/tests/test_runtime_kraken_native_margin_backup_v380.py \
             tests/test_kraken_instance_diagnostic.py \
             tests/test_render_recovery_verification.py \
             tests/test_kraken_collector_composition_v487.py \
