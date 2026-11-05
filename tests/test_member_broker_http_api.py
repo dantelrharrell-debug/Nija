@@ -144,15 +144,15 @@ class MemberHTTPTests(unittest.TestCase):
                         response = create_app().test_client().get("/readyz")
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(response.get_json(), {"status": "not_ready"})
-                self.assertEqual(warning.call_args.args,
-                                 ("MEMBER_BROKER_VAULT_INIT_FAILED reason=%s", expected))
+                warning.assert_any_call("MEMBER_BROKER_VAULT_INIT_FAILED reason=%s", expected)
+                warning.assert_any_call("MEMBER_BROKER_READINESS ready=false reason=%s", "vault_unavailable")
                 self.assertNotIn("synthetic-private", str(warning.call_args_list))
                 self.assertNotIn("NIJA_BROKER_VAULT_KEY_B64", str(warning.call_args_list))
 
     def test_no_intake_by_default(self):
         response = self.client.post("/api/member/brokers/connect", headers=self.h, json={
             "broker": "kraken", "environment": "paper",
-            "credentials": {"api_key": "dummy-key", "api_secret": "dummy-secret"},
+            "credentials": {"api_key": "dummy-key", "api_secret": "dummy-secret"},  # pragma: allowlist secret
         })
         self.assertEqual(response.status_code, 403)
         self.assertNotIn(b"dummy-secret", response.data)

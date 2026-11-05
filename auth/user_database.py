@@ -13,6 +13,7 @@ from typing import Dict, Optional, List
 from datetime import datetime
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHash
+from .storage import auth_database_path
 
 logger = logging.getLogger("nija.auth.userdb")
 
@@ -25,16 +26,16 @@ class UserDatabase:
     Database-backed user management with secure password storage.
     """
 
-    def __init__(self, db_path: str = "users.db"):
+    def __init__(self, db_path: Optional[str] = None):
         """
         Initialize user database.
 
         Args:
             db_path: Path to SQLite database file
         """
-        self.db_path = db_path
+        self.db_path = auth_database_path(db_path)
         self._init_database()
-        logger.info(f"User database initialized (db={db_path})")
+        logger.info("User database initialized (db=%s)", self.db_path)
 
     def _init_database(self):
         """Initialize database schema."""
@@ -516,7 +517,7 @@ def get_user_database(db_path: Optional[str] = None) -> UserDatabase:
     """Get global user database instance."""
     global _user_db
     if _user_db is None:
-        _user_db = UserDatabase(db_path or os.getenv("NIJA_AUTH_USER_DB_PATH", "users.db"))
+        _user_db = UserDatabase(db_path)
     return _user_db
 
 

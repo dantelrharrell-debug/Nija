@@ -120,6 +120,8 @@ class NIJAControlCenter:
     def clear_screen(self):
         """Clear terminal screen"""
         print("\033[2J\033[H", end="", flush=True)
+        # Both commands are fixed literals and never include user input.
+        os.system('clear' if os.name == 'posix' else 'cls')  # nosec B605
         
     def print_header(self):
         """Print dashboard header"""

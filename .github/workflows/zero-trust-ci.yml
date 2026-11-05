@@ -131,7 +131,10 @@ jobs:
             *.blob.core.windows.net:443
             pkg-containers.githubusercontent.com:443
             ghcr.io:443
-            get.trivy.dev:443
+            mirror.gcr.io:443
+            storage.googleapis.com:443
+            public.ecr.aws:443
+            *.cloudfront.net:443
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -153,25 +156,22 @@ jobs:
           echo "::notice::Artifact signatures verified"
 
       - name: Install pinned Trivy
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514
-        with:
-          version: v0.70.0
-          cache: false
+        run: bash scripts/install_pinned_trivy.sh
 
       - name: Run Security Scan in Sandbox
         run: |
+          set -euo pipefail
           SCAN_LOG="${RUNNER_TEMP}/nija-trivy-scan.log"
-          trivy fs \
-            --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+          trap 'tail -n 80 "${SCAN_LOG}"' EXIT
+          bash scripts/run_trivy_scan.sh fs \
             --checks-bundle-repository ghcr.io/aquasecurity/trivy-checks:2 \
             --scanners vuln,secret,misconfig \
             --severity CRITICAL,HIGH \
-            --exit-code 0 \
             --format table \
             --timeout 10m \
             . >"${SCAN_LOG}" 2>&1
           echo "::group::Trivy scan completion tail"
-          tail -n 80 "${SCAN_LOG}" || true
+          tail -n 80 "${SCAN_LOG}"
           echo "::endgroup::"
 
       - name: Upload Trivy diagnostics
@@ -255,7 +255,7 @@ jobs:
           set -euo pipefail
           env -u PYTHONPATH python -P -m pip install --disable-pip-version-check --upgrade pip
           env -u PYTHONPATH python -P -m pip install \
-            pytest==8.2.2 \
+            pytest==9.0.3 \
             pytest-cov \
             pytest-timeout \
             numpy==1.26.3 \

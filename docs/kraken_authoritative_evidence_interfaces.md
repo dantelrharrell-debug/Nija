@@ -20,10 +20,12 @@ from the earlier diagnostic-only draft #3566. Neither PR is approval to trade.
 | `bot/kraken_redis_evidence.py` | `ReviewedBinding`, `ScopeObservation`, `RedisEvidenceReader.collect`, inert offline inventory plans |
 | `bot/kraken_operator_authorization.py` | `GeneralApprovalBinding`, `make_general_operator_authorization_provider` |
 | `bot/kraken_risk_evidence.py` | `AccountRiskSnapshotSource`, `make_kraken_risk_limits_provider` |
+| `bot/kraken_evidence_composition.py` | `KrakenEvidenceBinding`, typed dependency contracts, `compose_kraken_evidence`, six-field `collect()` |
 | `bot/tests/test_kraken_ledger_evidence.py` | Ledger/history/protection regression fixtures |
 | `bot/tests/test_kraken_redis_evidence.py` | Distributed-state, inventory and offline-plan regressions |
 | `bot/tests/test_kraken_operator_authorization.py` | Synthetic Ed25519 approval/revocation and registration regressions |
 | `bot/tests/test_kraken_risk_evidence.py` | Account-risk, provenance, freshness and limit regressions |
+| `bot/tests/test_kraken_evidence_composition.py` | Shared binding, inert construction, real four-family offline collection and whole-batch denial regressions |
 | `.github/workflows/ci.yml` | Explicit mandatory execution of all four regression files |
 | `bot/pretrade_attestation_validation_v452.py` | Reject expired or malformed optional source expiry |
 | `bot/pretrade_composition_bridge_v465.py` | Preserve earliest source expiry in aggregate evidence |
@@ -175,6 +177,62 @@ provenance and atomic complete account exposure revisions; a separately
 reviewed account snapshot producer remains required.
 This evidence cannot replace per-order authorization or reserve capital.
 
+### Explicit inert shared binding
+
+`compose_kraken_evidence(binding, review_binding=external_review, clock=clock)`
+now composes these **existing** four families, without reading any source during
+construction. `KrakenEvidenceBinding` requires:
+
+- The externally approved Kraken account scope, API-key SHA-256, canonical
+  IIBAN SHA-256 and six distinct provider-ID pins. Pins are not discovered from
+  observations, environment variables, runtime registries or source payloads.
+- The existing `ReviewedLedgerBinding`, with its existing authenticated broker
+  transport, monitoring category and separately persisted scoped ledger path.
+- An explicitly supplied Redis read client and the existing Redis
+  `ReviewedBinding`, including scope observer, deployment/source-binding and
+  signed-coverage pins and independently provisioned coverage verifier.
+- `RiskEvidenceDependencies`: a reviewed `AccountRiskSnapshotSource`, external
+  snapshot/capital/exposure/policy source IDs, and optional existing canonical
+  capital/governor objects as additional read-only vetoes. Global governor health
+  and canonical global reports never substitute for the account snapshot.
+- `OperatorEvidenceDependencies`: the existing `GeneralApprovalBinding`,
+  externally pinned operator public keys and separate status public key, and
+  an explicitly supplied uncached signed-record reader.
+
+The independent reviewer must authenticate the **exact dependency objects and
+pins** against an out-of-band approved binding artifact; checking strings or
+returning a caller-controlled truth flag is not an adequate implementation.
+The reviewer runs at composition, before/after collection, and within the
+existing ledger provider. Missing or inconsistent dependencies/pins and review
+revocation fail closed. No default trusted source, trust anchor, environment
+truth override or provider discovery exists. Public errors have fixed,
+non-sensitive messages, including exceptions raised by external reviewers.
+Provider/key/source-ID mappings are defensively copied and immutable.
+
+The returned `KrakenEvidenceComposition.collect()` reads each family once and
+returns a detached six-field batch using the **canonical v452 field names**:
+`position_ledger_reconciliation`, `duplicate_order_fence`, `writer_lease`,
+`nonce_sequence`, `risk_limits`, and `operator_authorization`. All three Redis
+fields come from **one** `RedisEvidenceReader.collect()` call (that reader still
+performs its existing repeated transactional reads for race detection).
+There is deliberately no per-field closure registry or cached batch that could
+silently mix Redis collection generations. Every call rereads all dependencies.
+Source timestamps and signed/PTTL expirations are preserved, and all rows must
+remain valid after the final family finishes. Any failure discards the entire
+batch; unsuccessful operator observations are not returned as partial success.
+
+This is not a thirteen-source runtime adapter, collector registration, startup
+hook or activation API. A future separately reviewed runtime binding must consume
+the batch as a unit and supply the other seven independently authenticated
+sources to the unchanged validation/admission boundary; it must not split Redis
+fields into independent reads. `commissioning_runtime.py` and its thirteen-source
+composition are unchanged. Existing canonical ledger/fence/governor/operator
+architecture is reused through the family readers, never replaced or migrated.
+In particular, an unscoped canonical ledger still denies: the composition does
+not invent account attribution, exchange-fill identity, history or freshness.
+Cross-store atomicity, production provider installation and all external
+data-source requirements listed above remain unsolved.
+
 ## Existing source contracts and registration
 
 Results retain v452 source ownership: independent ledger, writer authority,
@@ -233,6 +291,25 @@ Live-order controls remain unchanged; actual production block state is not
 claimed from an offline checkout.
 
 ## Validation evidence
+
+The shared composition and four existing family regression files were run
+together offline on Python **3.12.3** using the restored session interpreter:
+
+```bash
+NIJA_DEFER_RUNTIME_SITE_HOOKS=1 /root/.copilot/session-state/e30c56ed677c4dc085a6efefa7f6cc61/files/venv/bin/python -m pytest -q bot/tests/test_kraken_evidence_composition.py bot/tests/test_kraken_ledger_evidence.py bot/tests/test_kraken_redis_evidence.py bot/tests/test_kraken_operator_authorization.py bot/tests/test_kraken_risk_evidence.py
+```
+
+Result: **152 passed, 7 skipped**. The seven existing real-Redis subprocess
+tests require a locally available `redis-server`; the new composition tests
+use the existing read-only in-memory Redis double and require no service.
+`python -m py_compile bot/kraken_evidence_composition.py bot/tests/test_kraken_evidence_composition.py`
+and `git diff --check` passed. No dependencies, production sources or runtime
+controls were changed. Python 3.11/hosted CI and external security tooling
+remain separate validation requirements. The new mandatory selector is
+`bot/tests/test_kraken_evidence_composition.py`.
+
+The following results describe the earlier four-family implementation, not
+additional validation of the shared composition:
 
 Validation used restored Python **3.11.16**, existing `requirements.txt`,
 and `NIJA_DEFER_RUNTIME_SITE_HOOKS=1`. No dependency manifest changed.

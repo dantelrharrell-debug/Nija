@@ -5,7 +5,9 @@ services:
     region: oregon
     dockerfilePath: ./Dockerfile
     dockerCommand: bash scripts/render_entrypoint.sh
-    autoDeployTrigger: commit
+    # Trading releases require exact-release approval; passing CI alone is
+    # insufficient. Keep this quoted because YAML 1.1 treats bare off as false.
+    autoDeployTrigger: "off"
     numInstances: 1
     healthCheckPath: /healthz
     maxShutdownDelaySeconds: 60

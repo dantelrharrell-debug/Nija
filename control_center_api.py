@@ -168,7 +168,7 @@ def create_control_center_api(app: Optional[Flask] = None) -> Flask:
     
     if app is None:
         app = Flask(__name__)
-        CORS(app)
+        CORS(app, allow_private_network=False)
 
     assert app is not None
     

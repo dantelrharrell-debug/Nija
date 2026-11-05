@@ -1,0 +1,2559 @@
+{
+  "analysis_ids": [
+    2095458452,
+    2095460745,
+    2095461330,
+    2095462381
+  ],
+  "codeql_python_and_javascript": "analysis_succeeded_not_a_claim_of_no_legacy_source_findings",
+  "credential_candidate_context_classification": {
+    "basis": "Repository paths and surrounding context only; candidate values are not retained.",
+    "category_counts": {
+      "config_placeholder": 6,
+      "generated_example_or_documentation": 56,
+      "identifier_or_digest": 41,
+      "likely_test_dummy": 168,
+      "unresolved_credential_risk": 50
+    },
+    "confirmed_live_or_active_from_repository_evidence": 0,
+    "external_owner_validation_required": true,
+    "scanner_type_counts": {
+      "Base64 High Entropy String": 8,
+      "Basic Auth Credentials": 30,
+      "Hex High Entropy String": 51,
+      "Private Key": 23,
+      "Secret Keyword": 209
+    },
+    "unreviewed_candidate_count": 321
+  },
+  "container_advisories": [
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "package": "bsdutils",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "package": "bsdutils",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "package": "bsdutils",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "package": "bsdutils",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-12064",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api"
+      ],
+      "installed_version": "8.14.1-2+deb13u7",
+      "package": "curl",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-8458",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api"
+      ],
+      "installed_version": "8.14.1-2+deb13u7",
+      "package": "curl",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-54369",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.3.2-2+b1",
+      "package": "libacl1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libblkid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libblkid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libblkid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libblkid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-12064",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "8.14.1-2+deb13u7",
+      "package": "libcurl3t64-gnutls",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-8458",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "8.14.1-2+deb13u7",
+      "package": "libcurl3t64-gnutls",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-12064",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api"
+      ],
+      "installed_version": "8.14.1-2+deb13u7",
+      "package": "libcurl4t64",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-8458",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api"
+      ],
+      "installed_version": "8.14.1-2+deb13u7",
+      "package": "libcurl4t64",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-113351",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "2.9.0-1~deb13u1",
+      "package": "libexpat1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-117610",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "2.9.0-1~deb13u1",
+      "package": "libexpat1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-118370",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "2.9.0-1~deb13u1",
+      "package": "libexpat1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "liblastlog2-2",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "liblastlog2-2",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "liblastlog2-2",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "liblastlog2-2",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libmount1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libmount1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libmount1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libmount1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2025-69720",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.5+20250216-2",
+      "package": "libncursesw6",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-9538",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-dashboard"
+      ],
+      "installed_version": "5.40.1-6+deb13u1",
+      "package": "libperl5.40",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libsmartcols1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libsmartcols1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libsmartcols1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libsmartcols1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-119373",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "3.46.1-7+deb13u2",
+      "package": "libsqlite3-0",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-16742",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "257.13-1~deb13u1",
+      "package": "libsystemd0",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2025-69720",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.5+20250216-2",
+      "package": "libtinfo6",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-16742",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "257.13-1~deb13u1",
+      "package": "libudev1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libuuid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libuuid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libuuid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "libuuid1",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-88806",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "2:1.8.12-1",
+      "package": "libx11-6",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-88806",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "2:1.8.12-1",
+      "package": "libx11-data",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2013-7445",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2019-19449",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2019-19814",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2021-3847",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2021-3864",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2024-21803",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2024-58015",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2025-40025",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-23102",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-31568",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-46279",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-72042",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-89675",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-90315",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-98118",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-98364",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-98466",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-98715",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-98853",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-98999",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-99109",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.12.115-2",
+      "package": "linux-libc-dev",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "package": "login",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "package": "login",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "package": "login",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "package": "login",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "mount",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "mount",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "mount",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "mount",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-114140",
+      "disposition": "pin_updated_to_7.17.2_requires_fresh_image_scan",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "7.17.1",
+      "package": "nbconvert",
+      "reported_fixed_version": "7.17.2",
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2025-69720",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.5+20250216-2",
+      "package": "ncurses-base",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2025-69720",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "6.5+20250216-2",
+      "package": "ncurses-bin",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-106553",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "1:10.0p1-7+deb13u4",
+      "package": "openssh-client",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-106555",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "1:10.0p1-7+deb13u4",
+      "package": "openssh-client",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-106583",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "1:10.0p1-7+deb13u4",
+      "package": "openssh-client",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-59999",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "1:10.0p1-7+deb13u4",
+      "package": "openssh-client",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-60000",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "1:10.0p1-7+deb13u4",
+      "package": "openssh-client",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-60002",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija"
+      ],
+      "installed_version": "1:10.0p1-7+deb13u4",
+      "package": "openssh-client",
+      "reported_fixed_version": null,
+      "severity": "CRITICAL"
+    },
+    {
+      "advisory_id": "CVE-2026-9538",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-dashboard"
+      ],
+      "installed_version": "5.40.1-6+deb13u1",
+      "package": "perl",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-9538",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "5.40.1-6+deb13u1",
+      "package": "perl-base",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-9538",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-dashboard"
+      ],
+      "installed_version": "5.40.1-6+deb13u1",
+      "package": "perl-modules-5.40",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-92925",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "5:8.0.2-3+deb13u3",
+      "package": "redis-tools",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-76642",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "util-linux",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78408",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "util-linux",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78409",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "util-linux",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    },
+    {
+      "advisory_id": "CVE-2026-78410",
+      "disposition": "no_fixed_version_reported_requires_vendor_fix_and_exposure_review",
+      "images": [
+        "library/nija",
+        "library/nija-api",
+        "library/nija-dashboard",
+        "library/nija-gateway"
+      ],
+      "installed_version": "2.41.5-0+deb13u1",
+      "package": "util-linux",
+      "reported_fixed_version": null,
+      "severity": "HIGH"
+    }
+  ],
+  "credential_candidate_locations": [
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": ".github/workflows/chaos-security-testing.yml",
+      "lines": [
+        209
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": ".github/workflows/chaos-security-testing.yml",
+      "lines": [
+        179
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": ".github/workflows/nija-independent-recovery-20261029.yml",
+      "lines": [
+        29
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": ".github/workflows/nija-kraken-stdin-triage-20261029.yml",
+      "lines": [
+        26
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "ADVANCED_FEATURES_GUIDE.md",
+      "lines": [
+        275,
+        276
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "ARCHITECTURE.md",
+      "lines": [
+        301
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "AUDIT_LOGGING.md",
+      "lines": [
+        61
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "CLOUD_DEPLOYMENT_GUIDE.md",
+      "lines": [
+        366
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "CLOUD_DEPLOYMENT_GUIDE.md",
+      "lines": [
+        403
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "CREDENTIAL_SETUP.md",
+      "lines": [
+        97
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "DATABASE_MIGRATION_POLICY.md",
+      "lines": [
+        91
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "DEPLOY_CHECKLIST.md",
+      "lines": [
+        87
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "DEPLOY_CHECKLIST.md",
+      "lines": [
+        648
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "IMPLEMENTATION_SUMMARY_ADVANCED_FEATURES.md",
+      "lines": [
+        222,
+        223
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "LIVE_BALANCE_AUDIT_IMPLEMENTATION_SUMMARY.md",
+      "lines": [
+        182
+      ],
+      "type": "Base64 High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "LIVE_BALANCE_AUDIT_IMPLEMENTATION_SUMMARY.md",
+      "lines": [
+        188,
+        189
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "LIVE_BALANCE_AUDIT_QUICKSTART.md",
+      "lines": [
+        81,
+        82
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "LIVE_BALANCE_AUDIT_RESULTS.md",
+      "lines": [
+        178,
+        179
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "MICRO_CAPITAL_AUTO_SCALING_GUIDE.md",
+      "lines": [
+        43
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "MOBILE_READINESS_COMPLETE.md",
+      "lines": [
+        97
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "MOBILE_READINESS_COMPLETE.md",
+      "lines": [
+        213,
+        553
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "PLATFORM_ONLY_GUIDE.md",
+      "lines": [
+        41
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "QUICK_START_MOBILE_BACKEND.md",
+      "lines": [
+        93,
+        259
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "REDIS_CONNECTION_DIAGNOSTIC_GUIDE.md",
+      "lines": [
+        103,
+        113
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "REDIS_LOCK_EMERGENCY.md",
+      "lines": [
+        59
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "REDIS_LOCK_RECOVERY_GUIDE.md",
+      "lines": [
+        42,
+        75,
+        95,
+        240
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "REDIS_LOCK_RECOVERY_KIT.md",
+      "lines": [
+        188
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "REDIS_LOCK_VERIFICATION_CHECKLIST.md",
+      "lines": [
+        44
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "REDIS_RAILWAY_SETUP.md",
+      "lines": [
+        291
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "SECURITY_REVIEWER_WALKTHROUGH.md",
+      "lines": [
+        50,
+        93,
+        281
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "STARTUP_VALIDATION_GUIDE.md",
+      "lines": [
+        282
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "USER_TRADING_ACTIVATION_CHECKLIST.md",
+      "lines": [
+        124
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "USER_TRADING_ACTIVATION_GUIDE.md",
+      "lines": [
+        58,
+        59,
+        105,
+        106,
+        509,
+        510
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "WAIT_FOR_CONFIG_GUIDE.md",
+      "lines": [
+        42,
+        43
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "WAIT_FOR_CONFIG_IMPLEMENTATION_SUMMARY.md",
+      "lines": [
+        93,
+        94
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "WAIT_FOR_CONFIG_QUICK_REF.md",
+      "lines": [
+        51,
+        52
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "WAIT_FOR_CONFIG_STATE_DIAGRAM.txt",
+      "lines": [
+        73,
+        74
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot.py",
+      "lines": [
+        3396,
+        3678
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot.py",
+      "lines": [
+        4871,
+        4872
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/api_abstraction_layer.py",
+      "lines": [
+        563
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/coinbase_pem_quarantine_patch.py",
+      "lines": [
+        100,
+        101
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/member_trading_activation.py",
+      "lines": [
+        27
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/nija_deploy_config.py",
+      "lines": [
+        270,
+        271,
+        279,
+        280,
+        286,
+        287
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/platform_account_layer.py",
+      "lines": [
+        188
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/pykrakenapi_ohlc_direct_rest_patch.py",
+      "lines": [
+        31
+      ],
+      "type": "Base64 High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/redis_env.py",
+      "lines": [
+        366
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/runtime_heartbeat_marker_convergence_v238_patch.py",
+      "lines": [
+        38
+      ],
+      "type": "Base64 High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/startup_validation.py",
+      "lines": [
+        468
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/test_platform_account_layer.py",
+      "lines": [
+        74,
+        75,
+        84,
+        85,
+        95,
+        96,
+        105,
+        106,
+        107,
+        108,
+        117,
+        118,
+        137,
+        138,
+        150,
+        151,
+        161,
+        167,
+        168,
+        169,
+        170,
+        185,
+        186,
+        202,
+        203,
+        216,
+        227,
+        238,
+        239,
+        256,
+        257,
+        282,
+        283,
+        290,
+        291,
+        391,
+        392,
+        408,
+        422,
+        435,
+        436,
+        458,
+        459,
+        477,
+        496,
+        497,
+        505,
+        506,
+        517,
+        534,
+        535,
+        613,
+        614,
+        636,
+        637,
+        638,
+        639
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_alpaca_atomic_protected_entry.py",
+      "lines": [
+        115
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_broker_auth_recovery_patch.py",
+      "lines": [
+        50,
+        62
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_broker_auth_recovery_patch.py",
+      "lines": [
+        56,
+        89,
+        90
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_capital_refresh_and_kraken_recovery_v35.py",
+      "lines": [
+        365,
+        366,
+        481
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_coinbase_connection_convergence_v2.py",
+      "lines": [
+        17
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_coinbase_connection_convergence_v2.py",
+      "lines": [
+        21
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_coinbase_funding_readiness_repair_patch.py",
+      "lines": [
+        11,
+        29
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_coinbase_funding_readiness_repair_patch.py",
+      "lines": [
+        22
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_coinbase_pem_quarantine.py",
+      "lines": [
+        48
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_coinbase_pem_quarantine.py",
+      "lines": [
+        38
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_entrypoint_writer_authority.py",
+      "lines": [
+        54
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_final_worker_position_coinbase_repair_patch.py",
+      "lines": [
+        26
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_funded_okx_capital_convergence_v31.py",
+      "lines": [
+        80,
+        81
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_kraken_adapter_connection.py",
+      "lines": [
+        50
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_multi_market_execution.py",
+      "lines": [
+        415,
+        416
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_offhost_ledger_evidence_report_v448.py",
+      "lines": [
+        72,
+        73
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_okx_cash_handling.py",
+      "lines": [
+        113,
+        114
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_prebot_writer_authority_bootstrap.py",
+      "lines": [
+        34
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_production_preflight.py",
+      "lines": [
+        104
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_redis_env_priority.py",
+      "lines": [
+        18
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_runtime_entrypoint_attestation_v23.py",
+      "lines": [
+        44
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_runtime_kraken_openpositions_diagnostics_v410.py",
+      "lines": [
+        32
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_runtime_startup_handoff_v87.py",
+      "lines": [
+        308,
+        309
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_secondary_venue_activation_patch.py",
+      "lines": [
+        109,
+        110
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_secondary_venue_runtime_diagnostics.py",
+      "lines": [
+        45
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_secondary_venue_runtime_diagnostics.py",
+      "lines": [
+        266,
+        267,
+        323
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_startup_validation_env_misconfiguration.py",
+      "lines": [
+        88,
+        90,
+        112
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_startup_verification_evidence.py",
+      "lines": [
+        51
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_writer_authority_lease_invariant.py",
+      "lines": [
+        99
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_writer_authority_lifecycle_fix.py",
+      "lines": [
+        196
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_writer_core_thread_lease_regression.py",
+      "lines": [
+        102
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_writer_generation_tracker.py",
+      "lines": [
+        233
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "bot/tests/test_writer_lease_lifecycle.py",
+      "lines": [
+        101
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "config/supervisor/nija-monitoring.conf",
+      "lines": [
+        26
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "config_health_server.py",
+      "lines": [
+        140,
+        141
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "course_fulfillment.py",
+      "lines": [
+        11,
+        13
+      ],
+      "type": "Base64 High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "course_portal.py",
+      "lines": [
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "data/audit_logs/positions.jsonl",
+      "lines": [
+        20,
+        41,
+        62,
+        83,
+        104,
+        125,
+        146
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "data/audit_logs/trades.jsonl",
+      "lines": [
+        24,
+        47
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "deployment/supervisor/nija-monitoring.conf",
+      "lines": [
+        9
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "deployment/systemd/nija-alerts.service",
+      "lines": [
+        9
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "deployment/systemd/nija-status-monitor.service",
+      "lines": [
+        9
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "docs/NIJA_MEMBER_DASHBOARD_API_CONTRACT.md",
+      "lines": [
+        29
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "fix_balance_detection.py",
+      "lines": [
+        83
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "fix_balance_detection.py",
+      "lines": [
+        277
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "nija-equity-market-commits.patch",
+      "lines": [
+        1233,
+        1234
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "ops/recovery/nija_current_instance_backup_capture_v4.sh",
+      "lines": [
+        151
+      ],
+      "type": "Base64 High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "ops/recovery/nija_current_instance_backup_capture_v4.sh",
+      "lines": [
+        43,
+        44,
+        45,
+        46
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "ops/recovery/nija_offhost_backup_verify_v4.sh",
+      "lines": [
+        123
+      ],
+      "type": "Base64 High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "ops/recovery/nija_offhost_backup_verify_v4.sh",
+      "lines": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "ops/recovery/render_readonly_baseline.json",
+      "lines": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "render.yaml",
+      "lines": [
+        297
+      ],
+      "type": "Base64 High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "scripts/clean_kraken_all_accounts.py",
+      "lines": [
+        104,
+        110,
+        116
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "scripts/install_pinned_trivy.sh",
+      "lines": [
+        6
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "scripts/nija_apollo_readonly_probe.py",
+      "lines": [
+        18
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "scripts/nija_kraken_instance_diagnostic.py",
+      "lines": [
+        38,
+        479,
+        481
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "scripts/nija_render_recovery_verification.py",
+      "lines": [
+        27
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "scripts/setup_env.py",
+      "lines": [
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        113,
+        114,
+        133
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "security/secrets_manager.py",
+      "lines": [
+        300
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "start.sh",
+      "lines": [
+        809
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "test_go_live.py",
+      "lines": [
+        203,
+        204,
+        213,
+        214
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "test_platform_account_safety.py",
+      "lines": [
+        711,
+        724,
+        725
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "test_user_independent_trading.py",
+      "lines": [
+        222,
+        223
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "test_v2_balance.py",
+      "lines": [
+        43
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "test_v2_balance.py",
+      "lines": [
+        42
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_account_ownership.py",
+      "lines": [
+        23,
+        24,
+        43,
+        50,
+        62
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_admin_access.py",
+      "lines": [
+        201
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_admin_access.py",
+      "lines": [
+        33
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_billing_staging_database_binding.py",
+      "lines": [
+        8
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_coinbase_authenticated_connect_wrapper_chain.py",
+      "lines": [
+        140
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_conversion_delivery.py",
+      "lines": [
+        22,
+        51
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_conversion_outbox.py",
+      "lines": [
+        161
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_course_complete_delivery.py",
+      "lines": [
+        58
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_course_sandbox_isolation.py",
+      "lines": [
+        159
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_credential_diagnostics.py",
+      "lines": [
+        38,
+        39,
+        53
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_founding100_boot_audit.py",
+      "lines": [
+        16
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_founding_onboarding_api.py",
+      "lines": [
+        22,
+        27,
+        28,
+        32
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_founding_onboarding_mail.py",
+      "lines": [
+        31
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_justcall_seven_day_compliance.py",
+      "lines": [
+        21
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_kraken_authenticated_open_order_reconciliation_v482.py",
+      "lines": [
+        274
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_kraken_history_cursor_recovery.py",
+      "lines": [
+        190
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_kraken_instance_diagnostic.py",
+      "lines": [
+        225
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_kraken_instance_diagnostic.py",
+      "lines": [
+        258
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_kraken_native_runtime_connection.py",
+      "lines": [
+        271,
+        272,
+        273,
+        274,
+        302,
+        305
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_kraken_reviewed_five_field_bundle_v487.py",
+      "lines": [
+        54
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "reviewed_public_dummy_fixture_narrow_inline_annotation_no_real_credential",
+      "file": "tests/test_member_broker_http_api.py",
+      "lines": [
+        155
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_member_broker_onboarding.py",
+      "lines": [
+        29,
+        39,
+        41
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_member_broker_onboarding_api.py",
+      "lines": [
+        40
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_member_broker_verification.py",
+      "lines": [
+        26,
+        168
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_nija_lead_storage_preflight.py",
+      "lines": [
+        146
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_nija_offhost_backup_verify_deployment_pin.py",
+      "lines": [
+        43,
+        44
+      ],
+      "type": "Hex High Entropy String"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_nija_offline_archive_reconciliation_audit_v460.py",
+      "lines": [
+        231
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_paid_user_live_trading_access.py",
+      "lines": [
+        90,
+        91
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_render_container_startup.py",
+      "lines": [
+        39,
+        40
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_render_lead_crm_sync.py",
+      "lines": [
+        384
+      ],
+      "type": "Basic Auth Credentials"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "tests/test_render_recovery_verification.py",
+      "lines": [
+        513
+      ],
+      "type": "Secret Keyword"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "validate_all_env_vars.py",
+      "lines": [
+        358,
+        360
+      ],
+      "type": "Private Key"
+    },
+    {
+      "disposition": "unreviewed_no_value_retained_or_blanket_allowlist_added",
+      "file": "validate_broker_credentials.py",
+      "lines": [
+        206,
+        245
+      ],
+      "type": "Private Key"
+    }
+  ],
+  "format": "nija-hosted-security-followup-v1",
+  "image_findings": {
+    "library/nija": 63,
+    "library/nija-api": 72,
+    "library/nija-dashboard": 71,
+    "library/nija-gateway": 68
+  },
+  "input_sha256": {
+    "trivy-2095460745_content_id": "1df2235529c800da85e3f5e984e17a8395d5b8ff1ca0f01f27d35bd611946060",
+    "trivy-2095461330_content_id": "b4c6491e0ed2ff8451627ccc165a79b38b9e9e5ddc43a78120f51bb08c432595",
+    "trivy-2095462381_content_id": "c07b07285887e1a4b3c42e6ab0f908d5197da867410e64e8f9eefa1e96a014a0",
+    "trivy-main_content_id": "2f4a1abb692bf2d8fb9494a171cfc4903cb819fbf75c50f088a9305cdd47678e"
+  },
+  "legacy_credential_candidate_count": 322,
+  "pull_request_merge_commit_content_id": "cc5393c58a02c7c1cd06329c0f38e1b5ee132266",
+  "source_commit_content_id": "ddad7f5c67055a2017e77a68edb5178008067d3b",
+  "trivy_database_acquisition": "trusted_mirror_succeeded_then_findings_propagated_nonzero",
+  "unique_advisory_ids": 44,
+  "unique_package_advisory_rows": 88,
+  "unreviewed_credential_candidate_count": 321,
+  "warning": "No secret values retained. Candidates are not confirmed leaks or approved exceptions. No scanner finding is waived."
+}

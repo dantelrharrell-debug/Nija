@@ -65,6 +65,7 @@ Date: March 2026
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import logging
 import os
 import random
@@ -83,6 +84,9 @@ except ImportError:  # pragma: no cover - flat-import fallback
     from order_submission_deadline import order_submission_deadline_scope  # type: ignore[no-redef]
 
 logger = logging.getLogger("nija.execution_pipeline")
+_CANONICAL_PIPELINE_EXECUTION = contextvars.ContextVar(
+    "nija_canonical_pipeline_execution", default=False,
+)
 
 # Keep both import paths bound to the same module object.  Production logs
 # reported ``alias_same_object=false``: a separately loaded ``execution_pipeline``
@@ -1981,7 +1985,11 @@ class ExecutionPipeline:
                             effective_request.symbol,
                             effective_request.side,
                         )
-                result = self._dispatch(effective_request, t_start)
+                dispatch_context = _CANONICAL_PIPELINE_EXECUTION.set(True)
+                try:
+                    result = self._dispatch(effective_request, t_start)
+                finally:
+                    _CANONICAL_PIPELINE_EXECUTION.reset(dispatch_context)
         except ExecutionBlocked as exc:
             self._emit_execution_rejection_telemetry(
                 symbol=effective_request.symbol,
@@ -2423,20 +2431,52 @@ class ExecutionPipeline:
             or str(getattr(request, "position_effect", "") or "").lower() in {"close", "reduce"}
         )
         if not closing:
-            try:
-                from bot.account_admission_dispatch_boundary_v470 import consume_verified_entry
-                from bot.order_admission_policy import Candidate
-                admission = getattr(self, "_account_order_admission", None)
-                candidate_provider = getattr(self, "_trusted_entry_candidate_provider", None)
-                if not callable(candidate_provider):
-                    raise RuntimeError("trusted_entry_candidate_provider_missing")
-                candidate = candidate_provider(request)
-                if type(candidate) is not Candidate:
-                    raise RuntimeError("trusted_entry_candidate_invalid")
-                consume_verified_entry(admission, candidate)
-            except Exception as exc:
-                logger.error("ENTRY_ADMISSION_DENIED fail_closed=true reason=%s", type(exc).__name__)
-                return self._deny(request, t_start, "EntryAdmission deny: authenticated_reservation_unavailable")
+            commissioning_adapter = getattr(self, "_commissioning_dispatch_adapter", None)
+            if commissioning_adapter is not None:
+                try:
+                    from bot.commissioning_runtime import CommissioningDispatchAdapter
+                    admission = getattr(self, "_account_order_admission", None)
+                    candidate_provider = getattr(self, "_trusted_entry_candidate_provider", None)
+                    if type(commissioning_adapter) is not CommissioningDispatchAdapter:
+                        raise RuntimeError("commissioning_adapter_invalid")
+                    if (not _CANONICAL_PIPELINE_EXECUTION.get()
+                            or admission is None
+                            or getattr(admission, "collector", None) is not commissioning_adapter.gate.collector
+                            or getattr(admission, "fence", None) is not commissioning_adapter.gate.fence
+                            or os.path.realpath(getattr(admission, "ledger", ""))
+                            != os.path.realpath(commissioning_adapter.gate.ledger)
+                            or candidate_provider is not commissioning_adapter.candidate_for_request
+                            or getattr(commissioning_adapter, "_terminal_broker", None) is None
+                            or getattr(
+                                commissioning_adapter._terminal_broker,
+                                "_commissioning_order_request_validator", None,
+                            ) is not commissioning_adapter
+                            or getattr(commissioning_adapter._terminal_broker, "_gateway_url", "")
+                            or getattr(commissioning_adapter._terminal_broker, "_gateway_only_mode", False)):
+                        raise RuntimeError("commissioning_admission_binding_changed")
+                    commissioning_adapter.consume(request)
+                except Exception as exc:
+                    logger.error("COMMISSIONING_ENTRY_DENIED fail_closed=true reason=%s", type(exc).__name__)
+                    return self._deny(
+                        request, t_start, "EntryAdmission deny: commissioning_reservation_unavailable"
+                    )
+            else:
+                try:
+                    from bot.account_admission_dispatch_boundary_v470 import consume_verified_entry
+                    from bot.order_admission_policy import Candidate
+                    admission = getattr(self, "_account_order_admission", None)
+                    candidate_provider = getattr(self, "_trusted_entry_candidate_provider", None)
+                    if not callable(candidate_provider):
+                        raise RuntimeError("trusted_entry_candidate_provider_missing")
+                    candidate = candidate_provider(request)
+                    if type(candidate) is not Candidate:
+                        raise RuntimeError("trusted_entry_candidate_invalid")
+                    consume_verified_entry(admission, candidate)
+                except Exception as exc:
+                    logger.error("ENTRY_ADMISSION_DENIED fail_closed=true reason=%s", type(exc).__name__)
+                    return self._deny(
+                        request, t_start, "EntryAdmission deny: authenticated_reservation_unavailable"
+                    )
 
         logger.info(
             "🚀 [Pipeline._dispatch] DISPATCHING ORDER TO BROKER | symbol=%s side=%s size_usd=%.2f "
