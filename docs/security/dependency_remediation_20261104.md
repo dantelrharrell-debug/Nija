@@ -76,15 +76,22 @@ CVE-2024-5206 / GHSA-jw8x-6495-233v**, moderate, in scikit-learn 1.3.2; the
 reported fixed version is 1.5.0. The issue retains training tokens in
 `TfidfVectorizer.stop_words_`. The inspected trading models use tree/linear
 classifiers and StandardScaler, not that vectorizer; the specific leakage path
-is not established. This is exposure analysis, **not an approved exception**.
+is not established. A candidate pin at 1.5.0 was evaluated with the pinned
+NumPy/joblib and resolved SciPy stack. Newly trained tree/linear models
+round-tripped under 1.5.0. In cross-version checks,
+a `GradientBoostingClassifier` serialized under 1.3.2 failed to load under 1.5.0
+(`sklearn.ensemble._gb_losses` is missing), while a `RandomForestClassifier`
+loaded but failed prediction (`DecisionTreeClassifier.monotonic_cst` is
+missing). LogisticRegression predicted with an `InconsistentVersionWarning`.
+The bot falls back when loading or prediction fails, so the candidate pin was
+not retained.
 
-The bot loads serialized model artifacts (`bot/ai_trade_quality_filter.py:525`).
-Blindly changing its model-library version risks inference/serialization and
-trading-decision changes. The model dependency is deliberately unchanged until
-representative artifact compatibility, retraining if needed and a backtest
-are available. Root pip-audit therefore remains failing; no production readiness
-or merge approval is claimed. Owner-supplied authenticated model/data artifacts
-and reviewed model-migration evidence are an explicit commissioning dependency.
+The root pin remains 1.3.2 and pip-audit still reports this real advisory; it is
+not waived. The bot loads owner-held model artifacts
+(`bot/ai_trade_quality_filter.py:525`), and no representative artifact or
+authenticated historical dataset is present in this checkout. A compatible
+upgrade or retraining and representative backtest must be reviewed before a
+production rollout. No production readiness or merge approval is claimed.
 
 ## Reproduction and limits
 

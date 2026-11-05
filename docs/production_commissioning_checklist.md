@@ -39,10 +39,10 @@ Engineering artifacts available for review:
 - [ ] Authenticate the actual production deployment, exact source commit and
   digest-pinned built image; obtain build provenance/image scan evidence and
   required CI, secret-scan and CodeQL results for that exact release.
-- [ ] Resolve the remaining scikit-learn CVE-2024-5206 with a model-compatible
-  upgrade/retraining and representative backtest using authenticated model/data
-  artifacts. Existing classifiers/scalers and serialized models were not
-  migrated. Do not waive the failing dependency gate or claim all CI is clean.
+- [ ] Resolve scikit-learn CVE-2024-5206 with a compatible upgrade or retraining.
+  Isolated 1.3.2-to-1.5.0 checks found GradientBoosting load and RandomForest
+  prediction failures. Validate authenticated production model artifacts and
+  run a representative backtest with authenticated data before rollout.
   Container OS/source findings require fresh exact-image hosted scans too.
 - [ ] As GitHub administrator, enable Dependabot alerts/dependency graph and
   enforce the relevant CI/security checks in branch protection. This session
