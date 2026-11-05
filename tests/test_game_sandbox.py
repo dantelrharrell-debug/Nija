@@ -675,5 +675,9 @@ def test_health_exemption_is_exact_and_does_not_bypass_other_routes(setup, monke
         assert client.get("/sandbox/health").status_code == 200
     assert client.get("/sandbox/health").status_code == 429
     assert client.get("/sandbox/runs/nonexistent/report").status_code == 429
-    assert client.post("/sandbox/runs/nonexistent/checkout").status_code == 429
+    assert client.post(
+        "/sandbox/runs/nonexistent/checkout",
+        json={},
+        headers={"Origin": service.config.origin},
+    ).status_code == 429
     assert client.get("/healthz").status_code == 200
