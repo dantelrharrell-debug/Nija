@@ -16,7 +16,7 @@ LOG = logging.getLogger("nija.game.billing")
 PRICE_ID = "price_1UY9YmI0gfJjTf3E1h6mYC2S"
 PRODUCT_ID = "prod_VZI9N8jDpFrQMt"
 OFFER = "nija-personal-results-v1"
-COOKIE = "__Host-nija-report"
+COOKIE_PREFIX = "__Host-nija-report-"
 PUBLIC_ORIGIN = "https://nija-trading-challenge.vercel.app"
 ALLOWED_ORIGINS = frozenset({PUBLIC_ORIGIN, "https://game.nijaaitrading.com"})
 SID = re.compile(r"^cs_live_[A-Za-z0-9_]{8,250}$")
@@ -100,6 +100,13 @@ def proof_hash(proof: str) -> str:
     return hashlib.sha256(proof.encode("ascii")).hexdigest()
 
 
+def cookie_name(session_id: str) -> str:
+    """Give each purchase its own HttpOnly browser receipt; later purchases do not overwrite it."""
+    if not isinstance(session_id, str) or SID.fullmatch(session_id) is None:
+        raise ValueError("invalid_session")
+    return COOKIE_PREFIX + hashlib.sha256(session_id.encode("ascii")).hexdigest()[:24]
+
+
 def verify_proof(stored: Any, provided: str) -> bool:
     expected = proof_hash(provided)
     return (isinstance(stored, str) and HEX.fullmatch(stored) is not None
@@ -121,7 +128,7 @@ def validate_price(stripe: Any) -> None:
         raise RuntimeError("game_price_identity_mismatch")
 
 
-def create_checkout(stripe: Any, decisions: Any, origin: str) -> tuple[str, str]:
+def create_checkout(stripe: Any, decisions: Any, origin: str) -> tuple[str, str, str]:
     if origin not in ALLOWED_ORIGINS:
         raise ValueError("untrusted_origin")
     attempt = validate_attempt(decisions)
@@ -141,10 +148,10 @@ def create_checkout(stripe: Any, decisions: Any, origin: str) -> tuple[str, str]
     if not (parsed.scheme == "https"
             and (parsed.hostname == "checkout.stripe.com"
                  or (parsed.hostname or "").endswith(".checkout.stripe.com"))
-            and identifier(checkout) and field(checkout, "mode") == "payment"
+            and SID.fullmatch(identifier(checkout)) is not None and field(checkout, "mode") == "payment"
             and field(checkout, "livemode") is True):
         raise RuntimeError("unexpected_checkout_response")
-    return url, proof
+    return url, proof, identifier(checkout)
 
 
 def verify_paid_attempt(stripe: Any, session_id: Any, proof: Any) -> str:
@@ -216,15 +223,15 @@ def register_game_routes(app: Any) -> None:
         if not isinstance(body, dict):
             return jsonify({"error": "invalid_payload"}), 422
         try:
-            checkout_url, proof = create_checkout(
+            checkout_url, proof, checkout_id = create_checkout(
                 stripe_client(), body.get("decisions"), body.get("origin", PUBLIC_ORIGIN))
         except ValueError:
             return jsonify({"error": "invalid_game_result"}), 422
         except Exception:
             LOG.exception("NIJA game checkout unavailable")
             return jsonify({"error": "payment_service_unavailable"}), 503
-        response = make_response(jsonify({"checkout_url": checkout_url}))
-        response.set_cookie(COOKIE, proof, max_age=604800, secure=True,
+        response = make_response(jsonify({"checkout_url": checkout_url, "checkout_session_id": checkout_id}))
+        response.set_cookie(cookie_name(checkout_id), proof, max_age=2592000, secure=True,
                             httponly=True, samesite="Lax", path="/")
         return response
 
@@ -236,7 +243,8 @@ def register_game_routes(app: Any) -> None:
             return jsonify({"error": "forbidden"}), 403
         try:
             attempt = verify_paid_attempt(
-                stripe_client(), request.args.get("session_id"), request.cookies.get(COOKIE))
+                stripe_client(), request.args.get("session_id"),
+                request.cookies.get(cookie_name(request.args.get("session_id"))))
         except ValueError:
             return jsonify({"error": "verified_purchase_required"}), 403
         except Exception:
