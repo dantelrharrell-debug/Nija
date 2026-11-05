@@ -25,5 +25,10 @@ services:
         value: published72
       - key: NIJA_IQ_SANDBOX_DATABASE
         value: /var/data/trading_iq_sandbox.sqlite3
+      # Public test-only identities; no API keys or webhook secrets in source.
+      - key: NIJA_IQ_SANDBOX_PRICE_ID
+        value: price_1UYToJRS5Ezp77RQVkx96eS5
+      - key: NIJA_IQ_SANDBOX_PRODUCT_ID
+        value: prod_nija_iq72_sandbox_v1
       - key: NIJA_IQ_SANDBOX_MANIFEST_SHA256
         value: fe6b84326e9c9401a7f3f658d4c29441e3505ee52b94d615b991a88a610f1c90
