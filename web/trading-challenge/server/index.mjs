@@ -4,6 +4,8 @@ import path from "node:path";
 import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { PRICE_ID, PRODUCT_ID, OFFER, SESSION_ID, checkoutEnabled, liveKey, issueProof, hashProof,
+  issueCookie, readProof, verifyPrice, verifyPurchase } from "./checkout-security.mjs";
 import { scoreReport, validAnswers, VERSION } from "./scoring.mjs";
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
@@ -11,6 +13,17 @@ const PORT = Number(process.env.PORT || 8787);
 const BASE_URL = (process.env.PUBLIC_BASE_URL || (process.env.VERCEL_URL ? "https://" + process.env.VERCEL_URL : "http://localhost:" + PORT)).replace(/\/$/, "");
 const BASE_ORIGIN = new URL(BASE_URL).origin;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_LIVE = liveKey(STRIPE_SECRET_KEY);
+// Real Stripe test-mode resources live in a separate namespace. Never use
+// the live price ID with a test-mode key or vice versa.
+const STRIPE_PRICE_ID = STRIPE_LIVE ? PRICE_ID : (process.env.NIJA_GAME_TEST_PRICE_ID || "");
+const STRIPE_PRODUCT_ID = STRIPE_LIVE ? PRODUCT_ID : (process.env.NIJA_GAME_TEST_PRODUCT_ID || "");
+const TEST_IDENTITIES_VALID = /^price_[A-Za-z0-9_]+$/.test(STRIPE_PRICE_ID) &&
+  /^prod_[A-Za-z0-9_]+$/.test(STRIPE_PRODUCT_ID);
+const SECURE_COOKIE = BASE_ORIGIN.startsWith("https://");
+// Production checkout remains disabled until a reviewed release explicitly enables it.
+const CHECKOUT_READY = checkoutEnabled(STRIPE_SECRET_KEY, process.env.NIJA_REPORT_CHECKOUT_ENABLED) &&
+  TEST_IDENTITIES_VALID && (process.env.VERCEL_ENV !== "production" || STRIPE_LIVE);
 const approvedFiles = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/index.html": ["index.html", "text/html; charset=utf-8"],
@@ -93,54 +106,77 @@ function rateLimit(req) {
   active.push(now); traffic.set(ip, active); return true;
 }
 async function checkout(req, res) {
-  if (!STRIPE_SECRET_KEY) return json(res, 503, { error: "Secure checkout is not configured yet." });
+  if (!CHECKOUT_READY) return json(res, 503, { error: "Secure checkout is not configured yet." });
   if (req.headers.origin !== BASE_ORIGIN) return json(res, 403, { error: "Invalid request origin." });
   if (!rateLimit(req)) return json(res, 429, { error: "Too many attempts. Please try later." });
   let data;
   try { data = await bodyJSON(req); } catch { return json(res, 400, { error: "Invalid checkout request." }); }
-  if (data.version !== VERSION || !validAnswers(data.answers)) return json(res, 400, { error: "Complete the six market decisions first." });
-  const form = new URLSearchParams();
-  form.set("mode", "payment");
-  form.set("line_items[0][price_data][currency]", "usd");
-  form.set("line_items[0][price_data][unit_amount]", "100");
-  form.set("line_items[0][price_data][product_data][name]", "NIJA Trading IQ Personalized Report");
-  form.set("line_items[0][quantity]", "1");
-  form.set("client_reference_id", "nija_game_" + randomUUID());
-  form.set("success_url", BASE_URL + "/?session_id={CHECKOUT_SESSION_ID}");
-  form.set("cancel_url", BASE_URL + "/?cancelled=1");
-  form.set("metadata[version]", VERSION);
-  form.set("metadata[answers]", data.answers.join(","));
+  if (data.version !== VERSION || !validAnswers(data.answers)) {
+    return json(res, 400, { error: "Complete the six market decisions first." });
+  }
   try {
+    // Verify the immutable configured one-dollar Stripe price and product before
+    // asking Stripe to accept any customer payment.
+    const price = await stripeRequest("prices/" + encodeURIComponent(STRIPE_PRICE_ID));
+    if (!verifyPrice(price, STRIPE_LIVE, STRIPE_PRICE_ID, STRIPE_PRODUCT_ID)) throw new Error("Stripe offer identity mismatch");
+    const proof = issueProof();
+    const form = new URLSearchParams();
+    form.set("mode", "payment");
+    form.set("line_items[0][price]", STRIPE_PRICE_ID);
+    form.set("line_items[0][quantity]", "1");
+    form.set("client_reference_id", "nija_game_" + randomUUID());
+    form.set("success_url", BASE_URL + "/?session_id={CHECKOUT_SESSION_ID}");
+    form.set("cancel_url", BASE_URL + "/?cancelled=1");
+    form.set("metadata[version]", VERSION);
+    form.set("metadata[answers]", data.answers.join(","));
+    form.set("metadata[offer]", OFFER);
+    form.set("metadata[product]", STRIPE_PRODUCT_ID);
+    form.set("metadata[price]", STRIPE_PRICE_ID);
+    form.set("metadata[proof_sha256]", hashProof(proof));
     const session = await stripeRequest("checkout/sessions", { body: form });
-    if (!session.url || !session.url.startsWith("https://checkout.stripe.com/")) throw new Error("Unusable checkout URL");
+    const target = new URL(session.url || "https://invalid.example");
+    if (!SESSION_ID.test(session.id || "") || session.livemode !== STRIPE_LIVE ||
+        session.mode !== "payment" || target.protocol !== "https:" ||
+        (target.hostname !== "checkout.stripe.com" && !target.hostname.endsWith(".checkout.stripe.com"))) {
+      throw new Error("Unexpected checkout response");
+    }
+    // No proof in URLs, response bodies, logs, or browser-accessible JS.
+    res.setHeader("Set-Cookie", issueCookie(proof, SECURE_COOKIE));
     return json(res, 200, { url: session.url });
-  } catch { return json(res, 502, { error: "Checkout unavailable. Please retry or play for free." }); }
+  } catch {
+    return json(res, 502, { error: "Checkout unavailable. Please retry or play for free." });
+  }
 }
-async function results(url, res) {
-  if (!STRIPE_SECRET_KEY) return json(res, 503, { error: "Results verification is unavailable." });
+async function results(url, req, res) {
+  if (!CHECKOUT_READY) return json(res, 503, { error: "Results verification is unavailable." });
   const id = url.searchParams.get("session_id");
-  if (!id || !/^cs_(test|live)_[A-Za-z0-9]{8,}$/.test(id)) return json(res, 400, { error: "Invalid checkout reference." });
+  if (!SESSION_ID.test(id || "")) return json(res, 400, { error: "Invalid checkout reference." });
+  const proof = readProof(req.headers.cookie, SECURE_COOKIE);
+  if (!proof) return json(res, 403, { error: "Use the original purchasing browser to access this report." });
   try {
-    const session = await stripeRequest("checkout/sessions/" + encodeURIComponent(id));
-    if (session.payment_status !== "paid" || session.mode !== "payment" ||
-        session.currency !== "usd" || session.amount_total !== 100 ||
-        session.metadata?.version !== VERSION) {
-      return json(res, 403, { error: "A verified $1 purchase is required for this report." });
+    const session = await stripeRequest("checkout/sessions/" + encodeURIComponent(id) +
+      "?expand%5B%5D=payment_intent.latest_charge");
+    const lines = await stripeRequest("checkout/sessions/" + encodeURIComponent(id) + "/line_items?limit=5");
+    if (!verifyPurchase(session, lines, proof, STRIPE_LIVE, id, STRIPE_PRICE_ID, STRIPE_PRODUCT_ID)) {
+      return json(res, 403, { error: "A verified, unreversed $1 purchase from this browser is required." });
     }
     const raw = session.metadata?.answers;
-    if (!/^([012],){5}[012]$/.test(raw || "")) return json(res, 422, { error: "Results data unavailable. Contact support with your receipt." });
-    const answers = raw.split(",").map(Number);
-    return json(res, 200, { report: scoreReport(answers) });
-  } catch { return json(res, 502, { error: "Could not verify this payment. Retain your receipt and retry." }); }
+    if (!/^([012],){5}[012]$/.test(raw || "")) {
+      return json(res, 422, { error: "Results data unavailable. Contact support with your receipt." });
+    }
+    return json(res, 200, { report: scoreReport(raw.split(",").map(Number)) });
+  } catch {
+    return json(res, 502, { error: "Could not verify this payment. Retain your receipt and retry." });
+  }
 }
 async function handle(req, res) {
   setHeaders(res);
   const url = new URL(req.url || "/", "http://local");
   if (url.pathname === "/api/health" && req.method === "GET") {
-    return json(res, 200, { status: "ready", checkoutConfigured: Boolean(STRIPE_SECRET_KEY) });
+    return json(res, 200, { status: "ready", checkoutConfigured: CHECKOUT_READY });
   }
   if (url.pathname === "/api/checkout" && req.method === "POST") return checkout(req, res);
-  if (url.pathname === "/api/results" && req.method === "GET") return results(url, res);
+  if (url.pathname === "/api/results" && req.method === "GET") return results(url, req, res);
   if (req.method !== "GET" && req.method !== "HEAD") return json(res, 405, { error: "Method not allowed." });
   const file = approvedFiles[url.pathname];
   if (!file) return json(res, 404, { error: "Not found." });
