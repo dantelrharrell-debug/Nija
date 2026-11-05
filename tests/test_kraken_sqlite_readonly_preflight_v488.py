@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bot.kraken_sqlite_readonly_preflight_v488 import inspect_kraken_ledger
 
@@ -92,6 +93,56 @@ class KrakenLedgerReadonlyPreflightTests(unittest.TestCase):
         report = self.inspect()
         self.assertEqual(report["counts"]["platform_positions_without_exact_opening"], 1)
         self.assertIn("opening_ledger_order_links_unverified", report["issues"])
+
+    def test_pending_total_preserved_without_mixing_account_scopes(self):
+        self.create_db(exits=True, pending=2)
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany(
+                "INSERT INTO pending_kraken_closes VALUES (?,?,?,?)",
+                [
+                    ("kraken", "customer-private", "pending", OPEN_ID),
+                    ("coinbase", "platform:kraken", "pending", OPEN_ID),
+                    ("kraken", "platform:kraken", "closed", OPEN_ID),
+                    ("kraken", None, "pending", OPEN_ID),
+                ],
+            )
+        report = self.inspect()
+        self.assertEqual(report["counts"]["pending_kraken_closes_total"], 6)
+        self.assertEqual(report["counts"]["pending_kraken_closes"], 2)
+        self.assertNotIn("customer-private", str(report))
+        self.assertNotIn(OPEN_ID, str(report))
+
+    def test_concurrent_commit_does_not_mix_ledger_snapshots(self):
+        self.create_db(exits=True, pending=1)
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+        writer = sqlite3.connect(self.db_path)
+        self.addCleanup(writer.close)
+        statements = []
+
+        class ConcurrentConnection(sqlite3.Connection):
+            def execute(connection, sql, *args, **kwargs):
+                statements.append(sql)
+                result = super().execute(sql, *args, **kwargs)
+                if sql == 'SELECT COUNT(*) FROM "pending_kraken_closes"':
+                    writer.execute("DELETE FROM pending_kraken_closes")
+                    writer.commit()
+                return result
+
+        connect = sqlite3.connect
+        with patch(
+            "bot.kraken_sqlite_readonly_preflight_v488.sqlite3.connect",
+            side_effect=lambda *args, **kwargs: connect(
+                *args, factory=ConcurrentConnection, **kwargs
+            ),
+        ):
+            report = self.inspect()
+        self.assertEqual(report["counts"]["pending_kraken_closes_total"], 1)
+        self.assertEqual(report["counts"]["pending_kraken_closes"], 1)
+        self.assertIn("pending_kraken_closes_require_reconciliation", report["issues"])
+        self.assertIn("ledger_changed_during_readonly_audit", report["issues"])
+        self.assertLess(statements.index("BEGIN"), statements.index("PRAGMA integrity_check"))
+        self.assertFalse(report["collector_install_allowed"])
 
     def test_even_complete_local_rows_do_not_certify_broker_or_backup(self):
         self.create_db(exits=True)

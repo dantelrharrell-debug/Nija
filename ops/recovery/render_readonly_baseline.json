@@ -6,7 +6,7 @@
   "deployment_id": null,
   "commit": null,
   "source_sha256": {
-    "bot/kraken_sqlite_readonly_preflight_v488.py": "480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452",
+    "bot/kraken_sqlite_readonly_preflight_v488.py": "89a1213bb4048109b3722b3d6f80b3882a8aa8c9975ff789e868e9dd7b8845ae",
     "bot/kraken_live_history_recovery.py": "02d382407fe6f71fd8cb36190c5c87fcdb0f79e6ef4f62d597e633343e99e4df",
     "bot/universal_broker_exit_supervisor_patch.py": "7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758",
     "bot/kraken_identity_request_recovery_v491.py": "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2",
