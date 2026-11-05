@@ -17,6 +17,7 @@ PRICE_ID = "price_1UY9YmI0gfJjTf3E1h6mYC2S"
 PRODUCT_ID = "prod_VZI9N8jDpFrQMt"
 OFFER = "nija-personal-results-v1"
 COOKIE_PREFIX = "__Host-nija-report-"
+BILLING_ORIGIN = "https://nija-billing-api.onrender.com"
 PUBLIC_ORIGIN = "https://nija-trading-challenge.vercel.app"
 ALLOWED_ORIGINS = frozenset({PUBLIC_ORIGIN, "https://game.nijaaitrading.com"})
 SID = re.compile(r"^cs_live_[A-Za-z0-9_]{8,250}$")
@@ -128,7 +129,7 @@ def validate_price(stripe: Any) -> None:
         raise RuntimeError("game_price_identity_mismatch")
 
 
-def create_checkout(stripe: Any, decisions: Any, origin: str) -> tuple[str, str, str]:
+def create_checkout(stripe: Any, decisions: Any, origin: str, *, hosted: bool = False) -> tuple[str, str, str]:
     if origin not in ALLOWED_ORIGINS:
         raise ValueError("untrusted_origin")
     attempt = validate_attempt(decisions)
@@ -138,8 +139,10 @@ def create_checkout(stripe: Any, decisions: Any, origin: str) -> tuple[str, str,
         mode="payment",
         line_items=[{"price": PRICE_ID, "quantity": 1}],
         payment_method_types=["card"],
-        success_url=origin + "/results.html?session_id={CHECKOUT_SESSION_ID}",
-        cancel_url=origin + "/?checkout=cancelled",
+        success_url=(BILLING_ORIGIN + "/game/results?session_id={CHECKOUT_SESSION_ID}" if hosted
+                     else origin + "/results.html?session_id={CHECKOUT_SESSION_ID}"),
+        cancel_url=(BILLING_ORIGIN + "/game/cancelled" if hosted
+                    else origin + "/?checkout=cancelled"),
         metadata={"nija_offer": OFFER, "nija_product": PRODUCT_ID,
                   "nija_version": "1", "attempt": attempt, "proof_sha256": proof_hash(proof)},
     )
