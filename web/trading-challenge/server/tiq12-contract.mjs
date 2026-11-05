@@ -138,7 +138,7 @@ export function matchesVerifiedTiq12Payment({ session, lineItems, proof, storedR
         charge?.disputed !== false || charge?.amount_refunded !== 0 ||
         charge?.status !== "succeeded") return false;
     const rows = lineItems?.data;
-    if (!Array.isArray(rows) || rows.length !== 1) return false;
+    if (!Array.isArray(rows) || rows.length !== 1 || lineItems.has_more === true) return false;
     const row = rows[0], price = row.price;
     const priceId = typeof price === "string" ? price : price?.id;
     const productId = typeof price?.product === "string" ? price.product : price?.product?.id;
