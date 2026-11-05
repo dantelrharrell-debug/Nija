@@ -32,11 +32,14 @@ The repository at `f814a38` contains five-decision Python billing, a six-decisio
 
 ## Run tests
 
+New hardening checks cover actual source-byte pinning and browser-owned report reopening in addition to the original sandbox suite. Run them against the precise release commit; a local test pass cannot substitute for hosted Stripe Checkout, IONOS-parity testing or production security gates.
+
 Use a separate Python environment; production dependency files are not changed.
 
 ```sh
 pip install -r game_sandbox/requirements.txt pytest
-python -m pytest tests/test_game_sandbox.py -q
+python -m pytest tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py -q
+node --test tests/test_game_sandbox_client.mjs
 node --test web/trading-challenge/tests/*.test.mjs
 ```
 
@@ -53,9 +56,12 @@ All settings are distinct from existing billing/trading environment variables:
 - `NIJA_IQ_SANDBOX_WEBHOOK_SECRET`: signing secret for that sandbox endpoint
 - `NIJA_IQ_SANDBOX_PRICE_ID`, `NIJA_IQ_SANDBOX_PRODUCT_ID`: dedicated sandbox $1 offer identities
 - `NIJA_IQ_SANDBOX_MANIFEST`, `NIJA_IQ_SANDBOX_MANIFEST_SHA256`: private canonical JSON file and digest from `Manifest.digest`
+- `NIJA_IQ_SANDBOX_SOURCE_EXPORT`: **required**, private read-only canonical IONOS export file (e.g., a ZIP). The service now streams its SHA-256 at startup and requires an exact match with the manifest's `source_sha256`; missing, symlinked or modified exports fail closed.
 - `NIJA_IQ_SANDBOX_REPORT_ADAPTER`, `NIJA_IQ_SANDBOX_REPORT_ADAPTER_SHA256`: private Python adapter exposing `build_report(answers)` and its UTF-8 content digest; adapter must call the exported existing report implementation with verified parity tests
 
 Manifest shape: `version`, `source_sha256` of canonical IONOS export, `structure` (`12_total` or `12_per_challenge`), `challenges` containing ordered `rounds`, each with unique `id` and integer `choices` count. A total-12 manifest can group its decisions across six challenges. Six challenges of twelve each require `12_per_challenge`. Do not configure either shape until the actual source is inspected.
+
+The browser adapter can save only the opaque non-secret `runId` in first-party localStorage (no owner receipt, CSRF token, answer history or payment data). `resumeSaved()` verifies the existing private HttpOnly cookie with the server before any report is requested; different browsers cannot reuse the run ID. Browser storage can be unavailable, and lost/expired ownership still requires a future authenticated recovery flow.
 
 Wire `client.mjs` into existing preview UI only after export/parity verification. Start after adult attestation, save ordered choices with `complete`, open Checkout only after explicit optional-$1 disclosure. On return, `resume(runId)` then `report()`; pending webhook should show a retry state, never another charge. Render the original report using safe text/escaping and its existing responsive layout. The adapter is delivered but not installed into inaccessible IONOS source.
 
