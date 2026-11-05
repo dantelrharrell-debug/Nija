@@ -8,6 +8,9 @@ on:
       - 'bot/kraken_authenticated_ledger_gap_audit_v489.py'
       - 'tests/test_kraken_sqlite_readonly_preflight_v488.py'
       - 'tests/test_kraken_authenticated_ledger_gap_audit_v489.py'
+      - 'scripts/nija_protective_mapping_rehearsal.py'
+      - 'tests/test_protective_mapping_rehearsal.py'
+      - 'docs/protective_mapping_schema_rehearsal.md'
       - '.github/workflows/kraken-ledger-release-v489.yml'
   workflow_dispatch:
 permissions:
@@ -30,3 +33,4 @@ jobs:
         run: |
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_sqlite_readonly_preflight_v488.py -v
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_authenticated_ledger_gap_audit_v489.py -v
+          NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_protective_mapping_rehearsal.py -v
