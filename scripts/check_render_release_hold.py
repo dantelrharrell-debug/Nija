@@ -44,8 +44,37 @@ def verify_release_hold(source: str) -> None:
         raise ValueError("blueprint_mapping_required")
 
     services = []
+    allowed_service_paths: set[tuple[Any, ...]] = set()
 
-    def visit(value: Any, ancestors: frozenset[int]) -> None:
+    def collect(container: dict[Any, Any], path: tuple[Any, ...]) -> None:
+        if "services" not in container:
+            return
+        rows = container["services"]
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError("invalid_blueprint_services")
+        allowed_service_paths.add((*path, "services"))
+        services.extend(row for row in rows if row.get("name") == "nija-trading-bot")
+
+    collect(document, ())
+    if "ungrouped" in document:
+        ungrouped = document["ungrouped"]
+        if not isinstance(ungrouped, dict):
+            raise ValueError("invalid_blueprint_ungrouped")
+        collect(ungrouped, ("ungrouped",))
+    if "projects" in document:
+        projects = document["projects"]
+        if not isinstance(projects, list) or any(not isinstance(row, dict) for row in projects):
+            raise ValueError("invalid_blueprint_projects")
+        for project_index, project in enumerate(projects):
+            if "environments" not in project:
+                continue
+            environments = project["environments"]
+            if not isinstance(environments, list) or any(not isinstance(row, dict) for row in environments):
+                raise ValueError("invalid_blueprint_environments")
+            for environment_index, environment in enumerate(environments):
+                collect(environment, ("projects", project_index, "environments", environment_index))
+
+    def visit(value: Any, path: tuple[Any, ...], ancestors: frozenset[int]) -> None:
         if not isinstance(value, (dict, list)):
             return
         identity = id(value)
@@ -53,18 +82,16 @@ def verify_release_hold(source: str) -> None:
             raise ValueError("recursive_blueprint_alias")
         ancestors = ancestors | {identity}
         if isinstance(value, dict):
-            if "services" in value:
-                rows = value["services"]
-                if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-                    raise ValueError("invalid_blueprint_services")
-                services.extend(row for row in rows if row.get("name") == "nija-trading-bot")
-            for child in value.values():
-                visit(child, ancestors)
+            for key, child in value.items():
+                child_path = (*path, key)
+                if key == "services" and child_path not in allowed_service_paths:
+                    raise ValueError("unsupported_blueprint_services_location")
+                visit(child, child_path, ancestors)
         else:
-            for child in value:
-                visit(child, ancestors)
+            for index, child in enumerate(value):
+                visit(child, (*path, index), ancestors)
 
-    visit(document, frozenset())
+    visit(document, (), frozenset())
     if len(services) != 1:
         raise ValueError("exactly_one_trading_service_required")
     service = services[0]
