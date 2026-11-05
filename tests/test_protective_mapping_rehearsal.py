@@ -178,6 +178,15 @@ class ProtectiveMappingRehearsalTests(unittest.TestCase):
         self.assertEqual(self.backup.read_bytes(), self.original)
         self.assertFalse(list(self.root.glob('.ledger-candidate-*')))
 
+    def test_stale_destination_wal_prevents_publication(self) -> None:
+        sidecar = Path(str(self.candidate) + '-wal')
+        sidecar.write_bytes(b'stale-wal')
+        with self.assertRaisesRegex(rehearsal.RehearsalDenied, 'new_candidate_without_sidecars_required'):
+            self.run_rehearsal()
+        self.assertFalse(self.candidate.exists())
+        self.assertEqual(sidecar.read_bytes(), b'stale-wal')
+        self.assertFalse(list(self.root.glob('.ledger-candidate-*')))
+
 
 if __name__ == '__main__':
     unittest.main()
