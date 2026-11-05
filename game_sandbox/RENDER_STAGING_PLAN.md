@@ -31,6 +31,33 @@ approving the Blueprint plan. Simply selecting the workspace is not cost
 approval. Render Blueprint `autoSync=false` means future pushes do not
 automatically apply infrastructure changes.
 
+## Verified test-mode boundaries and remaining dependencies (2026-11-05)
+
+The connected NIJA Stripe sandbox account has an active one-time USD 1 price
+`price_1UYToJRS5Ezp77RQVkx96eS5` for product
+`prod_nija_iq72_sandbox_v1` (`unit_amount=100`, `currency=usd`,
+`livemode=false`). These **public identifiers only** are pinned in
+`render.staging.yaml`. The sole registered test webhook belongs to the
+existing Foundations course sandbox and must not be repurposed.
+
+An authenticated read-only Render Blueprint planning attempt reported
+`planningOutcome=failed` with `billing_suspended` for the owner-selected
+Nija workspace. No game service or persistent disk was provisioned. There is
+therefore no service-side evidence that either the **restricted Stripe test
+API key** or dedicated **webhook signing secret** is installed. Configure
+those only in the newly provisioned dedicated Render service using its
+protected environment settings after separate paid-plan cost authorization.
+Never paste or commit either credential; never print it or expose it in logs.
+The new webhook URL must point to that actual HTTPS game service, not an
+existing NIJA course, billing, or trading endpoint.
+
+The 2026-11-05 IONOS technical response states external processor payments
+are not automatically linked to an AI Builder database; the separate
+6B/9B protected-storage review is not an approved migration. Keep all runs,
+checkout attempts, webhook events and entitlements in the isolated backend
+rather than writing to unverified IONOS storage. A GitHub merge is not
+authenticated IONOS preview access, source-parity evidence or publication.
+
 ## After authorized infrastructure creation
 
 1. Verify service builds, the published `/healthz` is honest, and every
