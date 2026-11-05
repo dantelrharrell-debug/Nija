@@ -5,6 +5,8 @@ process.env.NODE_ENV = "test";
 process.env.PUBLIC_BASE_URL = "http://localhost:8787";
 process.env.STRIPE_SECRET_KEY = "sk_test_unit_not_real";
 process.env.NIJA_REPORT_CHECKOUT_ENABLED = "true";
+process.env.NIJA_GAME_TEST_PRICE_ID = "price_1UY9YmI0gfJjTf3E1h6mYC2S"; // mocked only
+process.env.NIJA_GAME_TEST_PRODUCT_ID = "prod_VZI9N8jDpFrQMt"; // mocked only
 const { handle, server } = await import("../server/index.mjs");
 
 const realFetch = globalThis.fetch;
