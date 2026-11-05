@@ -30,12 +30,16 @@ test("manifest only accepts twelve unique complete rounds with server-owned scor
   assert.match(manifest.digest,/^[a-f0-9]{64}$/);
   assert.equal(validateTiq12Manifest(makeManifest()).digest,manifest.digest);
   for(const mutate of [x=>x.rounds.pop(),x=>x.rounds[1].id=x.rounds[0].id,
+    x=>delete x.rounds[1],x=>delete x.rounds[0].choices[1],
     x=>x.rounds[2].choices[0].points=100,x=>x.rounds[0].choices=[]]){
     const draft=makeManifest();mutate(draft);assert.throws(()=>validateTiq12Manifest(draft),TypeError);
   }
 });
 test("all twelve answers are required and extraneous client score/payment fields are rejected",()=>{
   assert.equal(validateTiq12Answers(manifest,answers).length,12);
+  const sparseAnswers=new Array(12);sparseAnswers[0]=answers[0];
+  assert.throws(()=>validateTiq12Answers(manifest,sparseAnswers),TypeError);
+  assert.throws(()=>requireAdultCompletedRun({...storedRun(),answers:sparseAnswers},manifest),TypeError);
   for(const bad of [answers.slice(0,11),[...answers.slice(0,11),{roundId:"round_12",choice:9}],
     [...answers.slice(0,11),{roundId:"round_12",choice:1,score:100}],
     [...answers.slice(0,11),{roundId:"round_11",choice:1}]])
@@ -61,6 +65,7 @@ test("payment requires exact adult run, receipt proof, 100 cents, charge, produc
     x=>x.session.payment_status="unpaid",x=>x.session.metadata.manifest_digest="b".repeat(64),
     x=>x.session.metadata.game_version="six-round",x=>x.session.payment_intent.latest_charge.refunded=true,
     x=>x.session.payment_intent.latest_charge.disputed=true,x=>x.session.payment_intent.latest_charge.amount_refunded=100,
+    x=>x.lineItems.has_more=true,
     x=>x.lineItems.data[0].price.id="wrong",x=>x.lineItems.data.push(x.lineItems.data[0]),
     x=>x.expectedPriceId=undefined,x=>x.expectedProductId=undefined,
     x=>x.session.id="cs_live_123456789012",x=>x.livemode="false"];

@@ -65,7 +65,7 @@ export function validateTiq12Answers(manifest, supplied) {
       !Array.isArray(supplied) || supplied.length !== TIQ12_ROUNDS) {
     fail("Twelve completed server-validated rounds required");
   }
-  return supplied.map((answer, index) => {
+  return Array.from(supplied, (answer, index) => {
     const round = manifest.rounds[index];
     if (!answer || typeof answer !== "object" || Array.isArray(answer) ||
         Object.keys(answer).sort().join(",") !== "choice,roundId" ||
