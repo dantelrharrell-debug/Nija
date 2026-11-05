@@ -47,7 +47,9 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
             built["bot/broker_manager.py"],
             broker_outputs[hashlib.sha256(self.sources["bot/broker_manager.py"]).hexdigest()],
         )
-        for path in set(SOURCE_PATHS) - {"start.sh", "bot/broker_manager.py"}:
+        for path in set(SOURCE_PATHS) - {
+            "start.sh", "bot/broker_manager.py", "bot/canonical_broker_startup_convergence_v24.py",
+        }:
             self.assertEqual(built[path], hashlib.sha256(self.sources[path]).hexdigest())
 
     def test_any_unrecognized_recipe_bytes_fail_closed(self) -> None:
@@ -61,9 +63,11 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
             "scripts/apply_startup_handoff_fix.py",
             "scripts/apply_canonical_launcher_v26.py",
             "scripts/apply_render_signal_forwarding_v262.py",
+            "scripts/apply_kraken_recovery_coordinator_single_owner_v400.py",
         )
         paths = set(SOURCE_PATHS) | set(scripts) | {
             "scripts/canonical_runtime_launcher_v26.py", "bot/startup_position_sync.py",
+            "bot/kraken_connection_convergence_v44_patch.py",
         }
         with tempfile.TemporaryDirectory() as directory:
             isolated = Path(directory)
@@ -81,6 +85,32 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
                 path: hashlib.sha256((isolated / path).read_bytes()).hexdigest() for path in SOURCE_PATHS
             }
         self.assertEqual(actual, derive_runtime_source_sha256(self.sources, self.recipe))
+
+    def test_build_only_coordinator_bytes_cannot_stand_in_for_post_entrypoint_bytes(self) -> None:
+        expected = derive_runtime_source_sha256(self.sources, self.recipe)
+        path = "bot/canonical_broker_startup_convergence_v24.py"
+        original = hashlib.sha256(self.sources[path]).hexdigest()
+        self.assertNotEqual(expected[path], original)
+        approval = {"source_sha256": expected}
+        with self.assertRaisesRegex(VerificationDenied, "runtime_source_digest_mismatch"):
+            _verify_render_instance_app_logs(
+                approval, {"source_sha256": {**expected, path: original}}, expected_source_sha256=expected,
+            )
+
+    def test_coordinator_rewrite_is_idempotent_and_rejects_ambiguous_inputs(self) -> None:
+        from scripts.render_runtime_build_sources import _coordinator_runtime_text, coordinator
+        path = "bot/canonical_broker_startup_convergence_v24.py"
+        original = self.sources[path].decode()
+        rewritten = _coordinator_runtime_text(original)
+        self.assertEqual(_coordinator_runtime_text(rewritten), rewritten)
+        for invalid in (
+            original.replace(coordinator.V24_OLD, ""),
+            original + coordinator.V24_OLD,
+            original + coordinator.MARKER,
+            rewritten.replace(coordinator.V24_NEW, ""),
+        ):
+            with self.assertRaises(RuntimeError):
+                _coordinator_runtime_text(invalid)
 
     def test_missing_or_extra_build_inputs_fail_closed(self) -> None:
         for sources, recipe in (

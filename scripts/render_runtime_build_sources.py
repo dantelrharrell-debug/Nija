@@ -14,6 +14,7 @@ from pathlib import Path
 from scripts import apply_canonical_launcher_v26 as canonical
 from scripts import apply_render_signal_forwarding_v262 as signals
 from scripts import apply_startup_handoff_fix as startup
+from scripts import apply_kraken_recovery_coordinator_single_owner_v400 as coordinator
 from scripts.nija_kraken_instance_diagnostic import SOURCE_PATHS
 
 # Both Dockerfiles have the same rewrite sequence. The second only adds
@@ -35,6 +36,8 @@ RECIPE_SHA256 = {
         "12b93448d0c32dcba715a5b31f534d20dbb7e5bb311006fac889323d085a0f00",  # pragma: allowlist secret
     "scripts/apply_render_signal_forwarding_v262.py":
         "ed4497b356a8e68c9918380912d4805a1522e47174964eee2f93472aefc5c413",  # pragma: allowlist secret
+    "scripts/apply_kraken_recovery_coordinator_single_owner_v400.py":
+        "214ee2c08e52732027655fe76b6e715bc6b5f2ff4bcb2d209118921c5d8b18b4",  # pragma: allowlist secret
 }
 RECIPE_PATHS = ("Dockerfile", *RECIPE_SHA256)
 
@@ -56,8 +59,21 @@ class _MemoryText:
         self.text = text
 
 
+def _coordinator_runtime_text(text: str) -> str:
+    """Reproduce the pinned v400 entrypoint rewrite without filesystem writes."""
+    anchor = '_MARKER = "20260723-canonical-broker-startup-convergence-v24"'
+    marked = anchor + '\n' + f'_KRAKEN_COORDINATOR_SINGLE_OWNER_MARKER = "{coordinator.MARKER}"'
+    if coordinator.MARKER in text:
+        if text.count(marked) != 1 or text.count(coordinator.V24_NEW) != 1 or coordinator.V24_OLD in text:
+            raise RuntimeError("ambiguous v400 applied source")
+        return text
+    if text.count(coordinator.V24_OLD) != 1 or text.count(anchor) != 1:
+        raise RuntimeError("ambiguous v400 original source")
+    return text.replace(coordinator.V24_OLD, coordinator.V24_NEW, 1).replace(anchor, marked, 1)
+
+
 def derive_runtime_source_sha256(sources: dict[str, bytes], recipe: dict[str, bytes]) -> dict[str, str]:
-    """Derive exact runtime bytes only for the reviewed, hash-pinned recipe.
+    """Derive post-entrypoint bytes only for the reviewed, hash-pinned recipe.
 
     Non-target rewrites affect site-packages, bot/__init__.py, the launcher,
     startup_position_sync.py and prebootstrap, none of which are SOURCE_PATHS. Never
@@ -72,7 +88,7 @@ def derive_runtime_source_sha256(sources: dict[str, bytes], recipe: dict[str, by
             raise BuildRecipeDenied("runtime_build_recipe_unreviewed")
     # A newer verification checkout must not silently change the derivation.
     root = Path(__file__).resolve().parents[1]
-    for module in (startup, canonical, signals):
+    for module in (startup, canonical, signals, coordinator):
         path = Path(module.__file__).resolve()
         relative = path.relative_to(root).as_posix()
         if hashlib.sha256(path.read_bytes()).hexdigest() != RECIPE_SHA256[relative]:
@@ -86,6 +102,8 @@ def derive_runtime_source_sha256(sources: dict[str, bytes], recipe: dict[str, by
         built["bot/broker_manager.py"] = canonical.patch_broker_manager_text(
             sources["bot/broker_manager.py"].decode("utf-8"),
         ).encode("utf-8")
+        target = "bot/canonical_broker_startup_convergence_v24.py"
+        built[target] = _coordinator_runtime_text(sources[target].decode("utf-8")).encode("utf-8")
     except (UnicodeError, RuntimeError, ValueError):
         raise BuildRecipeDenied("runtime_build_transform_failed") from None
     return {path: hashlib.sha256(data).hexdigest() for path, data in built.items()}
