@@ -61,6 +61,8 @@ test("payment requires exact adult run, receipt proof, 100 cents, charge, produc
     x=>x.session.payment_status="unpaid",x=>x.session.metadata.manifest_digest="b".repeat(64),
     x=>x.session.metadata.game_version="six-round",x=>x.session.payment_intent.latest_charge.refunded=true,
     x=>x.session.payment_intent.latest_charge.disputed=true,x=>x.session.payment_intent.latest_charge.amount_refunded=100,
-    x=>x.lineItems.data[0].price.id="wrong",x=>x.lineItems.data.push(x.lineItems.data[0])];
+    x=>x.lineItems.data[0].price.id="wrong",x=>x.lineItems.data.push(x.lineItems.data[0]),
+    x=>x.expectedPriceId=undefined,x=>x.expectedProductId=undefined,
+    x=>x.session.id="cs_live_123456789012",x=>x.livemode="false"];
   for(const change of bad){const item=receipt();change(item);assert.equal(matchesVerifiedTiq12Payment(item),false);}
 });
