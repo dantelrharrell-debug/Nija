@@ -52,6 +52,14 @@ class RecoveryVerificationTests(unittest.TestCase):
             "state_changed": False, "allow_new_orders": False,
             "source_sha256": self.approval["source_sha256"],
         }
+        # Synthetic source bytes have no Docker recipe. Test derivation itself
+        # separately against real tracked sources and tampered build inputs.
+        derivation = patch(
+            "scripts.nija_render_recovery_verification.derive_runtime_source_sha256",
+            side_effect=lambda sources, recipe: dict(self.approval["source_sha256"]),
+        )
+        derivation.start()
+        self.addCleanup(derivation.stop)
 
     def test_correct_release_requires_exact_deployment_and_runtime(self) -> None:
         verify_baseline(self.approval, self.evidence, workflow_ref=REF)
@@ -510,7 +518,7 @@ class RecoveryVerificationTests(unittest.TestCase):
         import unittest.mock
         fake = unittest.mock.MagicMock()
         fake.__enter__.return_value = io.BytesIO(b'{"logs":[]}')
-        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-api-key"}), patch(
+        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-api-key"}), patch(  # pragma: allowlist secret
             "scripts.nija_render_recovery_verification.urlopen", return_value=fake,
         ) as opener:
             self.assertEqual(
@@ -583,6 +591,39 @@ class RecoveryVerificationTests(unittest.TestCase):
         self.assertFalse(report["SOURCE_INTEGRITY_VERIFIED"])
         self.assertFalse(report["RUNTIME_ACCESS_VERIFIED"])
 
+    def test_unreviewed_build_recipe_denies_before_ssh(self) -> None:
+        from scripts.render_runtime_build_sources import BuildRecipeDenied
+        with patch(
+            "scripts.nija_render_recovery_verification.derive_runtime_source_sha256",
+            side_effect=BuildRecipeDenied("runtime_build_recipe_unreviewed"),
+        ):
+            report = self.run_synthetic()
+        self.assertEqual(report["failures"], ["runtime_build_recipe_unreviewed"])
+        self.assertNotIn("ssh_runtime_report_received", report)
+        self.assertFalse(report["RUNTIME_ACCESS_VERIFIED"])
+
+    def test_transformed_runtime_pins_required_on_second_ssh_read(self) -> None:
+        built = {path: hashlib.sha256(b"synthetic-built").hexdigest() for path in SOURCE_PATHS}
+        first = {**self.runtime, "source_sha256": built}
+        original_approval = copy.deepcopy(self.approval)
+        with patch.dict(os.environ, {"GITHUB_REF": REF}, clear=True), patch(
+            "scripts.nija_render_recovery_verification.load_reviewed_approval", return_value=self.approval,
+        ), patch(
+            "scripts.nija_render_recovery_verification.inspect_render_api", return_value=self.evidence,
+        ), patch(
+            "scripts.nija_render_recovery_verification._command", return_value=b"synthetic-source",
+        ), patch(
+            "scripts.nija_render_recovery_verification.derive_runtime_source_sha256", return_value=built,
+        ), patch(
+            "scripts.nija_render_recovery_verification._runtime", side_effect=[first, self.runtime],
+        ) as ssh:
+            report = run_verification()
+        self.assertEqual(ssh.call_count, 2)
+        self.assertEqual(report["failures"], ["runtime_source_digest_mismatch"])
+        self.assertFalse(report["SOURCE_INTEGRITY_VERIFIED"])
+        self.assertFalse(report["allow_new_orders"])
+        self.assertEqual(self.approval, original_approval)
+
     def test_nonrelease_deployed_commit_fails_lineage_check(self) -> None:
         def command(args, reason):
             if args[1] == "merge-base":
@@ -607,14 +648,17 @@ class RecoveryVerificationTests(unittest.TestCase):
         self.assertFalse(report["SOURCE_INTEGRITY_VERIFIED"])
         self.assertFalse(report["RUNTIME_ACCESS_VERIFIED"])
 
-    def test_committed_manifest_has_reviewed_sources_and_explicit_approval(self) -> None:
+    def test_committed_manifest_remains_unapproved_source_pin_template(self) -> None:
         approval = json.loads(MANIFEST.read_bytes())
         self.assertIs(approval["operator_approved"], False)
         self.assertIsNone(approval["approval_reference"])
         self.assertIsNone(approval["commit"])
         self.assertIsNone(approval["deployment_id"])
-        for path, digest in approval["source_sha256"].items():
-            self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), digest)
+        # The template may describe the deployed commit, not this newer control
+        # checkout. run_verification checks its pins against approved Git bytes.
+        self.assertEqual(set(approval["source_sha256"]), set(SOURCE_PATHS))
+        for digest in approval["source_sha256"].values():
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
 
     def test_real_git_inspection_reads_exact_pinned_source_not_control_head(self) -> None:
         approval = json.loads(MANIFEST.read_bytes())
@@ -623,14 +667,27 @@ class RecoveryVerificationTests(unittest.TestCase):
             "operator_approved": True, "approval_reference": "synthetic-only",
             "commit": commit, "deployment_id": "dep-synthetic",
         })
-        runtime = {**self.runtime, "commit": commit, "source_sha256": approval["source_sha256"]}
+        from scripts.render_runtime_build_sources import RECIPE_PATHS, derive_runtime_source_sha256
+        def source(path):
+            return _command(["git", "show", commit + ":" + path], "test_source_missing")
+        approval["source_sha256"] = {
+            path: hashlib.sha256(source(path)).hexdigest() for path in SOURCE_PATHS
+        }
+        built = derive_runtime_source_sha256(
+            {path: source(path) for path in SOURCE_PATHS},
+            {path: source(path) for path in RECIPE_PATHS},
+        )
+        runtime = {**self.runtime, "commit": commit, "source_sha256": built}
         with patch.dict(os.environ, {"GITHUB_REF": REF, "GITHUB_SHA": "c" * 40}, clear=True), patch(
             "scripts.nija_render_recovery_verification.load_reviewed_approval",
             return_value=approval,
         ), patch(
             "scripts.nija_render_recovery_verification.inspect_render_api",
             return_value={**self.evidence, "commit": commit},
-        ), patch("scripts.nija_render_recovery_verification._runtime", return_value=runtime):
+        ), patch("scripts.nija_render_recovery_verification._runtime", return_value=runtime), patch(
+            "scripts.nija_render_recovery_verification.derive_runtime_source_sha256",
+            wraps=derive_runtime_source_sha256,
+        ):
             report = run_verification()
         self.assertEqual(report["inspected_source_commit"], commit)
         self.assertNotEqual(report["inspected_source_commit"], report["workflow_source_commit"])

@@ -119,7 +119,7 @@ class NIJAControlCenter:
         
     def clear_screen(self):
         """Clear terminal screen"""
-        os.system('clear' if os.name == 'posix' else 'cls')
+        print("\033[2J\033[H", end="", flush=True)
         
     def print_header(self):
         """Print dashboard header"""

@@ -128,7 +128,7 @@ def _fmt(value: float) -> str:
 
 
 def _client_id(account: str, symbol: str, leg: str) -> str:
-    digest = hashlib.sha1(f"{account}|{symbol}".encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha1(f"{account}|{symbol}".encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
     prefix = _PREFIX_SL if leg == "stop-loss" else _PREFIX_TP
     return f"{prefix}{digest}"[:18]
 
