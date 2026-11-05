@@ -24,6 +24,49 @@ npm start
 
 Open http://localhost:8787. Without a Stripe key, gameplay is usable and the checkout endpoint returns a controlled `503`. **Do not** display a purchase button in public marketing or claim that checkout is live until real end-to-end test transactions succeed.
 
+## Payment release correction (Nov 2026)
+
+The browser game at `https://nijaaitrading.com/trading-iq-challenge` is an
+IONOS-managed six-challenge experience. This isolated GitHub application is **not
+its source** and a GitHub PR does not update that IONOS page. Do not advertise
+payment as available on the main site until the IONOS game is intentionally
+integrated and customer delivery verified.
+
+The $1 report checkout in this directory is **OFF by default**. The readiness
+endpoint only reports checkout enabled when the exact deployment has the
+reviewed `NIJA_REPORT_CHECKOUT_ENABLED=true` setting, a valid server-only
+Stripe secret, and an appropriate price identity. Production Vercel must use
+a live Stripe secret; staging must use a test Stripe secret.
+
+In Stripe test mode, create a separate one-time USD $1 test product and price,
+then set the following secrets/IDs **only in the test deployment**:
+`STRIPE_SECRET_KEY=sk_test_...`,
+`NIJA_GAME_TEST_PRICE_ID=price_...`,
+`NIJA_GAME_TEST_PRODUCT_ID=prod_...`, and
+`NIJA_REPORT_CHECKOUT_ENABLED=true`.
+Do not use the real $1 live price ID with test credentials. The live offer is
+pinned in code to product `prod_VZI9N8jDpFrQMt` and price
+`price_1UY9YmI0gfJjTf3E1h6mYC2S`. No API key belongs in Git.
+
+After six free decisions, the app creates Stripe Checkout through the server.
+Its random receipt proof is returned only in an HttpOnly SameSite=Lax cookie
+on the original browser; Stripe metadata gets only a hash. A copied session
+URL without the matching proof is denied. On each report retrieval the server
+checks payment status, the exact price and line item, successful charge, and
+refund/dispute status. Note: clearing cookies loses this first-version guest
+proof. Customer identity and durable recovery are still release requirements
+for broad paid launch. The receipt proof does not authorize NIJA trading
+operations.
+
+**Release hold:** Run CI/security checks on the exact PR commit; run a real
+Stripe **test-mode** purchase, completion, return, reload, cross-browser denial,
+refund/dispute, and error-path QA; test iPhone Safari and Android Chrome; audit
+customer privacy/age handling and receipt recovery; review operational logs,
+secure rate limiting and production billing health. Obtain explicit approval
+for the exact production release before enabling checkout. Avoid live card
+charges for QA. The public website and the billing service are not changed
+by this PR.
+
 ## Live web payment setup
 
 Deploy the **subdirectory** `web/trading-challenge` as its own Vercel project (Root Directory setting); leave the existing NIJA trading app and IONOS project alone. The `public/` directory is static, and `api/*.mjs` expose Vercel serverless endpoints. Alternatively host `npm start` on a separate Node web service.
