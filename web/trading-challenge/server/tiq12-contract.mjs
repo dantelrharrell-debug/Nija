@@ -31,7 +31,7 @@ export function validateTiq12Manifest(source) {
   if (!source || source.version !== TIQ12_VERSION || !Array.isArray(source.rounds) ||
       source.rounds.length !== TIQ12_ROUNDS) fail("Canonical 12-round manifest required");
   const seen = new Set();
-  const rounds = source.rounds.map((entry) => {
+  const rounds = Array.from(source.rounds, (entry) => {
     const roundId = id(entry?.id);
     if (seen.has(roundId)) fail("Duplicate round ID");
     seen.add(roundId);
@@ -40,7 +40,7 @@ export function validateTiq12Manifest(source) {
     if (!Array.isArray(entry.choices) || entry.choices.length < 2 || entry.choices.length > 6) {
       fail("Invalid choice count");
     }
-    const choices = entry.choices.map((choice) => {
+    const choices = Array.from(entry.choices, (choice) => {
       if (!Number.isInteger(choice?.points) || choice.points < 0 || choice.points > 5) {
         fail("Invalid private scoring points");
       }
