@@ -1,13 +1,17 @@
 name: Render recovery verification regressions (offline)
 on:
   pull_request:
-    branches: [release/justcall-handoff-only-20261017]
+    branches: [main, release/justcall-handoff-only-20261017]
     paths:
       - 'scripts/nija_kraken_instance_diagnostic.py'
       - 'scripts/nija_render_recovery_verification.py'
+      - 'scripts/render_runtime_build_sources.py'
+      - 'scripts/apply*'
+      - 'Dockerfile'
       - 'ops/recovery/render_readonly_baseline.json'
       - 'tests/test_kraken_instance_diagnostic.py'
       - 'tests/test_render_recovery_verification.py'
+      - 'tests/test_render_runtime_build_sources.py'
       - '.github/workflows/render*'
       - '.github/workflows/kraken-recovery-gate-diagnostics.yml'
 permissions:
@@ -29,6 +33,7 @@ jobs:
         run: |
           python -B -S -m unittest discover -s tests -p test_kraken_instance_diagnostic.py -v
           python -B -S -m unittest discover -s tests -p test_render_recovery_verification.py -v
+          python -B -S -m unittest discover -s tests -p test_render_runtime_build_sources.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_collector_composition_v487.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_sqlite_readonly_preflight_v488.py -v
       - name: Install existing offline regression dependencies

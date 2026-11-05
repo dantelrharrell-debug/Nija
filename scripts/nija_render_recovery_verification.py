@@ -22,9 +22,13 @@ from scripts.nija_kraken_instance_diagnostic import (
     RELEASE_BRANCH, SERVICE, SOURCE_PATHS, inspect_render_api, report_succeeded,
     render_instance_label, render_instances_match,
 )
+from scripts.render_runtime_build_sources import (
+    BuildRecipeDenied, RECIPE_PATHS, derive_runtime_source_sha256,
+)
 
 MANIFEST = Path("ops/recovery/render_readonly_baseline.json")
-APPROVAL_SECRET_ENV = "NIJA_RENDER_READONLY_APPROVAL_JSON"
+# Environment variable name only; never the approval's contents.
+APPROVAL_SECRET_ENV = "NIJA_RENDER_READONLY_APPROVAL_JSON"  # pragma: allowlist secret
 _MAX_APPROVAL_BYTES = 16384
 HOST = "ssh.oregon.render.com"
 HOST_FINGERPRINT = "SHA256:KkZPgnApmttFYSkdJsCi7B01sgZPMI6kY53MDbbanGM"
@@ -161,6 +165,7 @@ def verify_baseline(approval: dict, evidence: dict, *, workflow_ref: str) -> Non
 
 def verify_runtime(
     approval: dict, report: dict, *, render_instance_app_logs_verified: bool = False,
+    expected_source_sha256: dict | None = None,
 ) -> None:
     """Require exact runtime evidence; only one known missing local-log gap is recoverable."""
     log_only_gap = (
@@ -179,7 +184,8 @@ def verify_runtime(
     stamp = report.get("observed_at_epoch")
     if type(stamp) not in (int, float) or not 0 <= time.time() - stamp <= 60:
         raise VerificationDenied("runtime_evidence_stale")
-    if report.get("source_sha256") != approval["source_sha256"]:
+    expected = approval["source_sha256"] if expected_source_sha256 is None else expected_source_sha256
+    if report.get("source_sha256") != expected:
         raise VerificationDenied("runtime_source_digest_mismatch")
     _runtime_process_identity(report)
 
@@ -320,15 +326,18 @@ def _canonical_heartbeat(message: str) -> bool | None:
 
 def _verify_render_instance_app_logs(
     approval: dict, report: dict, *, verified_full_instances: set[str] | None = None,
+    expected_source_sha256: dict | None = None,
 ) -> bool:
     """Correlate authenticated Render app heartbeat to SSH instance/process times.
 
     Only supplements the missing local-file classification, never broker proof.
     """
+    expected = approval["source_sha256"] if expected_source_sha256 is None else expected_source_sha256
+    if report.get("source_sha256") != expected:
+        raise VerificationDenied("runtime_source_digest_mismatch")
     if (report.get("status") != "DIAGNOSTIC_ONLY"
             or report.get("service_id") != SERVICE
             or report.get("commit") != approval["commit"]
-            or report.get("source_sha256") != approval["source_sha256"]
             or report.get("failures") != ["current_process_log_evidence_unavailable"]
             or report.get("log_signals") != {}
             or report.get("state_changed") is not False
@@ -506,10 +515,21 @@ def run_verification() -> dict:
         commit = approval["commit"]
         _command(["git", "merge-base", "--is-ancestor", commit, "HEAD"], "deployment_not_on_release_lineage")
         result["inspected_source_commit"] = commit
+        sources = {}
         for path, digest in approval["source_sha256"].items():
             source = _command(["git", "show", commit + ":" + path], "inspected_source_missing")
             if hashlib.sha256(source).hexdigest() != digest:
                 raise VerificationDenied("reviewed_source_digest_mismatch")
+            sources[path] = source
+        recipe = {
+            path: _command(["git", "show", commit + ":" + path], "inspected_build_recipe_missing")
+            for path in RECIPE_PATHS
+        }
+        try:
+            runtime_pins = derive_runtime_source_sha256(sources, recipe)
+        except BuildRecipeDenied as exc:
+            raise VerificationDenied(str(exc)) from None
+        result["runtime_build_recipe_verified"] = True
         result["DEPLOYMENT_BASELINE_VERIFIED"] = True
         report = _runtime(approval)
         # A valid, authenticated remote diagnostic may be blocked by its own
@@ -532,20 +552,24 @@ def run_verification() -> dict:
         if report.get("failures") == ["current_process_log_evidence_unavailable"]:
             render_app_log_proof = _verify_render_instance_app_logs(
                 approval, report, verified_full_instances=render_app_log_full_instances,
+                expected_source_sha256=runtime_pins,
             )
             result["render_instance_app_log_evidence_verified"] = render_app_log_proof
         verify_runtime(
             approval, report, render_instance_app_logs_verified=render_app_log_proof,
+            expected_source_sha256=runtime_pins,
         )
         after = _runtime(approval)
         verify_runtime(
             approval, after, render_instance_app_logs_verified=render_app_log_proof,
+            expected_source_sha256=runtime_pins,
         )
         verify_process_continuity(
             report, after, verified_full_instances=render_app_log_full_instances,
         )
         verify_runtime(
             approval, report, render_instance_app_logs_verified=render_app_log_proof,
+            expected_source_sha256=runtime_pins,
         )
         result["runtime_process_continuity_verified"] = True
         # A deployment may change during SSH; recheck independent live metadata.
@@ -553,6 +577,10 @@ def run_verification() -> dict:
         result["RUNTIME_ACCESS_VERIFIED"] = True
         result["SOURCE_INTEGRITY_VERIFIED"] = True
         result["source_sha256"] = approval["source_sha256"]
+        result["runtime_source_sha256"] = runtime_pins
+        result["build_recipe_sha256"] = {
+            path: hashlib.sha256(source).hexdigest() for path, source in recipe.items()
+        }
         output = os.environ.get("GITHUB_OUTPUT")
         if output:
             with open(output, "a", encoding="utf-8") as stream:
