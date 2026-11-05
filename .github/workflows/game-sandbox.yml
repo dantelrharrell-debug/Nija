@@ -10,6 +10,7 @@ on:
       - 'tests/test_game_sandbox_staging.py'
       - 'tests/fixtures/stripe_iq72_sandbox.py'
       - 'tests/test_game_sandbox_client.mjs'
+      - 'game_sandbox/preview_export_parity.test.mjs'
       - '.github/workflows/game-sandbox.yml'
   workflow_dispatch:
 permissions:
@@ -31,6 +32,7 @@ jobs:
       - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox.py
       - run: python -m pytest tests/test_game_sandbox.py -q
       - run: node --test game_sandbox/ionos_parity.test.mjs
+      - run: node --test game_sandbox/preview_export_parity.test.mjs
       - run: python -m bandit -q -r game_sandbox
       - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/fixtures/ionos_served_ui_reference.mjs
       - uses: actions/setup-node@v4
