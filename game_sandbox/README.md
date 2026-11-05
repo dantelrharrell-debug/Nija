@@ -1,5 +1,10 @@
 # Isolated Trading IQ payment sandbox
 
+Preview client and return-page integration are now available on a review branch;
+see [CLIENT_INTEGRATION.md](CLIENT_INTEGRATION.md) for exact installation, tests
+and current hosting blockers. This is not proof of installation in IONOS or
+operational hosted payments.
+
 Sandbox implementation with the recovered existing 72-decision report; **not deployed or connected to the IONOS preview**. No production entrypoint imports this package. Live keys and live events are rejected regardless of feature flags. Existing free game, Academy, $99 course and trading service are unchanged.
 
 ## Architecture and current evidence

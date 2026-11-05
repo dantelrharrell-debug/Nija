@@ -58,7 +58,7 @@ class StripeGateway:
 
 def create_app(service: Sandbox) -> Any:
     """Create a same-origin API. No CORS grants or production route registration."""
-    from flask import Flask, jsonify, request
+    from flask import Flask, jsonify, request, send_file
 
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 65536
@@ -98,6 +98,12 @@ def create_app(service: Sandbox) -> Any:
                 "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
             }
         )
+        if request.endpoint == "report_return":
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
+                "connect-src 'self'; frame-src 'self'; base-uri 'none'; "
+                "form-action 'none'; frame-ancestors 'none'"
+            )
         return response
 
     @app.errorhandler(Denied)
@@ -125,6 +131,23 @@ def create_app(service: Sandbox) -> Any:
         if not value:
             raise Denied("csrf_required")
         return value
+
+    # Explicit allowlist only: never expose the module directory or database.
+    ui_files = {name: Path(__file__).parent / name for name in (
+        "client.mjs", "preview-controller.mjs", "preview-panel.mjs", "recovery.mjs"
+    )}
+
+    @app.get("/sandbox-ui/<name>")
+    def sandbox_ui(name: str) -> Any:
+        """Serve reviewed browser modules without allowing arbitrary file reads."""
+        if name not in ui_files:
+            return jsonify(error="not_found"), 404
+        return send_file(ui_files[name], mimetype="text/javascript")
+
+    @app.get("/report")
+    def report_return() -> Any:
+        """Return page is public; its data access remains owner/entitlement gated."""
+        return send_file(Path(__file__).parent / "report.html", mimetype="text/html")
 
     @app.get("/sandbox/health")
     def health() -> Any:
