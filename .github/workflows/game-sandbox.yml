@@ -1,0 +1,26 @@
+name: Isolated Trading IQ sandbox
+on:
+  pull_request:
+    paths:
+      - 'game_sandbox/**'
+      - 'tests/test_game_sandbox.py'
+      - '.github/workflows/game-sandbox.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r game_sandbox/requirements.txt pytest bandit detect-secrets pip-audit
+      - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox.py
+      - run: python -m pytest tests/test_game_sandbox.py -q
+      - run: python -m bandit -q -r game_sandbox
+      - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py
+      - run: pip-audit -r game_sandbox/requirements.txt
