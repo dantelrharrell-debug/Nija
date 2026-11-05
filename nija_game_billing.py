@@ -254,3 +254,7 @@ def register_game_routes(app: Any) -> None:
             LOG.exception("NIJA game report verification unavailable")
             return jsonify({"error": "verification_unavailable"}), 503
         return jsonify({"paid": True, "attempt": attempt})
+
+    # Independent Render-hosted checkout; retains existing gateway routes unchanged.
+    from nija_game_hosted_routes import register_hosted_routes
+    register_hosted_routes(app)
