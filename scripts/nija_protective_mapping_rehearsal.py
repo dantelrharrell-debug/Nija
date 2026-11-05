@@ -170,6 +170,9 @@ def prepare_candidate(backup: Path, candidate: Path, expected_backup_sha256: str
             os.fsync(stream.fileno())
         digest = _file_digest(temporary)
         # Hard-link publication fails if any existing file occupies candidate.
+        if any(os.path.lexists(str(candidate) + suffix)
+               for suffix in ("-wal", "-shm", "-journal")):
+            raise RehearsalDenied("new_candidate_without_sidecars_required")
         os.link(temporary, candidate, follow_symlinks=False)
         directory = os.open(candidate.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
