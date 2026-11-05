@@ -286,10 +286,12 @@ class CommissioningDispatchAdapter:
         candidate = self.candidate_for_request(request)
         if type(candidate) is not Candidate:
             raise AdmissionDenied("commissioning_candidate_invalid")
-        self.gate.consume_first_trade(candidate, self.plan)
+        # Serialize the durable one-shot consumption with transport arming.
+        # An already armed attempt must never consume a second approval.
         with self._lock:
             if self._armed:
                 raise AdmissionDenied("commissioning_transport_attempt_already_armed")
+            self.gate.consume_first_trade(candidate, self.plan)
             self._armed = True
 
 
