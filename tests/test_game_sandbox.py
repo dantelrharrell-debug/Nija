@@ -602,3 +602,31 @@ def test_original_report_receives_no_secrets_and_never_uses_a_shell(monkeypatch)
     assert set(fake.call_args.kwargs["env"]) == {"PATH"}
     assert fake.call_args.args[0][0].startswith("/")
     assert json.loads(fake.call_args.kwargs["input"]) == payload
+
+
+def test_paid_report_reopens_after_original_run_deadline_without_recharging(setup):
+    service, stripe, run, owner, csrf, answers, _ = setup
+    sid = fulfill(setup)
+    with service.db() as db:
+        db.execute("UPDATE runs SET expires=? WHERE id=?", (int(time.time()) - 1, run))
+    assert service.report(run, owner)["decisions"] == answers
+    assert service.report(run, owner)["decisions"] == answers
+    assert stripe.calls == 1
+    with pytest.raises(Denied, match="ownership_required"):
+        service.report(run, "b" * 64)
+    # A true refund event revokes a previously owned, paid report permanently.
+    intent = stripe.sessions[sid]["payment_intent"]["id"]
+    service.webhook(*signed(service.config, "charge.refunded", {"payment_intent": intent}))
+    with pytest.raises(Denied):
+        service.report(run, owner)
+
+
+def test_unpaid_run_expiration_stays_fail_closed(setup):
+    service, stripe, run, owner, csrf, *_ = setup
+    with service.db() as db:
+        db.execute("UPDATE runs SET expires=? WHERE id=?", (int(time.time()) - 1, run))
+    with pytest.raises(Denied, match="ownership_required"):
+        service.report(run, owner)
+    with pytest.raises(Denied, match="ownership_required"):
+        service.checkout(run, owner, csrf)
+    assert stripe.calls == 0

@@ -29,6 +29,7 @@ The public website provides `assets/TradingIQChallenge-xoOHPSFe.js`, which inclu
 - Official SDK raw-body signature verification; atomic event deduplication and entitlement transitions. Both completed and async-success events supported; unpaid sessions cannot fulfill. Provider failures roll back event processing.
 - Sticky revocation for refunds and disputes, including reversal-before-completion delivery. Conservative policy requires operator review to reinstate after a failed refund or won dispute.
 - Reopening requires cookie ownership, durable webhook grant and fresh Stripe checks. A shared return URL alone grants nothing. Receipt loss/expiry requires a future authenticated recovery flow; email alone is never sufficient. No automated second charge.
+- Paid reports remain eligible for reopening after the original run's expiration, until buyer-authorized deletion or entitlement revocation; unpaid or revoked runs remain blocked. A fresh Stripe check must still succeed. Document retention and deletion requirements before the live release.
 - The served-build integration calls the original report implementation with stored 72-decision selections. The generic pinned-adapter path remains available for a later preview export. No replacement game, fabricated scores or new paid report UI is introduced.
 - Private database permissions, transaction constraints, consistent backup and restore tests; persistent rate limits and bounded HTTP payloads. Use verified ingress IP limiting on hosted staging as well.
 
