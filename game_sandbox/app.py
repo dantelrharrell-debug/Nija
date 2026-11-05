@@ -184,13 +184,20 @@ def from_environment() -> Any:
         enabled=os.environ.get("NIJA_IQ_SANDBOX_ENABLED") == "true",
     )
     config.validate()
-    manifest = Manifest(json.loads(Path(os.environ["NIJA_IQ_SANDBOX_MANIFEST"]).read_text()))
+    if os.environ.get("NIJA_IQ_SANDBOX_GAME") == "published72":
+        from .ionos import PublishedGame, build_published_report
+
+        manifest = PublishedGame()
+        report_builder = build_published_report
+    else:
+        manifest = Manifest(json.loads(Path(os.environ["NIJA_IQ_SANDBOX_MANIFEST"]).read_text()))
+        adapter = Path(os.environ["NIJA_IQ_SANDBOX_REPORT_ADAPTER"])
+        if digest(adapter.read_text()) != os.environ.get("NIJA_IQ_SANDBOX_REPORT_ADAPTER_SHA256"):
+            raise Denied("reviewed_original_report_adapter_required")
+        spec = importlib.util.spec_from_file_location("private_iq_report", adapter)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        report_builder = module.build_report
     if manifest.digest != os.environ.get("NIJA_IQ_SANDBOX_MANIFEST_SHA256"):
         raise Denied("reviewed_manifest_pin_required")
-    adapter = Path(os.environ["NIJA_IQ_SANDBOX_REPORT_ADAPTER"])
-    if digest(adapter.read_text()) != os.environ.get("NIJA_IQ_SANDBOX_REPORT_ADAPTER_SHA256"):
-        raise Denied("reviewed_original_report_adapter_required")
-    spec = importlib.util.spec_from_file_location("private_iq_report", adapter)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return create_app(Sandbox(config, manifest, StripeGateway(config.key), module.build_report))
+    return create_app(Sandbox(config, manifest, StripeGateway(config.key), report_builder))
