@@ -1,0 +1,12 @@
+{
+  "environment": "sandbox",
+  "stripe_account": "acct_1Tzy1CRS5Ezp77RQ",
+  "livemode": false,
+  "product_id": "prod_nija_iq72_sandbox_v1",
+  "price_id": "price_1UYToJRS5Ezp77RQVkx96eS5",
+  "unit_amount": 100,
+  "currency": "usd",
+  "type": "one_time",
+  "decision_count": 72,
+  "production_checkout_enabled": false
+}
