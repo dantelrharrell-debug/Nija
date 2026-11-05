@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -187,6 +188,15 @@ def from_environment() -> Any:
     manifest = Manifest(json.loads(Path(os.environ["NIJA_IQ_SANDBOX_MANIFEST"]).read_text()))
     if manifest.digest != os.environ.get("NIJA_IQ_SANDBOX_MANIFEST_SHA256"):
         raise Denied("reviewed_manifest_pin_required")
+    # A manifest's source_sha256 is not evidence on its own: pin the actual
+    # owner-exported IONOS source bytes before accepting a payment run.
+    source_export = Path(os.environ["NIJA_IQ_SANDBOX_SOURCE_EXPORT"])
+    if (
+        source_export.is_symlink()
+        or not source_export.is_file()
+        or hashlib.sha256(source_export.read_bytes()).hexdigest() != manifest.source_sha256
+    ):
+        raise Denied("reviewed_ionos_source_export_required")
     adapter = Path(os.environ["NIJA_IQ_SANDBOX_REPORT_ADAPTER"])
     if digest(adapter.read_text()) != os.environ.get("NIJA_IQ_SANDBOX_REPORT_ADAPTER_SHA256"):
         raise Denied("reviewed_original_report_adapter_required")
