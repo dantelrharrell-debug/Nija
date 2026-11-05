@@ -630,3 +630,50 @@ def test_unpaid_run_expiration_stays_fail_closed(setup):
     with pytest.raises(Denied, match="ownership_required"):
         service.checkout(run, owner, csrf)
     assert stripe.calls == 0
+
+
+def test_enabled_staging_health_probes_do_not_consume_api_quota(setup, monkeypatch):
+    """Render probes remain healthy beyond the persistent SQLite limit."""
+    from game_sandbox import app as sandbox_app
+    from game_sandbox.staging_entrypoint import create_staging_app
+
+    service = setup[0]
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(sandbox_app, "from_environment", lambda: create_app(service))
+    client = create_staging_app().test_client()
+
+    for _ in range(350):
+        response = client.get("/healthz")
+        assert response.status_code == 200
+        assert response.json["live_payments"] is False
+
+    with service.db() as db:
+        assert db.execute("SELECT COUNT(*) FROM limits").fetchone()[0] == 0
+
+    for _ in range(300):
+        assert client.get("/sandbox/health").status_code == 200
+    assert client.get("/sandbox/health").status_code == 429
+    assert client.get("/healthz").status_code == 200
+
+    # Restarting the Flask app does not reset the persistent API limiter.
+    restarted = create_staging_app().test_client()
+    assert restarted.get("/sandbox/health").status_code == 429
+    assert restarted.get("/healthz").status_code == 200
+
+
+def test_health_exemption_is_exact_and_does_not_bypass_other_routes(setup, monkeypatch):
+    from game_sandbox import app as sandbox_app
+    from game_sandbox.staging_entrypoint import create_staging_app
+
+    service = setup[0]
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(sandbox_app, "from_environment", lambda: create_app(service))
+    client = create_staging_app().test_client()
+    assert client.get("/healthz/").status_code == 404
+    assert client.post("/healthz").status_code == 403
+    for _ in range(299):
+        assert client.get("/sandbox/health").status_code == 200
+    assert client.get("/sandbox/health").status_code == 429
+    assert client.get("/sandbox/runs/nonexistent/report").status_code == 429
+    assert client.post("/sandbox/runs/nonexistent/checkout").status_code == 429
+    assert client.get("/healthz").status_code == 200
