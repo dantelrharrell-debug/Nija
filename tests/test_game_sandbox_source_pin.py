@@ -30,7 +30,7 @@ def configure(tmp_path, monkeypatch):
         "NIJA_IQ_SANDBOX_DATABASE": str(tmp_path / "trading_iq_sandbox.sqlite3"),
         "NIJA_IQ_SANDBOX_ORIGIN": "https://sandbox.nija.invalid",
         "NIJA_IQ_SANDBOX_STRIPE_KEY": "rk_test_fixture_not_a_real_key",
-        "NIJA_IQ_SANDBOX_WEBHOOK_SECRET": "whsec_fixture_not_a_real_secret",
+        "NIJA_IQ_SANDBOX_WEBHOOK_SECRET": "whsec_fixture_not_a_real_secret",  # pragma: allowlist secret -- synthetic test only
         "NIJA_IQ_SANDBOX_PRICE_ID": "price_fixture",
         "NIJA_IQ_SANDBOX_PRODUCT_ID": "prod_fixture",
         "NIJA_IQ_SANDBOX_SOURCE_EXPORT": str(source),
