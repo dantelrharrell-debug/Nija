@@ -118,7 +118,12 @@ export function matchesVerifiedTiq12Payment({ session, lineItems, proof, storedR
   expectedPriceId, expectedProductId, livemode }) {
   try {
     requireAdultCompletedRun(storedRun, manifest);
-    if (typeof proof !== "string" || !hexPattern.test(proof) ||
+    if (typeof expectedPriceId !== "string" || !/^price_[A-Za-z0-9_]+$/.test(expectedPriceId) ||
+        typeof expectedProductId !== "string" || !/^prod_[A-Za-z0-9_]+$/.test(expectedProductId) ||
+        typeof livemode !== "boolean" ||
+        typeof session?.id !== "string" ||
+        !new RegExp("^cs_" + (livemode ? "live" : "test") + "_[A-Za-z0-9_]{8,250}$").test(session.id) ||
+        typeof proof !== "string" || !hexPattern.test(proof) ||
         !equalDigest(ownerProofHash(proof), storedRun.ownerProofHash) ||
         session?.metadata?.run_id !== storedRun.id ||
         session?.metadata?.game_version !== TIQ12_VERSION ||
@@ -126,8 +131,7 @@ export function matchesVerifiedTiq12Payment({ session, lineItems, proof, storedR
         !equalDigest(session?.metadata?.owner_proof_hash, ownerProofHash(proof)) ||
         session?.livemode !== livemode || session?.mode !== "payment" ||
         session?.status !== "complete" || session?.payment_status !== "paid" ||
-        session?.amount_total !== 100 || session?.currency !== "usd" ||
-        !/^cs_(test|live)_[A-Za-z0-9_]{8,250}$/.test(session?.id || "")) return false;
+        session?.amount_total !== 100 || session?.currency !== "usd") return false;
     const intent = session.payment_intent, charge = intent?.latest_charge;
     if (!intent || intent.status !== "succeeded" || intent.amount_received !== 100 ||
         intent.currency !== "usd" || charge?.paid !== true || charge?.refunded !== false ||
