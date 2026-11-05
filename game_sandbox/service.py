@@ -198,10 +198,21 @@ class Sandbox:
         if (
             not row
             or not hmac.compare_digest(row["owner_hash"], digest(owner))
-            or row["expires"] < int(time.time())
             or row["manifest"] != self.manifest.digest
         ):
             raise Denied("ownership_required")
+        if row["expires"] < int(time.time()):
+            # A completed, paid report must remain accessible after the
+            # original game-run deadline, subject to buyer ownership and
+            # a fresh Stripe/refund/dispute check in report(). This does not
+            # extend the lifetime of unpaid or revoked runs.
+            entitled = db.execute(
+                "SELECT 1 FROM checkouts WHERE run_id=? "
+                "AND entitled=1 AND payment_intent IS NOT NULL",
+                (run_id,),
+            ).fetchone()
+            if not entitled:
+                raise Denied("ownership_required")
         if csrf is not None and (not TOKEN.fullmatch(csrf) or not hmac.compare_digest(row["csrf_hash"], digest(csrf))):
             raise Denied("csrf_required")
         return row
