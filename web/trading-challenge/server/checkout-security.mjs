@@ -35,19 +35,19 @@ export function readProof(raw, secure) {
   const value = matches[0].slice(cookieName(secure).length + 1);
   return PROOF.test(value) ? value : null;
 }
-export function verifyPrice(price, isLive) {
-  return Boolean(price && price.id === PRICE_ID && price.active === true &&
+export function verifyPrice(price, isLive, expectedPrice = PRICE_ID, expectedProduct = PRODUCT_ID) {
+  return Boolean(price && price.id === expectedPrice && price.active === true &&
     price.livemode === isLive && price.type === 'one_time' &&
-    price.currency === 'usd' && price.unit_amount === 100 && id(price.product) === PRODUCT_ID);
+    price.currency === 'usd' && price.unit_amount === 100 && id(price.product) === expectedProduct);
 }
-export function verifyPurchase(session, lines, proof, isLive, expectedId) {
+export function verifyPurchase(session, lines, proof, isLive, expectedId, expectedPrice = PRICE_ID, expectedProduct = PRODUCT_ID) {
   if (!SESSION_ID.test(expectedId || '') || !matchesProof(session?.metadata?.proof_sha256, proof)) return false;
   if (session.id !== expectedId || session.livemode !== isLive ||
       session.mode !== 'payment' || session.status !== 'complete' ||
       session.payment_status !== 'paid' || session.amount_total !== 100 ||
       session.currency !== 'usd' || session.metadata?.version !== 'nija-trading-iq-v1' ||
-      session.metadata?.offer !== OFFER || session.metadata?.product !== PRODUCT_ID ||
-      session.metadata?.price !== PRICE_ID) return false;
+      session.metadata?.offer !== OFFER || session.metadata?.product !== expectedProduct ||
+      session.metadata?.price !== expectedPrice) return false;
   const intent = session.payment_intent;
   const charge = intent && intent.latest_charge;
   if (!intent || intent.status !== 'succeeded' || intent.currency !== 'usd' ||
@@ -57,7 +57,7 @@ export function verifyPurchase(session, lines, proof, isLive, expectedId) {
   const lineItems = lines?.data;
   if (!Array.isArray(lineItems) || lineItems.length !== 1) return false;
   const line = lineItems[0];
-  return line.quantity === 1 && id(line.price) === PRICE_ID &&
-    id(line.price?.product) === PRODUCT_ID && line.amount_total === 100 &&
+  return line.quantity === 1 && id(line.price) === expectedPrice &&
+    id(line.price?.product) === expectedProduct && line.amount_total === 100 &&
     line.currency === 'usd';
 }
