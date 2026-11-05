@@ -14,10 +14,16 @@ const BASE_URL = (process.env.PUBLIC_BASE_URL || (process.env.VERCEL_URL ? "http
 const BASE_ORIGIN = new URL(BASE_URL).origin;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
 const STRIPE_LIVE = liveKey(STRIPE_SECRET_KEY);
+// Real Stripe test-mode resources live in a separate namespace. Never use
+// the live price ID with a test-mode key or vice versa.
+const STRIPE_PRICE_ID = STRIPE_LIVE ? PRICE_ID : (process.env.NIJA_GAME_TEST_PRICE_ID || "");
+const STRIPE_PRODUCT_ID = STRIPE_LIVE ? PRODUCT_ID : (process.env.NIJA_GAME_TEST_PRODUCT_ID || "");
+const TEST_IDENTITIES_VALID = /^price_[A-Za-z0-9_]+$/.test(STRIPE_PRICE_ID) &&
+  /^prod_[A-Za-z0-9_]+$/.test(STRIPE_PRODUCT_ID);
 const SECURE_COOKIE = BASE_ORIGIN.startsWith("https://");
 // Production checkout remains disabled until a reviewed release explicitly enables it.
 const CHECKOUT_READY = checkoutEnabled(STRIPE_SECRET_KEY, process.env.NIJA_REPORT_CHECKOUT_ENABLED) &&
-  (process.env.VERCEL_ENV !== "production" || STRIPE_LIVE);
+  TEST_IDENTITIES_VALID && (process.env.VERCEL_ENV !== "production" || STRIPE_LIVE);
 const approvedFiles = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/index.html": ["index.html", "text/html; charset=utf-8"],
@@ -111,12 +117,12 @@ async function checkout(req, res) {
   try {
     // Verify the immutable configured one-dollar Stripe price and product before
     // asking Stripe to accept any customer payment.
-    const price = await stripeRequest("prices/" + encodeURIComponent(PRICE_ID));
-    if (!verifyPrice(price, STRIPE_LIVE)) throw new Error("Stripe offer identity mismatch");
+    const price = await stripeRequest("prices/" + encodeURIComponent(STRIPE_PRICE_ID));
+    if (!verifyPrice(price, STRIPE_LIVE, STRIPE_PRICE_ID, STRIPE_PRODUCT_ID)) throw new Error("Stripe offer identity mismatch");
     const proof = issueProof();
     const form = new URLSearchParams();
     form.set("mode", "payment");
-    form.set("line_items[0][price]", PRICE_ID);
+    form.set("line_items[0][price]", STRIPE_PRICE_ID);
     form.set("line_items[0][quantity]", "1");
     form.set("client_reference_id", "nija_game_" + randomUUID());
     form.set("success_url", BASE_URL + "/?session_id={CHECKOUT_SESSION_ID}");
@@ -124,8 +130,8 @@ async function checkout(req, res) {
     form.set("metadata[version]", VERSION);
     form.set("metadata[answers]", data.answers.join(","));
     form.set("metadata[offer]", OFFER);
-    form.set("metadata[product]", PRODUCT_ID);
-    form.set("metadata[price]", PRICE_ID);
+    form.set("metadata[product]", STRIPE_PRODUCT_ID);
+    form.set("metadata[price]", STRIPE_PRICE_ID);
     form.set("metadata[proof_sha256]", hashProof(proof));
     const session = await stripeRequest("checkout/sessions", { body: form });
     const target = new URL(session.url || "https://invalid.example");
@@ -151,7 +157,7 @@ async function results(url, req, res) {
     const session = await stripeRequest("checkout/sessions/" + encodeURIComponent(id) +
       "?expand%5B%5D=payment_intent.latest_charge");
     const lines = await stripeRequest("checkout/sessions/" + encodeURIComponent(id) + "/line_items?limit=5");
-    if (!verifyPurchase(session, lines, proof, STRIPE_LIVE, id)) {
+    if (!verifyPurchase(session, lines, proof, STRIPE_LIVE, id, STRIPE_PRICE_ID, STRIPE_PRODUCT_ID)) {
       return json(res, 403, { error: "A verified, unreversed $1 purchase from this browser is required." });
     }
     const raw = session.metadata?.answers;
