@@ -77,3 +77,5 @@ No new IONOS storage request is needed. If direct embedding is later required, a
 Provider references: https://render.com/docs/disks and https://render.com/docs/web-services. A persistent disk needs a paid service; no service or spending was provisioned. Use SQLite-consistent backups rather than raw disk restore for database recovery.
 
 Browser evidence: completed the publicly served Standard/Beginner game through all 72 Hold decisions in a 1363x936 desktop viewport. Completion showed Trading IQ 50 and six challenge scores of 50, matching server replay. The report remained locked with Adults 18+ Only — $1 — Coming Soon and no payment button. Page width was 1359px within the 1363px viewport. This is desktop flow evidence, not phone/tablet or preview-report layout certification.
+
+The existing prebuild copy-policy check required shortening one adult Academy lesson caption to “Advanced Investing”. The linked lesson ID, age group, score formulas and decision feedback are unchanged; the Academy itself is not edited.
