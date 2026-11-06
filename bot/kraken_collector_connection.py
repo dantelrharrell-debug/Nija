@@ -50,8 +50,6 @@ def connect_reviewed_kraken_collector(
         raise KrakenCollectorConnectionDenied(
             "independent_production_certification_required"
         )
-    if any(not isinstance(pin, str) or len(pin) != 64 or any(c not in "0123456789abcdef" for c in pin) for pin in (approved_api_key_sha256, approved_iban_sha256)):
-        raise KrakenCollectorConnectionDenied("approved_identity_pins_required")
     # Reject malformed identity approvals before invoking any provider factory.
     # These values must be supplied by an independently reviewed owner.
     for pin in (approved_api_key_sha256, approved_iban_sha256):
