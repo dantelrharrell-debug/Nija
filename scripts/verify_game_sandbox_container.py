@@ -37,7 +37,7 @@ def verify(image: str) -> None:
     container = None
     docker("volume", "create", volume)
     try:
-        mounted = ["--volume", volume + ":/var/data"]
+        mounted = ["--mount", "type=volume,src=" + volume + ",dst=/var/data,volume-nocopy"]
         # Model an unprovisioned mount explicitly; Docker's initial volume
         # copy-up can otherwise inherit the image directory's correct owner.
         docker("run", "--rm", "--network", "none", "--user", "0", *mounted,
@@ -48,7 +48,10 @@ def verify(image: str) -> None:
                        "from game_sandbox.staging_bootstrap import validate_runtime; validate_runtime()",
                        check=False)
         if owner.returncode == 0 or "sandbox_private_disk_owner_required" not in owner.stderr:
-            raise RuntimeError("unprovisioned_mount_was_not_denied")
+            categories = ("sandbox_non_root_user_required", "sandbox_persistent_mount_required",
+                          "sandbox_private_disk_owner_required", "PermissionError", "ModuleNotFoundError")
+            category = next((value for value in categories if value in owner.stderr), "unexpected_result")
+            raise RuntimeError(f"unprovisioned_mount_check_failed: exit={owner.returncode}, category={category}")
         # Provision only this newly created, disposable CI volume. This is never
         # a service-startup path and has no provider credentials or customer data.
         docker("run", "--rm", "--network", "none", "--user", "0", *mounted,
@@ -68,7 +71,7 @@ def verify(image: str) -> None:
                "--entrypoint", python, image, "-c", probe +
                "assert c.execute('SELECT value FROM rehearsal').fetchone()==(7,); c.close()")
         readonly = docker("run", "--rm", "--network", "none", *settings,
-                          "--volume", volume + ":/var/data:ro", "--entrypoint", python,
+                          "--mount", "type=volume,src=" + volume + ",dst=/var/data,readonly,volume-nocopy", "--entrypoint", python,
                           image, "-c", "from game_sandbox.staging_bootstrap import validate_runtime; validate_runtime()",
                           check=False)
         if readonly.returncode == 0:
