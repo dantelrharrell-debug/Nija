@@ -82,7 +82,8 @@ jobs:
             tests/test_pretrade_collector_missing_regression_20261105.py \
             tests/test_commissioning_single_flight_20261105.py \
             bot/tests/test_commissioning_gate.py \
-            bot/tests/test_commissioning_runtime.py
+            bot/tests/test_commissioning_runtime.py \
+            tests/test_kraken_reviewed_collector_bridge.py
 
       - name: Verify isolated unittest runner invariants
         env:
