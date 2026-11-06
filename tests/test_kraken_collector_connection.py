@@ -58,6 +58,33 @@ class ConnectionTests(unittest.TestCase):
                 broker_ledger_exits_certified=True,
             )
 
+    def test_invalid_provider_callable_never_installs(self):
+        providers = {field: (lambda field=field: {}) for field in REQUIRED}
+        providers[next(iter(REQUIRED))] = None
+        with patch("bot.kraken_collector_connection.compose_authenticated_kraken_collector_sources", return_value=providers), patch(
+            "bot.kraken_collector_connection.install_reviewed_kraken_collector"
+        ) as install:
+            with self.assertRaisesRegex(KrakenCollectorConnectionDenied, "complete_provider_registry_required"):
+                connect_reviewed_kraken_collector(
+                    **self.kwargs, independently_reviewed=True,
+                    backup_restore_certified=True, broker_ledger_exits_certified=True,
+                )
+            install.assert_not_called()
+
+    def test_reused_provider_callable_never_installs(self):
+        providers = {field: (lambda field=field: {}) for field in REQUIRED}
+        first, second = list(REQUIRED)[:2]
+        providers[second] = providers[first]
+        with patch("bot.kraken_collector_connection.compose_authenticated_kraken_collector_sources", return_value=providers), patch(
+            "bot.kraken_collector_connection.install_reviewed_kraken_collector"
+        ) as install:
+            with self.assertRaisesRegex(KrakenCollectorConnectionDenied, "complete_provider_registry_required"):
+                connect_reviewed_kraken_collector(
+                    **self.kwargs, independently_reviewed=True,
+                    backup_restore_certified=True, broker_ledger_exits_certified=True,
+                )
+            install.assert_not_called()
+
     def test_incomplete_registry_never_installs(self):
         with patch("bot.kraken_collector_connection.compose_authenticated_kraken_collector_sources", return_value={}), patch(
             "bot.kraken_collector_connection.install_reviewed_kraken_collector"
