@@ -148,7 +148,9 @@ class CommissioningRuntimeTests(unittest.TestCase):
             except Exception as error:
                 outcomes[name] = error
 
-        adapter._lock = ObservedLock()
+        # Admission is serialized by _consumer_lock, not the short-lived
+        # transport _lock. Observe the actual contention boundary.
+        adapter._consumer_lock = ObservedLock()
         self.gate.consume_first_trade = consume_permission
         threads = [
             threading.Thread(target=consume, args=(name,), name=name, daemon=True)

@@ -11,7 +11,7 @@ Prepared: 2026-11-05. Status: **PLANNING ONLY — NO SHOPIFY ACCOUNT, STORE, DOM
 ## Shopify draft store brief (copy into the official Shopify plugin)
 **Store name:** NIJA AI Trading | NIJA Store
 **Storefront theme:** premium, restrained, dark navy/black with gold highlights; accessible contrast and readable mobile UX; no unverified performance claims.
-**Business positioning:** NIJA-branded apparel and financial-literacy education. Merchandise and education are not investment advice, guaranteed returns, managed accounts or access to broker trading.
+**Business positioning:** NIJA-branded apparel and financial-literacy education. Merchandise and education are not investment advice, assurances of investment profits, managed accounts or access to broker trading.
 **Audience:** adults exploring NIJA's brand and educational offerings.
 **Domain:** Shopify-generated preview initially, `shop.nijaaitrading.com` only after approval.
 **Navigation:** Home | Shop All | Hoodies | Jerseys & Tops | Academy | About NIJA | FAQ | Contact.
