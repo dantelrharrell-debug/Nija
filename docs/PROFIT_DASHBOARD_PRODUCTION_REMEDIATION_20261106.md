@@ -29,3 +29,19 @@ Status: **BLOCKED / NOT DEPLOYED**. This runbook is an operational handoff, not 
 - Tests pass in CI and staging; deployment and read-back are separately documented.
 
 Do not label any gate complete based on this file alone.
+
+## Authenticated Render read-only findings (2026-11-06)
+
+- Production service: `srv-dasn1mbbc2fs738036gg`, owner workspace `tea-d37fhe8gjchc73c8eo0g`; runtime `gunicorn --workers 2 --threads 4 --timeout 60 billing_service:app`, `main`, auto-deploy `checksPass`, health check `/healthz`.
+- Latest listed live deployment: `dep-dbmehkgae00c73fasvj0`, commit `e9a33bb2eab43f8119b2c83f756fd5440d901ea1`, completed 2026-11-05 20:37:49 UTC. This does **not** prove that the latest `main` source is deployed.
+- Request logs show `GET /admin/revenue-per-visitor` returned HTTP 200 at 2026-11-04 18:41:30 UTC. This proves only that the static shell responded, not authenticated financial access.
+- Repeated `GET /api/admin/website-profit?period=2026-09` requests returned HTTP 503 on November 1-4, and October period also returned HTTP 503 on November 4. API code returns 503 if required private reporting configuration is absent/invalid; other invalid-evidence paths also return 503. **Do not claim the exact cause from request status alone.**
+- Existing `tests/test_website_profit_dashboard.py` covers fail-closed unconfigured (503), configured unauthorized (401), static shell CSP, no credential persistence, and non-mutating methods. These tests were inspected but **not executed** in this connector session.
+- No Render configuration, credentials, payments, trading, or production deployment changed. Do not enable the reporting API by inventing tokens or synthetic signed evidence.
+
+### Next gated work
+
+1. Read-only verify whether all three private configuration keys are present without retrieving their values; confirm restricted durable evidence directory and independent signer. A service inventory and request log cannot verify secret presence.
+2. Run isolated dashboard and reporting API unit tests in CI; review any failures before proposing code changes. Do not assert tests passed until a run is observed.
+3. Add daily signed evidence contracts and regression tests for 7-day comparisons only after authoritative consent-aware analytics and financial sources are identified. Keep existing monthly API backward compatible.
+4. Validate staging with independently approved non-customer fixtures, then obtain deployment approval and perform post-deploy read-back. This PR remains documentation-only and must not be treated as production activation.
