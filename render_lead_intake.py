@@ -235,6 +235,7 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     )
     # Conflicting explicit consent in any recognized wrapper fails closed.
     marketing_keys = (
+        "consent_marketing_email",
         "marketing_consent", "marketingConsent",
         "communications_consent", "communicationsConsent",
     )
@@ -253,11 +254,29 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     # Source timestamps remain distinguishable from server receipt times.
     consent_timestamp = _parse_timestamp(raw_submitted_at) if communications_consent else None
 
+    def channel_consent(keys: tuple[str, ...]) -> str:
+        # A general form checkbox never grants SMS, AI-voice or program consent.
+        # Preserve explicit restrictions; conflicting aliases fail closed.
+        channel_values = [src[key] for src in sources for key in keys if key in src]
+        allowed = bool(channel_values) and all(
+            _clean_text(value, max_length=32).casefold() in affirmative
+            for value in channel_values
+        )
+        return "true" if allowed else "false"
+
     return {
         "form_name": form_name,
         "name": name,
         "email": email,
         "submitted_at": submitted_at,
+        # Keep source provenance separate from receive-time fallbacks and the
+        # legacy downstream event_id (which is a forwarding deduplication key).
+        "source_event_id": _source_event_id(payload),
+        "source_submitted_at": _parse_timestamp(raw_submitted_at) or "",
+        "consent_marketing_email": channel_consent(marketing_keys),
+        "consent_sms": channel_consent(("consent_sms", "sms_consent", "smsConsent")),
+        "consent_ai_voice": channel_consent(("consent_ai_voice", "ai_voice_consent", "aiVoiceConsent")),
+        "program_consent": channel_consent(("program_consent", "programConsent")),
         "phone": phone,
         "communications_consent": "true" if communications_consent else "false",
         "consent_source": form_name if communications_consent else "",

@@ -79,6 +79,38 @@ def test_identical_webhook_replays_send_one_notification(monkeypatch, tmp_path):
         assert conn.execute("SELECT state FROM website_lead_forwarding").fetchone()[0] == "sent"
 
 
+def test_forward_preserves_source_provenance_and_separate_submissions(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead) or True)
+    first = dict(_lead(), event_id="offline-source-1")
+    second = dict(first, event_id="offline-source-2")
+
+    assert _request(first)[0] == 201
+    assert _request(first)[1]["duplicate"]
+    assert _request(second)[0] == 201
+    assert len(sent) == 2
+    assert [lead["source_event_id"] for lead in sent] == ["offline-source-1", "offline-source-2"]
+    assert all(lead["source_submitted_at"] == "2026-10-10T00:00:00.000Z" for lead in sent)
+    assert sent[0]["event_id"] != sent[1]["event_id"]
+    # Preserve the original persisted payload, consent and timestamp on replay.
+    with sqlite3.connect(intake._db_path()) as conn:
+        rows = conn.execute("SELECT source_payload_json FROM website_leads").fetchall()
+    assert len(rows) == 2
+    assert {json.loads(row[0])["event_id"] for row in rows} == {"offline-source-1", "offline-source-2"}
+
+
+def test_missing_source_provenance_is_never_fabricated(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead) or True)
+    payload = _lead()
+    payload.pop("submitted_at")
+    assert _request(payload)[0] == 201
+    assert sent[0]["source_event_id"] == ""
+    assert sent[0]["source_submitted_at"] == ""
+
+
 def test_failed_forward_is_retryable_but_never_spammed(monkeypatch, tmp_path):
     _config(monkeypatch, tmp_path)
     calls = []
