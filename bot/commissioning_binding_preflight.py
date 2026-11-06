@@ -54,12 +54,24 @@ def inspect_commissioning_bindings(bindings: Mapping[str, Any] | None) -> dict[s
     provider_ids = supplied.get("reviewed_provider_ids")
     missing_providers = tuple(
         field for field in REQUIRED
-        if not isinstance(provider_ids, Mapping) or not provider_ids.get(field)
+        if not isinstance(provider_ids, Mapping)
+        or not isinstance(provider_ids.get(field), str)
+        or not provider_ids.get(field)
+        or provider_ids.get(field) != provider_ids.get(field).strip()
     )
+    unexpected_providers = tuple(
+        sorted(str(field) for field in provider_ids if field not in REQUIRED)
+    ) if isinstance(provider_ids, Mapping) else ()
+    ids = tuple(provider_ids[field] for field in REQUIRED) if (
+        isinstance(provider_ids, Mapping) and not missing_providers
+    ) else ()
+    unique_provider_ids = len(ids) == len(REQUIRED) and len(set(ids)) == len(REQUIRED)
     return {
-        "complete_binding_inventory": not missing and not missing_providers,
+        "complete_binding_inventory": not missing and not missing_providers and not unexpected_providers and unique_provider_ids,
         "missing_bindings": missing,
         "missing_provider_id_fields": missing_providers,
+        "unexpected_provider_id_fields": unexpected_providers,
+        "unique_provider_ids": unique_provider_ids,
         "authenticated_evidence_verified": False,
         "collector_installed": False,
         "authorizes_orders": False,
