@@ -264,3 +264,166 @@ def test_nonmounted_or_public_storage_denies_checkout(setup, monkeypatch):
     monkeypatch.setattr("nija_game_checkout_store.ismount", lambda p: False)
     assert submit(buyer(app)).status_code == 503
     provider.assert_not_called()
+
+
+@pytest.mark.parametrize("origin", ["null", "", "https://attacker.example",
+                                    BILLING_ORIGIN + ".attacker.example",
+                                    "http://nija-billing-api.onrender.com"])
+def test_untrusted_origins_remain_denied_with_owner_cookie(setup, origin):
+    app, _, provider = setup
+    result = submit(buyer(app), origin=origin)
+    assert result.status_code == 403
+    assert result.json["error"] == "origin_not_allowed"
+    provider.assert_not_called()
+
+
+def test_confirmation_policy_is_narrow_and_reports_keep_no_referrer(setup):
+    app, _, provider = setup
+    result = submit(app.test_client())
+    assert result.headers["Referrer-Policy"] == "same-origin"
+    directives = result.headers["Content-Security-Policy"].split("; ")
+    assert "form-action 'self' https://checkout.stripe.com https://*.checkout.stripe.com" in directives
+    assert "default-src 'none'" in directives
+    assert "base-uri 'none'" in directives
+    for path in ("/game/cancelled", "/game/results?session_id=" + SID):
+        report = app.test_client().get(path, base_url=BILLING_ORIGIN)
+        assert report.headers["Referrer-Policy"] == "no-referrer"
+        assert report.headers["Content-Security-Policy"].endswith("form-action 'self'")
+    provider.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["traversal", "nested_traversal", "prefix_sibling",
+                                  "file_symlink", "directory_symlink", "mount_traversal",
+                                  "mount_symlink", "relative", "missing", "public"])
+def test_storage_escape_denied_before_database_open(setup, monkeypatch, tmp_path, kind):
+    from pathlib import Path
+    app, store, provider = setup
+    mount = Path(store.path).parent
+    outside = mount.parent / (mount.name + "-outside")
+    outside.mkdir(mode=0o700)
+    target = outside / "journal.sqlite3"
+    target.touch(mode=0o600)
+    path = target
+    if kind == "traversal":
+        path = mount / ".." / outside.name / target.name
+    elif kind == "nested_traversal":
+        (mount / "nested").mkdir(mode=0o700)
+        path = mount / "nested" / ".." / ".." / outside.name / target.name
+    elif kind == "file_symlink":
+        path = mount / "link.sqlite3"
+        path.symlink_to(target)
+    elif kind == "directory_symlink":
+        (mount / "link").symlink_to(outside, target_is_directory=True)
+        path = mount / "link" / target.name
+    elif kind == "mount_traversal":
+        monkeypatch.setenv("NIJA_GAME_CHECKOUT_MOUNT", str(mount / ".." / mount.name))
+        path = Path(store.path)
+    elif kind == "mount_symlink":
+        link = outside / "mount-link"
+        link.symlink_to(mount, target_is_directory=True)
+        monkeypatch.setenv("NIJA_GAME_CHECKOUT_MOUNT", str(link))
+        path = link / Path(store.path).name
+    elif kind == "relative":
+        path = Path("checkout.sqlite3")
+    elif kind == "missing":
+        path = mount / "missing.sqlite3"
+    elif kind == "public":
+        path = Path(store.path)
+        path.chmod(0o644)
+    monkeypatch.setenv("NIJA_GAME_CHECKOUT_DATABASE", str(path))
+    connect = Mock(side_effect=AssertionError("unsafe SQLite open"))
+    monkeypatch.setattr("nija_game_checkout_store.sqlite3.connect", connect)
+    assert submit(buyer(app)).status_code == 503
+    connect.assert_not_called()
+    provider.assert_not_called()
+    assert target.read_bytes() == b""
+
+
+def test_private_nested_journal_survives_real_process_restart(setup, monkeypatch):
+    import json
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    _, store, _ = setup
+    mount = Path(store.path).parent
+    (mount / "nested").mkdir(mode=0o700)
+    path = mount / "nested" / "checkout.sqlite3"
+    path.touch(mode=0o600)
+    store = CheckoutStore(str(path))
+    row = store.reserve(OWNER, ATTEMPT, BILLING_ORIGIN, "192.0.2.1")
+    store.finish(row["id"], URL, SID)
+    # New interpreter, no inherited connection or in-memory reservation. Only the
+    # mount detection is simulated; containment, permissions and SQLite are real.
+    script = '''
+import json, os
+import nija_game_checkout_store as module
+module.ismount = lambda p: str(p) == os.environ["NIJA_GAME_CHECKOUT_MOUNT"]
+store = module.CheckoutStore(os.environ["RESTART_JOURNAL"])
+row = store.reserve("a" * 64, os.environ["RESTART_ATTEMPT"], os.environ["RESTART_ORIGIN"], "192.0.2.1")
+print(json.dumps(row))
+'''
+    result = subprocess.run([sys.executable, "-c", script], check=True, capture_output=True, text=True,
+                            env={**os.environ, "RESTART_JOURNAL": str(path),
+                                 "RESTART_ATTEMPT": ATTEMPT, "RESTART_ORIGIN": BILLING_ORIGIN})
+    restored = json.loads(result.stdout)
+    assert (restored["id"], restored["proof"], restored["url"], restored["session"], restored["calls"]) == (
+        row["id"], row["proof"], URL, SID, 1)
+
+
+def test_browser_confirmation_redirect_and_replay(setup, monkeypatch):
+    """Real browser policies and cookies; Stripe and HTTPS responses are intercepted."""
+    import os
+    from playwright.sync_api import sync_playwright
+    from urllib.parse import urlsplit
+    from test_nija_game_billing import FakeStripe
+    app, _, _ = setup
+    stripe = FakeStripe()
+    provider = Mock(wraps=stripe._create)
+    stripe._create = provider
+    monkeypatch.setattr(routes, "stripe_client", lambda: stripe)
+    monkeypatch.setattr(routes, "create_checkout", create_checkout)
+    posts, stripe_gets = [], []
+    http = app.test_client(use_cookies=False)
+
+    def serve(route):
+        req = route.request
+        parsed = urlsplit(req.url)
+        if parsed.netloc == "game.nijaaitrading.com":
+            route.fulfill(content_type="text/html", body=(
+                '<form method="post" action="' + BILLING_ORIGIN + '/game/checkout/start">'
+                '<input name="adult" value="yes"><input name="attempt" value="' + ATTEMPT + '">'
+                '<button>Optional report</button></form>'))
+        elif parsed.netloc == "nija-billing-api.onrender.com":
+            if req.method == "POST":
+                posts.append(req.all_headers())
+            result = http.open(req.url, method=req.method, headers=req.all_headers(), data=req.post_data)
+            route.fulfill(status=result.status_code, headers=dict(result.headers), body=result.data)
+        elif parsed.netloc == "checkout.stripe.com":
+            stripe_gets.append(req)
+            route.fulfill(content_type="text/html", body="<title>Stripe fixture</title>")
+        else:
+            raise AssertionError("Unexpected browser request: " + req.url)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(executable_path=os.getenv("NIJA_TEST_CHROMIUM"))
+        context = browser.new_context()
+        context.route("**/*", serve)
+        page = context.new_page()
+        page.goto(ORIGIN)
+        page.get_by_role("button", name="Optional report").click()
+        page.get_by_role("button", name="Continue to secure checkout — $1").click()
+        page.wait_for_url("https://checkout.stripe.com/**")
+        assert posts[0]["origin"] == ORIGIN
+        assert posts[1]["origin"] == BILLING_ORIGIN
+        assert "referer" not in stripe_gets[0].all_headers()
+        assert provider.call_count == 1
+        # Browser-owned resubmission after returning to the free game reuses the
+        # same session and receipt, without a second provider session creation.
+        page.goto(ORIGIN)
+        page.get_by_role("button", name="Optional report").click()
+        page.wait_for_url("https://checkout.stripe.com/**")
+        assert provider.call_count == 1
+        assert len(stripe_gets) == 2
+        assert any(c["name"] == cookie_name(SID) for c in context.cookies(BILLING_ORIGIN))
+        browser.close()

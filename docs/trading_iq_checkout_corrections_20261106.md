@@ -175,3 +175,42 @@ does not repair that live service configuration.
    merging a PR can ship source even while the educational feature flag is off;
    review release control before merge. This corrective PR is not merged or
    deployed by this task.
+
+## Follow-up: confirmation browser policy and journal containment
+
+Inspected main `3ff4b0e83cbf82f69abee61d5df1709283111258`, the merged
+#3685 head, recent checkout branches/PRs and the protected release comparison.
+Main still contained all three reviewed defects; the subsequent #3686 changed
+only collector code. The protected release was 12 commits behind main at inspection.
+
+The hosted checkout HTML now uses `Referrer-Policy: same-origin`, preserving a
+real billing Origin on its confirmation POST while withholding cross-origin
+referrers. Its form-action permits self plus the exact HTTPS Stripe host family
+already validated by the adapter, so browsers can follow the 303 redirect.
+Reports and cancellation pages retain no-referrer and self-only form-action.
+Null, absent, malicious, lookalike and HTTP origins remain denied by the original
+allowlist. No Referer fallback or opaque-Origin exception was introduced.
+
+Journal initialization rejects parent components in both paths, symlinks in
+both ancestor chains, missing paths, and resolved paths outside the resolved
+mounted root before SQLite opens. It opens the resolved absolute filename.
+The existing mount, private file/directory ownership and permissions remain
+required. This assumes trusted provisioning: operators must prevent concurrent
+filesystem replacement and preserve the single-instance journal/backup contract.
+No migration, reservation deletion, entitlement change or refund change.
+
+Added deterministic regressions for malicious origins, scoped security headers,
+ten storage escape/configuration cases, and journal replay across a new Python
+interpreter. Added a Chromium test intercepting HTTPS/Stripe (no real network or
+charge): free-game form, ownership confirmation, genuine browser Origin, Stripe
+redirect without a referrer, secure receipt and repeat submission without a
+second provider session. CI installs pinned Playwright and Chromium and runs
+this test with the hosted suite; it is not silently skipped when absent.
+
+Release still requires mandatory exact-head security/CI and independent review,
+actual hosted browser/payment/refund testing, durable mount and backup/restore
+verification, and separate approval for the exact deployment and payment enablement.
+The specifically named runtime-tools-secret_scanning and codeql_checker are not
+exposed in this environment; changed-file detect-secrets/Bandit are supplementary,
+not a claim those tools ran. Free gameplay, scoring, reports, entitlements,
+refund checks, provider state, deployment settings and payment flags are unchanged.
