@@ -57,7 +57,7 @@ node --test web/trading-challenge/tests/*.test.mjs
 
 Install Node 22 alongside the isolated Python environment; Node executes the original report without translating its formulas.
 
-`gunicorn --workers 1 --threads 2 'game_sandbox.app:from_environment()'` creates the sandbox API only. Serve the existing exported game at `/` and proxy `/sandbox/` on the **same staging origin**; do not assume IONOS can provide that proxy. Never serve the database, report adapter, manifest or environment files as static assets.
+`python -m game_sandbox.staging_bootstrap` starts the isolated staging process only after enforcing non-root execution and, when enabled, the dedicated private writable mount. It then launches the single-worker Gunicorn service. Serve the existing exported game at `/` and proxy `/sandbox/` on the **same staging origin**; do not assume IONOS can provide that proxy. Never serve the database, report adapter, manifest or environment files as static assets.
 
 All settings are distinct from existing billing/trading environment variables:
 
