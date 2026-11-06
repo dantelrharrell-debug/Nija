@@ -214,7 +214,7 @@ jobs:
       env:
         PRECOMMIT_OUTCOME: ${{ steps.precommit.outcome }}
       run: |
-        printf 'Pre-commit step outcome: %s\\n' "$PRECOMMIT_OUTCOME" > pre-commit-report.txt
+        printf 'Pre-commit step outcome: %s\n' "$PRECOMMIT_OUTCOME" > pre-commit-report.txt
         echo "Review the full pre-commit job log; a failed step blocks the job." >> pre-commit-report.txt
 
     - name: Upload pre-commit report
