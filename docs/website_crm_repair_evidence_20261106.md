@@ -169,3 +169,45 @@ existing data without explicit replay authorization.
    submission remains distinct. No such live tests were authorized or executed here.
 
 Until these gates pass, keep issue #3421 open and the pipeline **NOT CERTIFIED**.
+
+## Completion follow-up: hosted checks on the tested source
+
+Exact source commit: `b00eae639083d667f4879b8f917019c39d20b65b`.
+PR #3693 remains draft and unmerged; this follow-up changes evidence only.
+
+| Hosted check | Result | Evidence |
+| --- | --- | --- |
+| Dedicated lead/CRM recovery | PASS — 97 tests, including persistence-failure regression | Run 42283714715; job 128119010576 |
+| General CI | PASS | Run 42283714653 |
+| CodeQL | PASS | Run 42283714683 |
+| Imports, preflight/lint, image build, branch policy and manual release hold | PASS | Exact-commit workflow results |
+| Dependency vulnerability scan and Bandit | PASS | Security run 42283714636 |
+| PR-diff Gitleaks and TruffleHog | PASS | Secret job 128119011340 |
+| Full baseline-aware secret scan | FAIL — 268 unbaselined candidates | Job 128119011340; value-free artifact 13536832325 |
+| Pre-commit hook validation | FAIL; detailed job log unavailable after two transport failures | Job 128119010716 |
+| Artifact scans | FAIL | Run 42283714735 |
+
+The member-broker package job passed pip-audit, then failed GuardDog. Its log includes a
+connection-refused error; without reading the retained structured report, that error
+does not prove whether the final exit came from scanner operation or package findings.
+Report artifact 13536452379 is retained for independent examination.
+
+The dashboard container job built successfully, then Trivy and Grype both failed.
+Grype explicitly reported vulnerabilities at or above HIGH. Trivy's table includes
+affected Debian OS packages and some entries with no fixed version displayed.
+No broad container/production dependency change is made as a website-delivery repair,
+and none of these findings is suppressed or declared harmless.
+
+The 268 secret-scan count matches the previously observed backlog, but matching counts
+alone do not establish identical candidate identities. Private classification of the
+retained evidence is still required. No new credentials were exposed in this follow-up.
+
+**All source changes that were independently verified and safe to apply within this
+execution are saved on the draft branch. Production completion remains blocked.**
+There has been no new browser access, IONOS draft-result verification, private-hook
+verification, provider acknowledgment, website-admin login, customer replay, contact
+write, live QA event, publication, deployment or trading change in this follow-up.
+The last browser action was rejected by automatic approval review because workspace
+credits were exhausted; no bypass was attempted. Restoring review credits is the next
+owner action for browser continuation. Do not request or infer live-release/test
+authorization before the source, ownership, backup and rollback gates are satisfied.
