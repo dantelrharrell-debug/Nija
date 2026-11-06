@@ -61,7 +61,7 @@ def validate_attempt(decisions: Any) -> str:
         if (isinstance(size, bool) or isinstance(stop, bool)
                 or not isinstance(size, (int, float)) or not isinstance(stop, (int, float))
                 or not (5 <= size <= 50 and (size / 5).is_integer())
-                or not (.5 <= stop <= 4 and (stop * 2).is_integer())
+                or not (.5 <= stop <= 4 and float(stop * 2).is_integer())
                 or size * stop / 100 > 1 + 1e-10):
             raise ValueError("risk_limit_or_increment_invalid")
         parts.append(f"{choice[0]},{int(size)},{float(stop):g}")

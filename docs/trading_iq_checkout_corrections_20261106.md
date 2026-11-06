@@ -115,6 +115,9 @@ behind one proxy, concurrent requests, app restart, lost provider and redirect
 responses, exact key/proof/parameter reuse, expired-window denial, and current
 and legacy paid-report retrieval with refund denial while checkout is off.
 The existing original 72-decision report parity/client tests remain included.
+CI exposed an existing Python 3.11 integer-stop validator failure (`int.is_integer`
+is unavailable); normalize the checked doubled stop to float, preserving the
+exact half-point/risk constraints and legitimate integer inputs.
 CI explicitly executes hosted tests and triggers for the root payment modules
 and tests as well as sandbox paths; the test file is tracked despite the
 repository's broad test ignore rule.
