@@ -74,6 +74,32 @@ class ReviewedCollectorBridgeTests(unittest.TestCase):
         self.assertEqual(set(actual), set(REQUIRED))
         compose.assert_called_once()
 
+    def test_factory_result_with_duplicate_sources_denied(self):
+        same_source = lambda: {}
+        providers = {field: same_source for field in REQUIRED}
+        with patch("bot.broker_manager.KrakenBroker", FakeBroker), patch(
+            "bot.kraken_authenticated_account_identity_v478._broker_account_scope",
+            return_value="platform:kraken",
+        ), patch(
+            "bot.kraken_reviewed_collector_bridge.compose_reviewed_kraken_providers",
+            return_value=providers,
+        ):
+            with self.assertRaisesRegex(ReviewedCollectorCompositionDenied, "incomplete_authenticated_sources"):
+                compose_authenticated_kraken_collector_sources(**self.args)
+
+    def test_factory_result_with_noncallable_source_denied(self):
+        providers = {field: (lambda field=field: {}) for field in REQUIRED}
+        providers[next(iter(REQUIRED))] = None
+        with patch("bot.broker_manager.KrakenBroker", FakeBroker), patch(
+            "bot.kraken_authenticated_account_identity_v478._broker_account_scope",
+            return_value="platform:kraken",
+        ), patch(
+            "bot.kraken_reviewed_collector_bridge.compose_reviewed_kraken_providers",
+            return_value=providers,
+        ):
+            with self.assertRaisesRegex(ReviewedCollectorCompositionDenied, "incomplete_authenticated_sources"):
+                compose_authenticated_kraken_collector_sources(**self.args)
+
     def test_incomplete_factory_result_denied(self):
         with patch("bot.broker_manager.KrakenBroker", FakeBroker), patch(
             "bot.kraken_authenticated_account_identity_v478._broker_account_scope",

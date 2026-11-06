@@ -76,6 +76,9 @@ def compose_authenticated_kraken_collector_sources(
         monitoring_category=monitoring_category,
         independently_reviewed=True,
     )
-    if set(providers) != set(REQUIRED):
+    if (not isinstance(providers, Mapping)
+            or set(providers) != set(REQUIRED)
+            or any(not callable(provider) for provider in providers.values())
+            or len({id(provider) for provider in providers.values()}) != len(REQUIRED)):
         raise ReviewedCollectorCompositionDenied("incomplete_authenticated_sources")
     return providers
