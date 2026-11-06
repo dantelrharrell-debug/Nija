@@ -63,7 +63,9 @@ def connect_reviewed_kraken_collector(
         independently_reviewed=True,
     )
     if (not isinstance(providers, Mapping)
-            or set(providers) != set(REQUIRED)):
+            or set(providers) != set(REQUIRED)
+            or any(not callable(provider) for provider in providers.values())
+            or len({id(provider) for provider in providers.values()}) != len(REQUIRED)):
         raise KrakenCollectorConnectionDenied("complete_provider_registry_required")
     install_reviewed_kraken_collector(
         providers=providers,
