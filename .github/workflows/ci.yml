@@ -221,6 +221,10 @@ jobs:
             bot/tests/test_kraken_kill_switch_evidence.py \
             bot/tests/test_kraken_position_sync_evidence.py \
             bot/tests/test_pretrade_attestation_validation_v452.py \
+            bot/tests/test_commissioning_gate.py \
+            bot/tests/test_commissioning_runtime.py \
+            bot/tests/test_commissioning_single_flight_20261105.py \
+            bot/tests/test_commissioning_two_phase_transition_20261105.py \
             bot/tests/test_startup_position_sync_outcomes.py \
             tests/test_runtime_registered_platform_capital_completeness_v270.py \
             tests/test_runtime_capital_refresh_ownership_v166.py \
