@@ -92,3 +92,46 @@ def test_invalid_baseline_fails_closed_with_evidence(tmp_path, baseline):
     result, report = run_scan(tmp_path, baseline, "count = 12\n")
     assert result.returncode == 2
     assert report["outcome"] == "scanner_error"
+
+
+def test_security_workflow_keeps_secret_findings_blocking():
+    """Baseline candidates still cause a hard failure and retain redacted evidence."""
+    import yaml
+
+    workflow = yaml.safe_load(
+        (SCRIPT.parents[1] / ".github/workflows/security-scan.yml").read_text()
+    )
+    steps = workflow["jobs"]["secrets-scan"]["steps"]
+    enforcement = next(step for step in steps if step["name"] == "Enforce baseline-aware scanning")
+    evidence = next(step for step in steps if step["name"] == "Retain value-free secret scan evidence")
+    assert "run_baseline_secret_scan.py" in enforcement["run"]
+    assert "continue-on-error" not in enforcement
+    assert "|| true" not in enforcement["run"]
+    assert evidence["if"] == "always()"
+    assert evidence["with"]["path"] == "secret-scan-report.json"
+
+
+def test_precommit_failure_propagates_and_reports_real_outcome():
+    """A failed hook build must fail CI instead of yielding a green job."""
+    import yaml
+
+    workflow = yaml.safe_load(
+        (SCRIPT.parents[1] / ".github/workflows/security-scan.yml").read_text()
+    )
+    job = workflow["jobs"]["pre-commit-checks"]
+    steps = job["steps"]
+    setup = next(step for step in steps if step["name"] == "Set up compatible Go for existing hooks")
+    assert setup["with"]["go-version"] == "1.24.x"
+    assert setup["with"]["cache"] is False
+    run = next(step for step in steps if step["name"] == "Run pre-commit on all files")
+    assert run["id"] == "precommit"
+    assert "pre-commit run --all-files --show-diff-on-failure" in run["run"]
+    assert "continue-on-error" not in job
+    assert all("continue-on-error" not in step for step in steps)
+    assert "|| true" not in run["run"]
+    report = next(step for step in steps if step["name"] == "Generate pre-commit report")
+    assert report["if"] == "always()"
+    assert "steps.precommit.outcome" in report["env"]["PRECOMMIT_OUTCOME"]
+    assert "PRECOMMIT_OUTCOME" in report["run"]
+    upload = next(step for step in steps if step["name"] == "Upload pre-commit report")
+    assert upload["if"] == "always()"
