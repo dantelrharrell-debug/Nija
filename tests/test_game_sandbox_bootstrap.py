@@ -27,7 +27,7 @@ def private_disk(tmp_path, monkeypatch):
             return os.stat_result(fields)
 
         monkeypatch.setattr(Path, "lstat", unprivileged_metadata)
-    monkeypatch.setattr(bootstrap.os.path, "ismount", lambda path: path == tmp_path)
+    monkeypatch.setattr(bootstrap, "has_dedicated_mount", lambda path: path == tmp_path)
     monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
     monkeypatch.setenv("NIJA_IQ_SANDBOX_DATABASE", str(tmp_path / "trading_iq_sandbox.sqlite3"))
     return tmp_path
@@ -52,7 +52,7 @@ def test_private_disk_probe_never_creates_entitlement_database(private_disk):
 
 
 def test_missing_mount_never_falls_back_to_container_storage(private_disk, monkeypatch):
-    monkeypatch.setattr(bootstrap.os.path, "ismount", lambda path: False)
+    monkeypatch.setattr(bootstrap, "has_dedicated_mount", lambda path: False)
     with pytest.raises(RuntimeError, match="persistent_mount"):
         bootstrap.validate_runtime(private_disk)
 
@@ -73,7 +73,7 @@ def test_wrong_owner_is_denied(private_disk, monkeypatch):
 def test_symlink_mount_is_denied(private_disk, monkeypatch):
     link = private_disk / "link"
     link.symlink_to(private_disk, target_is_directory=True)
-    monkeypatch.setattr(bootstrap.os.path, "ismount", lambda path: True)
+    monkeypatch.setattr(bootstrap, "has_dedicated_mount", lambda path: True)
     monkeypatch.setenv("NIJA_IQ_SANDBOX_DATABASE", str(link / "trading_iq_sandbox.sqlite3"))
     with pytest.raises(RuntimeError, match="private_disk_owner"):
         bootstrap.validate_runtime(link)
@@ -107,3 +107,19 @@ def test_valid_preflight_execs_single_gunicorn_process(monkeypatch):
     assert args[1:3] == ["-m", "gunicorn"]
     assert args[args.index("--bind") + 1] == "0.0.0.0:10101"
     assert args[args.index("--workers") + 1] == "1"
+
+
+def test_same_device_bind_mount_is_detected_from_kernel_table():
+    table = "31 25 0:42 / / rw - overlay overlay rw\n32 31 0:42 /data /var/data rw - ext4 /dev/vda rw\n"
+    assert bootstrap.mount_table_contains(Path("/var/data"), table)
+
+
+def test_mount_table_rejects_parent_and_prefix_matches():
+    table = "31 25 0:42 / /var rw - ext4 /dev/vda rw\n32 31 0:42 /data /var/data-old rw - ext4 /dev/vda rw\n"
+    assert not bootstrap.mount_table_contains(Path("/var/data"), table)
+
+
+def test_mount_table_decodes_kernel_escapes_and_rejects_malformed_rows():
+    assert bootstrap.mount_table_contains(Path("/var/test data"),
+        "32 31 0:42 /data /var/test\\040data rw - ext4 /dev/vda rw\n")
+    assert not bootstrap.mount_table_contains(Path("/var/data"), "bad /var/data row\n")

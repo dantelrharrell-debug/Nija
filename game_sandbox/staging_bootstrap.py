@@ -3,9 +3,31 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tempfile
+
+
+def has_dedicated_mount(data_directory: Path) -> bool:
+    """Read Linux's mount table; stat-based ismount misses same-device bind mounts."""
+    with Path("/proc/self/mountinfo").open(encoding="utf-8") as source:
+        mountinfo = source.read(1024 * 1024 + 1)
+    if len(mountinfo) > 1024 * 1024:
+        raise RuntimeError("sandbox_mount_table_limit_exceeded")
+    return mount_table_contains(data_directory, mountinfo)
+
+
+def mount_table_contains(data_directory: Path, mountinfo: str) -> bool:
+    """Match the exact fifth mountinfo field, decoding kernel octal path escapes."""
+    for line in mountinfo.splitlines():
+        fields = line.split()
+        if len(fields) < 10 or "-" not in fields[6:]:
+            continue
+        mountpoint = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[4])
+        if mountpoint == str(data_directory):
+            return True
+    return False
 
 
 def validate_runtime(data_directory: Path = Path("/var/data")) -> None:
@@ -19,7 +41,7 @@ def validate_runtime(data_directory: Path = Path("/var/data")) -> None:
     # Never fall back to a disposable directory if the dedicated mount is absent.
     if database != data_directory / "trading_iq_sandbox.sqlite3":
         raise RuntimeError("sandbox_dedicated_disk_path_required")
-    if not os.path.ismount(data_directory):
+    if not has_dedicated_mount(data_directory):
         raise RuntimeError("sandbox_persistent_mount_required")
     metadata = data_directory.lstat()
     if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
