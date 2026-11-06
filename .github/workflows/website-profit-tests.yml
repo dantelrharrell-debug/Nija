@@ -63,4 +63,4 @@ jobs:
           cp scripts/check_profit_dashboard_public_routes.py "$tmpdir/scripts/"
           cp tests/test_profit_dashboard_public_probe.py "$tmpdir/tests/"
           cd "$tmpdir"
-          PYTHONNOUSERSITE=1 python -m unittest discover -s tests -p 'test_website*.py' -v
+          PYTHONNOUSERSITE=1 python -m unittest discover -s tests -p 'test_*.py' -v
