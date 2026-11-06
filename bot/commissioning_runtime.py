@@ -401,10 +401,16 @@ def install_commissioning_dispatch_adapter(
         raise CommissioningCompositionDenied("commissioning_adapter_already_installed")
     admission = getattr(pipeline, "_account_order_admission", None)
     candidate_provider = getattr(pipeline, "_trusted_entry_candidate_provider", None)
+    admission_ledger = getattr(admission, "ledger", None)
+    gate_ledger = getattr(adapter.gate, "ledger", None)
     if (admission is None
             or getattr(admission, "collector", None) is not adapter.gate.collector
             or getattr(admission, "fence", None) is not adapter.gate.fence
-            or Path(getattr(admission, "ledger", "")).resolve() != adapter.gate.ledger.resolve()
+            or not isinstance(admission_ledger, (str, Path))
+            or not admission_ledger
+            or not isinstance(gate_ledger, (str, Path))
+            or not gate_ledger
+            or Path(admission_ledger).resolve() != Path(gate_ledger).resolve()
             or candidate_provider is not adapter.candidate_for_request):
         raise CommissioningCompositionDenied("canonical_entry_admission_binding_mismatch")
     if (not callable(getattr(broker, "_kraken_private_call", None))

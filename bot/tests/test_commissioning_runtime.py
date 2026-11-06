@@ -391,6 +391,35 @@ class CommissioningRuntimeTests(unittest.TestCase):
                 mismatched, adapter, broker, activation_reviewed=True,
             )
 
+    def test_install_denies_missing_or_invalid_ledger_without_side_effects(self):
+        adapter = self.adapter(enabled=True)
+        broker = KrakenBroker.__new__(KrakenBroker)
+        broker.broker_type = BrokerType.KRAKEN
+        broker.account_type = "platform"
+        broker.user_id = None
+        broker._gateway_url = ""
+        broker._gateway_only_mode = False
+        for ledger in (None, 0, ""):
+            with self.subTest(ledger=ledger):
+                pipeline = SimpleNamespace(
+                    _dispatch=lambda *_: None,
+                    _account_order_admission=SimpleNamespace(
+                        collector=self.gate.collector,
+                        fence=self.gate.fence,
+                        ledger=ledger,
+                    ),
+                    _trusted_entry_candidate_provider=adapter.candidate_for_request,
+                )
+                with self.assertRaisesRegex(
+                    CommissioningCompositionDenied,
+                    "canonical_entry_admission_binding_mismatch",
+                ):
+                    install_commissioning_dispatch_adapter(
+                        pipeline, adapter, broker, activation_reviewed=True,
+                    )
+                self.assertIsNone(getattr(pipeline, "_commissioning_dispatch_adapter", None))
+                self.assertIsNone(getattr(broker, "_commissioning_order_request_validator", None))
+
     def test_broker_manager_enforces_exact_entry_before_gateway_or_api_calls(self):
         adapter = self.adapter(enabled=True)
         adapter.consume(self.request)
