@@ -38,13 +38,24 @@ class ReviewedCollectorBridgeTests(unittest.TestCase):
 
     def test_invalid_identity_pin_denied(self):
         self.args["approved_api_key_sha256"] = "invalid"
-        with self.assertRaises(ReviewedCollectorCompositionDenied):
-            compose_authenticated_kraken_collector_sources(**self.args)
+        with patch("bot.broker_manager.KrakenBroker", FakeBroker), patch(
+            "bot.kraken_authenticated_account_identity_v478._broker_account_scope",
+            return_value="platform:kraken",
+        ):
+            with self.assertRaisesRegex(
+                ReviewedCollectorCompositionDenied,
+                "approved_identity_pins_required",
+            ):
+                compose_authenticated_kraken_collector_sources(**self.args)
 
     def test_incomplete_source_denied(self):
         self.args["independent_remaining"] = {}
-        with self.assertRaises(PermissionError):
-            compose_authenticated_kraken_collector_sources(**self.args)
+        with patch("bot.broker_manager.KrakenBroker", FakeBroker), patch(
+            "bot.kraken_authenticated_account_identity_v478._broker_account_scope",
+            return_value="platform:kraken",
+        ):
+            with self.assertRaisesRegex(PermissionError, "six_sources_required"):
+                compose_authenticated_kraken_collector_sources(**self.args)
 
     def test_duck_typed_broker_is_denied(self):
         with self.assertRaisesRegex(ReviewedCollectorCompositionDenied, "canonical_broker_required"):
