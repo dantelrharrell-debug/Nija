@@ -441,7 +441,9 @@ def test_browser_confirmation_redirect_and_replay(setup, monkeypatch):
         assert len(stripe_gets) == 2
         assert any(c["name"] == cookie_name(SID) for c in context.cookies(BILLING_ORIGIN))
         page.goto("https://attacker.example")
-        page.get_by_role("button", name="Optional report").click()
+        with page.expect_navigation(wait_until="domcontentloaded") as denied:
+            page.get_by_role("button", name="Optional report").click()
+        assert denied.value.status == 403
         assert "origin_not_allowed" in page.content()
         assert posts[-1]["origin"] == "https://attacker.example"
         assert provider.call_count == 1 and len(stripe_gets) == 2
