@@ -46,9 +46,16 @@ class ReviewedCollectorBridgeTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             compose_authenticated_kraken_collector_sources(**self.args)
 
+    def test_duck_typed_broker_is_denied(self):
+        with self.assertRaisesRegex(ReviewedCollectorCompositionDenied, "canonical_broker_required"):
+            compose_authenticated_kraken_collector_sources(**self.args)
+
     def test_composes_without_installing(self):
         providers = {field: (lambda field=field: {}) for field in REQUIRED}
-        with patch(
+        with patch("bot.broker_manager.KrakenBroker", FakeBroker), patch(
+            "bot.kraken_authenticated_account_identity_v478._broker_account_scope",
+            return_value="platform:kraken",
+        ), patch(
             "bot.kraken_reviewed_collector_bridge.compose_reviewed_kraken_providers",
             return_value=providers,
         ) as compose:
@@ -57,7 +64,10 @@ class ReviewedCollectorBridgeTests(unittest.TestCase):
         compose.assert_called_once()
 
     def test_incomplete_factory_result_denied(self):
-        with patch(
+        with patch("bot.broker_manager.KrakenBroker", FakeBroker), patch(
+            "bot.kraken_authenticated_account_identity_v478._broker_account_scope",
+            return_value="platform:kraken",
+        ), patch(
             "bot.kraken_reviewed_collector_bridge.compose_reviewed_kraken_providers",
             return_value={},
         ):
