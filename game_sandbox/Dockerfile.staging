@@ -3,7 +3,7 @@
 # explicitly disabled-by-default, sandbox-only Stripe API.
 FROM node:22-bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates gosu \
+ && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system --gid 10001 nija \
  && useradd --system --uid 10001 --gid 10001 --home-dir /app --shell /usr/sbin/nologin nija
@@ -14,7 +14,10 @@ RUN python3 -m venv /opt/venv \
 COPY . /app/game_sandbox/
 RUN chmod 755 /app/game_sandbox/staging_start.sh \
  && mkdir -p /var/data \
- && chown -R nija:nija /app /var/data
+ && chown -R nija:nija /app /var/data \
+ && chmod 700 /var/data
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+USER 10001:10001
 EXPOSE 10000
 CMD ["/app/game_sandbox/staging_start.sh"]

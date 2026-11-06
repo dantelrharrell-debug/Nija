@@ -74,7 +74,12 @@ by this investigation. Verified-only TruffleHog success cannot prove all
 credentials are absent/revoked. Owner validation and provider rotation/revocation
 are needed for any confirmed exposure; candidates are not sent to providers here.
 No automatic baseline regeneration, broad allowlisting or candidate-value export
-is an appropriate fix.
+is an appropriate fix. The follow-up reviews **47 exact candidates** (43 digest,
+revision, checksum or other non-authentication identifiers and four public Stripe
+object IDs) with per-location reasons in
+`reviewed_non_credentials_20261106.json`. Only those filename/type/value
+identities are added with `is_secret=false`; no detector or path is disabled.
+A replacement candidate still fails. All unreviewed candidates remain blocking.
 
 ## Independent failures on 3665
 
@@ -82,9 +87,11 @@ is an appropriate fix.
   DS-0002 HIGH in `game_sandbox/Dockerfile.staging`: no non-root USER instruction.
   Its launcher currently starts as root to chown the dedicated mounted disk,
   then uses gosu to drop privileges. Merely inserting USER would break that
-  ownership step. A non-root entrypoint needs a verified disk-owner/provisioning
-  plan and container rehearsal. No misleading suppression or untested runtime
-  identity change is made here.
+  ownership step. The follow-up now starts directly as UID/GID 10001, refuses
+  root execution, removes runtime chown/gosu and fails closed unless an enabled
+  sandbox has the exact private, writable mounted disk. A dedicated container
+  rehearsal is added to CI. Actual Render disk provisioning remains unverified;
+  no service is deployed or enabled by this change.
 - **Four container jobs:** images built and databases downloaded successfully;
   Trivy and Grype failed on actual HIGH/CRITICAL findings. Inspected root-image
   SARIF artifact **13463958143** includes util-linux/libacl/libcurl/libexpat/
@@ -119,6 +126,8 @@ red until legacy candidates and independent findings are resolved. The named
 in this environment; pinned detect-secrets, compilation and offline checks are
 local validation only. Exact-head hosted checks remain required.
 
-Rollback: revert the reporting/version-alignment commit. No baseline entries,
-credentials, models, runtime safeguards, deployment settings, records, or live
-payment settings change.
+Rollback: revert the reporting/version-alignment and follow-up corrections.
+Only the 47 documented non-credential identities change in the baseline. No
+credentials, models, trading safeguards, deployment settings, production records,
+or live payment settings change. Revert the non-root sandbox source changes as
+part of the same rollback; no mounted disk was modified.
