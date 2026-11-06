@@ -869,7 +869,9 @@ def handle_lead_intake_post(handler: Any) -> bool:
     except ValueError as exc:
         _send_json(handler, 422, {"error": str(exc)})
         return True
-    except OSError:
+    except (OSError, sqlite3.Error):
+        # SQLite can fail on locks, corruption, or schema operations. Fail closed
+        # without exposing driver details or attempting downstream delivery.
         _send_json(handler, 503, {"error": "Lead store unavailable"})
         return True
 
