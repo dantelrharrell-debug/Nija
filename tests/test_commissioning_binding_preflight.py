@@ -18,6 +18,7 @@ class BindingPreflightTests(unittest.TestCase):
     def test_supplied_bindings_are_not_certification(self):
         bindings = {name: object() for name in REQUIRED_BINDINGS}
         bindings["reviewed_provider_ids"] = {field: "id-" + field for field in REQUIRED}
+        bindings["providers"] = {field: (lambda field=field: {"field": field}) for field in REQUIRED}
         result = inspect_commissioning_bindings(bindings)
         self.assertTrue(result["complete_binding_inventory"])
         self.assertFalse(result["authenticated_evidence_verified"])
@@ -55,6 +56,34 @@ class BindingPreflightTests(unittest.TestCase):
         result = inspect_commissioning_bindings(bindings)
         self.assertIn(REQUIRED[0], result["missing_provider_id_fields"])
         self.assertFalse(result["complete_binding_inventory"])
+
+    def test_reused_callable_is_not_independent(self):
+        bindings = {name: object() for name in REQUIRED_BINDINGS}
+        bindings["reviewed_provider_ids"] = {field: "id-" + field for field in REQUIRED}
+        shared = lambda: {}
+        bindings["providers"] = {field: shared for field in REQUIRED}
+        result = inspect_commissioning_bindings(bindings)
+        self.assertFalse(result["unique_provider_callbacks"])
+        self.assertFalse(result["complete_binding_inventory"])
+        self.assertFalse(result["activation_allowed"])
+
+    def test_noncallable_and_unexpected_sources_denied(self):
+        bindings = {name: object() for name in REQUIRED_BINDINGS}
+        bindings["reviewed_provider_ids"] = {field: "id-" + field for field in REQUIRED}
+        bindings["providers"] = {field: (lambda field=field: {}) for field in REQUIRED}
+        bindings["providers"][REQUIRED[0]] = None
+        bindings["providers"]["unreviewed"] = lambda: {}
+        result = inspect_commissioning_bindings(bindings)
+        self.assertIn(REQUIRED[0], result["missing_provider_callbacks"])
+        self.assertEqual(result["unexpected_provider_callbacks"], ("unreviewed",))
+        self.assertFalse(result["complete_binding_inventory"])
+
+    def test_whitespace_inside_provider_identity_denied(self):
+        bindings = {name: object() for name in REQUIRED_BINDINGS}
+        bindings["reviewed_provider_ids"] = {field: "id-" + field for field in REQUIRED}
+        bindings["reviewed_provider_ids"][REQUIRED[0]] = "id internal"
+        result = inspect_commissioning_bindings(bindings)
+        self.assertIn(REQUIRED[0], result["missing_provider_id_fields"])
 
 
 if __name__ == "__main__":
