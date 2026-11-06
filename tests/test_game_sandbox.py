@@ -107,7 +107,8 @@ def fixture_manifest(total=12):
 
 
 @pytest.fixture
-def setup(tmp_path):
+def setup(tmp_path, monkeypatch):
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_INGRESS_MODE", "direct")
     config = Config(
         str(tmp_path / "trading_iq_sandbox.sqlite3"),
         "https://staging.example",
@@ -681,3 +682,22 @@ def test_health_exemption_is_exact_and_does_not_bypass_other_routes(setup, monke
         headers={"Origin": service.config.origin},
     ).status_code == 429
     assert client.get("/healthz").status_code == 200
+
+
+def test_trusted_proxy_visitors_have_independent_persistent_buckets(setup, monkeypatch):
+    service = setup[0]
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_INGRESS_MODE", "proxy")
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_TRUSTED_PROXY_CIDRS", "10.0.0.0/24")
+    client = create_app(service).test_client()
+    def get(address, peer="10.0.0.2"):
+        return client.get("/sandbox/health", environ_base={"REMOTE_ADDR": peer},
+                          headers={"X-Forwarded-For": address})
+    for _ in range(300):
+        assert get("192.0.2.1").status_code == 200
+    assert get("192.0.2.1").status_code == 429
+    assert get("192.0.2.2").status_code == 200
+    assert get("192.0.2.2", peer="192.0.2.1").status_code == 403
+    assert get("192.0.2.1, 192.0.2.2").status_code == 403
+    assert get("").status_code == 403
+    monkeypatch.delenv("NIJA_IQ_SANDBOX_INGRESS_MODE")
+    assert get("192.0.2.3").status_code == 503
