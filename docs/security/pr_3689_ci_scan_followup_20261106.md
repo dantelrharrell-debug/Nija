@@ -3,16 +3,16 @@
 ## Scope and exact source evidence
 
 PR [#3689](https://github.com/dantelrharrell-debug/Nija/pull/3689) merged
-into \`main\` at 2026-11-06 16:51:15 UTC as
-\`b07d6b0615139c56e5afa778a3012087fcda3bee\`.
-The original head was \`3f8b2dad0cf5d715d9a4c81da220ff07783e8c67\`.
+into `main` at 2026-11-06 16:51:15 UTC as
+`b07d6b0615139c56e5afa778a3012087fcda3bee`.
+The original head was `3f8b2dad0cf5d715d9a4c81da220ff07783e8c67`.
 Its separate SQLite persistence fail-closed handler and synthetic HTTP 503/no-forwarding
 regression are retained unchanged.
 
 The original [Security Scanning run 42253875317](https://github.com/dantelrharrell-debug/Nija/actions/runs/42253875317),
 Secret Scanning job **128015736671**, exited 1 at baseline-aware
-\`detect-secrets\` enforcement. The pinned 1.5.0 wrapper completed, reported
-\`unbaselined_candidates\`, and emitted a sanitized artifact
+`detect-secrets` enforcement. The pinned 1.5.0 wrapper completed, reported
+`unbaselined_candidates`, and emitted a sanitized artifact
 **13522845088**. No scanner crash or new PR-specific finding was demonstrated.
 Gitleaks' pinned PR diff and TruffleHog's verified-only PR scan both passed.
 The dependency, Bandit and high-level pre-commit jobs were green; the pre-commit
@@ -21,7 +21,7 @@ job's own run step was **not** successful (see below).
 ## Sanitized comparison to prior failure
 
 Compared the structured path/line/type triples from the two **value-free**
-\`secret-scan-report.json\` artifacts, not credential contents:
+`secret-scan-report.json` artifacts, not credential contents:
 
 | Evidence | Prior run 42167623969 (artifact 13480096252) | PR #3689 run 42253875317 (artifact 13522845088) |
 | --- | ---: | ---: |
@@ -33,7 +33,7 @@ Compared the structured path/line/type triples from the two **value-free**
 | Exit | 1 | 1 |
 
 The two locations absent in the later report were in
-\`tests/test_nija_game_hosted.py\`; neither was in PR #3689's two changed files.
+`tests/test_nija_game_hosted.py`; neither was in PR #3689's two changed files.
 The 268 current detector classifications are **209 Secret Keyword**, **30
 Basic Auth Credentials**, **23 Private Key**, and **6 Base64 High Entropy
 String**. This proves no newly *reported* candidates in #3689; it is **not**
@@ -47,20 +47,20 @@ error codes, or put credential values/hashes into CI artifacts or tickets.
 ## Additional CI visibility failure
 
 Pre-commit job **128015736961** in the same run showed
-\`pre-commit run --all-files --show-diff-on-failure\` **exit code 3**.
+`pre-commit run --all-files --show-diff-on-failure` **exit code 3**.
 Go hook initialization failed while building pinned dependencies:
 
-\`\`\`text
+```text
 golang.org/x/tools@v0.16.0/internal/tokeninternal/tokeninternal.go:
 invalid array length -delta * delta (constant -256 of type int64)
-\`\`\`
+```
 
-This is an old \`golang.org/x/tools\`/Go toolchain compatibility failure,
+This is an old `golang.org/x/tools`/Go toolchain compatibility failure,
 not a successful pre-commit check. The workflow's
-\`continue-on-error: true\` hid that failure at job level; its report said
+`continue-on-error: true` hid that failure at job level; its report said
 "validation complete" rather than reporting the step outcome.
 
-The narrowly scoped follow-up removes \`continue-on-error\` so every hook
+The narrowly scoped follow-up removes `continue-on-error` so every hook
 failure blocks CI, isolates a compatible Go 1.24.x toolchain for these existing
 hooks (without changing runtime Go or trading dependencies), and emits the
 actual pre-commit outcome in the report. It adds workflow-regression assertions
@@ -78,7 +78,7 @@ is preferable to relying indefinitely on an older Go line.
 - CI run 42253875389: **55 commissioning tests + 75 subtests passed**,
   and **1,035 fail-closed tests + 658 subtests passed**; the documented
   repository CI baseline-ratchet reported no unexpected failures
-  (\`CI_BASELINE_RATCHET_PASSED tests=2917 known=96 resolved=90 unexpected=0\`).
+  (`CI_BASELINE_RATCHET_PASSED tests=2917 known=96 resolved=90 unexpected=0`).
   This is not a blanket all-tests-clean claim.
 - Artifact scanning run 42253875490 still has independent GuardDog and
   Trivy/Grype failures. They are not attributable to the lead handler
