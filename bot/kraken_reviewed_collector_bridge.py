@@ -41,8 +41,18 @@ def compose_authenticated_kraken_collector_sources(
     """
     if independently_reviewed is not True:
         raise ReviewedCollectorCompositionDenied("independent_review_required")
-    if not callable(getattr(broker, "_kraken_private_call", None)):
+    # A duck-typed private-call method is insufficient: the reviewed collector
+    # must share the exact native Kraken broker used by the nonce owner.
+    from bot.broker_manager import KrakenBroker
+    from bot.kraken_authenticated_account_identity_v478 import _broker_account_scope
+    if type(broker) is not KrakenBroker or not callable(getattr(broker, "_kraken_private_call", None)):
         raise ReviewedCollectorCompositionDenied("canonical_broker_required")
+    try:
+        scope = _broker_account_scope(broker)
+    except (AttributeError, ValueError, TypeError):
+        raise ReviewedCollectorCompositionDenied("canonical_broker_scope_required") from None
+    if scope != "platform:kraken":
+        raise ReviewedCollectorCompositionDenied("canonical_broker_scope_required")
     if (not isinstance(approved_api_key_sha256, str)
             or len(approved_api_key_sha256) != 64
             or any(c not in "0123456789abcdef" for c in approved_api_key_sha256)
