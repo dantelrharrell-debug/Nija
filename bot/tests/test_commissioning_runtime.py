@@ -103,6 +103,88 @@ class CommissioningRuntimeTests(unittest.TestCase):
                 with self.assertRaises(AdmissionDenied):
                     adapter.consume(SimpleNamespace(**changed))
 
+    def test_overlapping_consumers_only_consume_one_permission(self) -> None:
+        """Hold the winner inside durable consumption until the loser arrives.
+
+        The second caller signals either at lock entry (correct ordering) or
+        inside the durable gate (old ordering). Neither schedule uses sleeps:
+        both calls overlap while the first gate call is deliberately paused.
+        """
+        adapter = self.adapter(enabled=True)
+        first_in_gate = threading.Event()
+        second_progress = threading.Event()
+        release_first = threading.Event()
+        real_lock = threading.Lock()
+        outcomes = {}
+        calls = []
+
+        class ObservedLock:
+            """Observe contention without changing mutual exclusion."""
+
+            def __enter__(self) -> ObservedLock:
+                if threading.current_thread().name == "second-consumer":
+                    second_progress.set()
+                real_lock.acquire()
+                return self
+
+            def __exit__(self, *_exc: object) -> None:
+                real_lock.release()
+
+        def consume_permission(candidate: Candidate, plan: StartupVerificationPlan) -> None:
+            calls.append((candidate, plan))
+            if threading.current_thread().name == "first-consumer":
+                first_in_gate.set()
+                if not release_first.wait(timeout=10):
+                    raise AssertionError("first consumer was not released")
+            else:
+                # With consume-before-lock, the loser reaches this point
+                # before it can observe that the transport is already armed.
+                second_progress.set()
+
+        def consume(name: str) -> None:
+            try:
+                adapter.consume(self.request)
+                outcomes[name] = "admitted"
+            except Exception as error:
+                outcomes[name] = error
+
+        adapter._lock = ObservedLock()
+        self.gate.consume_first_trade = consume_permission
+        threads = [
+            threading.Thread(target=consume, args=(name,), name=name, daemon=True)
+            for name in ("first-consumer", "second-consumer")
+        ]
+        try:
+            threads[0].start()
+            self.assertTrue(first_in_gate.wait(timeout=5), "winner never reached durable gate")
+            threads[1].start()
+            self.assertTrue(second_progress.wait(timeout=5), "loser never reached gate or lock")
+        finally:
+            release_first.set()
+            for thread in threads:
+                if thread.ident is not None:
+                    thread.join(timeout=5)
+            self.assertFalse(any(thread.is_alive() for thread in threads), "consumer thread leaked")
+
+        self.assertEqual(calls, [(self.candidate, self.plan)])
+        self.assertEqual(outcomes["first-consumer"], "admitted")
+        loser = outcomes["second-consumer"]
+        self.assertIsInstance(loser, AdmissionDenied)
+        self.assertEqual(str(loser), "commissioning_transport_attempt_already_armed")
+        self.assertTrue(adapter._armed)
+
+        # Validate the winner's single armed attempt locally; no broker call.
+        exact = self.plan.order_parameters("entry")
+        exact.update({
+            "close[ordertype]": "stop-loss-limit",
+            "close[price]": self.plan.stop_trigger,
+            "close[price2]": self.plan.stop_limit,
+        })
+        adapter.validate_kraken_order_request("AddOrder", exact)
+        self.assertFalse(adapter._armed)
+        with self.assertRaisesRegex(AdmissionDenied, "commissioning_transport_attempt_not_armed"):
+            adapter.validate_kraken_order_request("AddOrder", exact)
+
     def test_kraken_transport_payload_is_bound_to_exact_plan(self):
         adapter = self.adapter(enabled=True)
         exact = self.plan.order_parameters("entry")
