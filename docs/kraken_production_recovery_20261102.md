@@ -6,6 +6,37 @@ Production is **not independently certified**. This change improves denial
 diagnostics and safe investigation; it does not supply missing authorities,
 install a collector, enable orders, merge, or deploy.
 
+### Issue #3592: offline ledger preflight hardening
+
+The local SQLite preflight now reads integrity, schema, totals and scoped rows
+inside one read-only transaction. It releases that snapshot before checking
+`data_version`, so a concurrent commit is reported as
+`ledger_changed_during_readonly_audit` rather than silently mixing observations.
+`counts.pending_kraken_closes_total` counts all rows in that table, including
+other scopes and non-pending states; the existing
+`counts.pending_kraken_closes` remains strictly Kraken, `platform:kraken`,
+`state='pending'`. Neither count proves exchange reconciliation or resolution.
+Tests use synthetic local databases only.
+
+This is engineering evidence, **not completion of the production audit**.
+No current Render release, platform account identity, production ledger count,
+backup/restore receipt or native protective order mapping was independently
+verified in this session. The historical runs and deployment references below
+must not be treated as fresh evidence. Source digest pins are updated for review;
+the committed baseline remains unapproved with null release/deployment pins.
+Existing protected approvals are not refreshed or granted by this change.
+
+Before any authorized production read, require the separately reviewed exact
+live deployment/source baseline and bounded private-read budget described in
+`render_recovery_external_approval.md`. Use only the existing canonical nonce
+owner. Retain confidential source receipts privately and publish only counts,
+fixed reason codes and immutable deployment/commit, run/artifact and review
+references. Reconcile current pending closes and exchange-confirmed native
+stop/take-profit mappings with independently scoped ledger evidence; syntactically
+valid local order IDs are not broker confirmation. Keep all thirteen collector
+sources uncertified until their respective evidence is independently verified.
+Do not close #3592 on the basis of offline tests or workflow success.
+
 ### Baseline reconciliation follow-up
 
 The release branch head is `00be8a441a78bdd9043b8744d4591ed804a58182`.

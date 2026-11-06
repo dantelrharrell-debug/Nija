@@ -1,0 +1,34 @@
+# REVIEW/PLAN ONLY. This is a separate NIJA educational sandbox service.
+# Target workspace: Nija (tea-d3qjmmc9c44c73cqvpug).
+# The workspace currently has an existing service suspended for billing.
+# Paid starter compute + 1 GB persistent disk require separate cost approval.
+# This file must NEVER be imported by live trading/billing deploy pipelines.
+services:
+  - type: web
+    name: nija-iq72-payment-sandbox
+    runtime: docker
+    plan: starter
+    region: oregon
+    numInstances: 1
+    autoDeployTrigger: off
+    dockerfilePath: ./game_sandbox/Dockerfile.staging
+    dockerContext: ./game_sandbox
+    healthCheckPath: /healthz
+    disk:
+      name: nija-iq72-private-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NIJA_IQ_SANDBOX_ENABLED
+        value: "false"
+      - key: NIJA_IQ_SANDBOX_GAME
+        value: published72
+      - key: NIJA_IQ_SANDBOX_DATABASE
+        value: /var/data/trading_iq_sandbox.sqlite3
+      # Public test-only identities; no API keys or webhook secrets in source.
+      - key: NIJA_IQ_SANDBOX_PRICE_ID
+        value: price_1UYToJRS5Ezp77RQVkx96eS5
+      - key: NIJA_IQ_SANDBOX_PRODUCT_ID
+        value: prod_nija_iq72_sandbox_v1
+      - key: NIJA_IQ_SANDBOX_MANIFEST_SHA256
+        value: fe6b84326e9c9401a7f3f658d4c29441e3505ee52b94d615b991a88a610f1c90

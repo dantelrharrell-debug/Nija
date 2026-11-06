@@ -148,7 +148,9 @@ class CommissioningRuntimeTests(unittest.TestCase):
             except Exception as error:
                 outcomes[name] = error
 
-        adapter._lock = ObservedLock()
+        # Admission is serialized by _consumer_lock, not the short-lived
+        # transport _lock. Observe the actual contention boundary.
+        adapter._consumer_lock = ObservedLock()
         self.gate.consume_first_trade = consume_permission
         threads = [
             threading.Thread(target=consume, args=(name,), name=name, daemon=True)
@@ -213,6 +215,87 @@ class CommissioningRuntimeTests(unittest.TestCase):
             adapter.validate_kraken_order_request(
                 "AddOrder", self.plan.order_parameters("entry"),
             )
+
+    def test_slow_admission_does_not_block_exit_or_authorize_entry(self):
+        for denied in (False, True):
+            with self.subTest(admission_denied=denied):
+                adapter = self.adapter(enabled=True)
+                entered = threading.Event()
+                release = threading.Event()
+                exit_done = threading.Event()
+                buy_done = threading.Event()
+                outcomes = []
+                errors = []
+
+                def slow_admission(candidate, plan):
+                    entered.set()
+                    if not release.wait(5):
+                        raise RuntimeError("test_admission_release_timeout")
+                    if denied:
+                        raise AdmissionDenied("test_admission_denied")
+                    self.consume(candidate, plan)
+
+                def consume():
+                    try:
+                        adapter.consume(self.request)
+                        outcomes.append("admitted")
+                    except AdmissionDenied:
+                        outcomes.append("denied")
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                def validate_sell():
+                    try:
+                        adapter.validate_kraken_order_request("AddOrder", {"type": "sell"})
+                        exit_done.set()
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                def validate_buy():
+                    try:
+                        with self.assertRaisesRegex(AdmissionDenied, "not_armed"):
+                            adapter.validate_kraken_order_request(
+                                "AddOrder", self.plan.order_parameters("entry"),
+                            )
+                        buy_done.set()
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                self.gate.consume_first_trade = slow_admission
+                consumer = threading.Thread(target=consume)
+                validators = [threading.Thread(target=validate_sell), threading.Thread(target=validate_buy)]
+                consumer.start()
+                try:
+                    self.assertTrue(entered.wait(2))
+                    for validator in validators:
+                        validator.start()
+                    # These must finish while admission remains explicitly paused.
+                    # No elapsed-time race or sleep determines the interleaving.
+                    self.assertTrue(exit_done.wait(2), "protective exit waited for admission")
+                    self.assertTrue(buy_done.wait(2), "unauthorized buy waited for admission")
+                finally:
+                    release.set()
+                    consumer.join(5)
+                    for validator in validators:
+                        if validator.ident is not None:
+                            validator.join(5)
+                self.assertFalse(consumer.is_alive())
+                self.assertTrue(all(not validator.is_alive() for validator in validators))
+                self.assertEqual(errors, [])
+                self.assertEqual(outcomes, ["denied" if denied else "admitted"])
+                if denied:
+                    with self.assertRaisesRegex(AdmissionDenied, "not_armed"):
+                        adapter.validate_kraken_order_request("AddOrder", self.plan.order_parameters("entry"))
+                else:
+                    exact = self.plan.order_parameters("entry")
+                    exact.update({
+                        "close[ordertype]": "stop-loss-limit",
+                        "close[price]": self.plan.stop_trigger,
+                        "close[price2]": self.plan.stop_limit,
+                    })
+                    adapter.validate_kraken_order_request("AddOrder", exact)
+                    with self.assertRaisesRegex(AdmissionDenied, "not_armed"):
+                        adapter.validate_kraken_order_request("AddOrder", exact)
 
     def test_provider_composition_is_complete_and_collects_once(self):
         calls = {field: 0 for field in REQUIRED}
@@ -307,6 +390,35 @@ class CommissioningRuntimeTests(unittest.TestCase):
             install_commissioning_dispatch_adapter(
                 mismatched, adapter, broker, activation_reviewed=True,
             )
+
+    def test_install_denies_missing_or_invalid_ledger_without_side_effects(self):
+        adapter = self.adapter(enabled=True)
+        broker = KrakenBroker.__new__(KrakenBroker)
+        broker.broker_type = BrokerType.KRAKEN
+        broker.account_type = "platform"
+        broker.user_id = None
+        broker._gateway_url = ""
+        broker._gateway_only_mode = False
+        for ledger in (None, 0, ""):
+            with self.subTest(ledger=ledger):
+                pipeline = SimpleNamespace(
+                    _dispatch=lambda *_: None,
+                    _account_order_admission=SimpleNamespace(
+                        collector=self.gate.collector,
+                        fence=self.gate.fence,
+                        ledger=ledger,
+                    ),
+                    _trusted_entry_candidate_provider=adapter.candidate_for_request,
+                )
+                with self.assertRaisesRegex(
+                    CommissioningCompositionDenied,
+                    "canonical_entry_admission_binding_mismatch",
+                ):
+                    install_commissioning_dispatch_adapter(
+                        pipeline, adapter, broker, activation_reviewed=True,
+                    )
+                self.assertIsNone(getattr(pipeline, "_commissioning_dispatch_adapter", None))
+                self.assertIsNone(getattr(broker, "_commissioning_order_request_validator", None))
 
     def test_broker_manager_enforces_exact_entry_before_gateway_or_api_calls(self):
         adapter = self.adapter(enabled=True)

@@ -92,7 +92,7 @@ jobs:
 
           all_sources_ok = all((
               checked_file('PREFLIGHT_SOURCE', '/app/bot/kraken_sqlite_readonly_preflight_v488.py',
-                           '480e01a7ee4326ee9fc85b202f0fafb413f733cd035d9d957142488d69a05452'),
+                           '89a1213bb4048109b3722b3d6f80b3882a8aa8c9975ff789e868e9dd7b8845ae'),
               checked_file('HISTORY_SOURCE', '/app/bot/kraken_live_history_recovery.py',
                            '02d382407fe6f71fd8cb36190c5c87fcdb0f79e6ef4f62d597e633343e99e4df'),
               checked_file('EXIT_OBSERVER_SOURCE', '/app/bot/universal_broker_exit_supervisor_patch.py',

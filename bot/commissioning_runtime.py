@@ -219,6 +219,10 @@ class CommissioningDispatchAdapter:
         self.enabled = enabled
         self._armed = False
         self._lock = threading.Lock()
+        # Consumers may wait on admission I/O, but transport validators must
+        # never wait on that work. Only consumers acquire this outer lock;
+        # _lock protects the short in-memory _armed transitions below.
+        self._consumer_lock = threading.Lock()
         self._terminal_broker: Any = None
 
     def __call__(self, method: str, params: Mapping[str, Any]) -> None:
@@ -286,13 +290,17 @@ class CommissioningDispatchAdapter:
         candidate = self.candidate_for_request(request)
         if type(candidate) is not Candidate:
             raise AdmissionDenied("commissioning_candidate_invalid")
-        # Serialize the durable one-shot consumption with transport arming.
-        # An already armed attempt must never consume a second approval.
-        with self._lock:
-            if self._armed:
-                raise AdmissionDenied("commissioning_transport_attempt_already_armed")
+        # Serialize consumers through durable consumption AND transport arming.
+        # Never hold the transport-state lock across admission/database I/O.
+        # The durable gate remains authoritative after transport disarms and
+        # across adapter instances/restarts; a failed gate never arms transport.
+        with self._consumer_lock:
+            with self._lock:
+                if self._armed:
+                    raise AdmissionDenied("commissioning_transport_attempt_already_armed")
             self.gate.consume_first_trade(candidate, self.plan)
-            self._armed = True
+            with self._lock:
+                self._armed = True
 
 
 @dataclass(frozen=True)
@@ -393,10 +401,16 @@ def install_commissioning_dispatch_adapter(
         raise CommissioningCompositionDenied("commissioning_adapter_already_installed")
     admission = getattr(pipeline, "_account_order_admission", None)
     candidate_provider = getattr(pipeline, "_trusted_entry_candidate_provider", None)
+    admission_ledger = getattr(admission, "ledger", None)
+    gate_ledger = getattr(adapter.gate, "ledger", None)
     if (admission is None
             or getattr(admission, "collector", None) is not adapter.gate.collector
             or getattr(admission, "fence", None) is not adapter.gate.fence
-            or Path(getattr(admission, "ledger", "")).resolve() != adapter.gate.ledger.resolve()
+            or not isinstance(admission_ledger, (str, Path))
+            or not admission_ledger
+            or not isinstance(gate_ledger, (str, Path))
+            or not gate_ledger
+            or Path(admission_ledger).resolve() != Path(gate_ledger).resolve()
             or candidate_provider is not adapter.candidate_for_request):
         raise CommissioningCompositionDenied("canonical_entry_admission_binding_mismatch")
     if (not callable(getattr(broker, "_kraken_private_call", None))

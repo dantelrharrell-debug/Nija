@@ -67,6 +67,7 @@ def inspect_kraken_ledger(
         )
         connection.execute("PRAGMA query_only=ON")
         version_before = connection.execute("PRAGMA data_version").fetchone()[0]
+        connection.execute("BEGIN")
         if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
             issues.append("sqlite_integrity_unverified")
             return report
@@ -138,6 +139,7 @@ def inspect_kraken_ledger(
                     issues.append("exchange_protective_order_ids_unverified")
 
         if "pending_kraken_closes" in counts:
+            counts["pending_kraken_closes_total"] = counts["pending_kraken_closes"]
             pending = int(connection.execute(
                 "SELECT COUNT(*) FROM pending_kraken_closes "
                 "WHERE broker='kraken' AND account_scope='platform:kraken' "
@@ -147,6 +149,7 @@ def inspect_kraken_ledger(
             if pending:
                 issues.append("pending_kraken_closes_require_reconciliation")
 
+        connection.execute("COMMIT")
         if connection.execute("PRAGMA data_version").fetchone()[0] != version_before:
             issues.append("ledger_changed_during_readonly_audit")
     except (sqlite3.Error, OSError, ValueError, TypeError):

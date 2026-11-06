@@ -70,7 +70,8 @@ class GamePaymentTests(unittest.TestCase):
             game.validate_attempt(entries)
 
     def test_checkout_server_sets_price_and_metadata(self):
-        url, proof = game.create_checkout(self.stripe, self.decisions, game.PUBLIC_ORIGIN)
+        url, proof, checkout_id = game.create_checkout(self.stripe, self.decisions, game.PUBLIC_ORIGIN)
+        self.assertEqual(checkout_id, SESSION_ID)
         self.assertTrue(url.startswith("https://checkout.stripe.com/"))
         self.assertEqual(len(proof), 64)
         self.assertEqual(self.stripe.recorded["mode"], "payment")
@@ -124,14 +125,14 @@ class GamePaymentTests(unittest.TestCase):
     def test_gateway_secret_and_feature_flag(self):
         with patch.dict(os.environ, {"NIJA_GAME_GATEWAY_TOKEN": "t" * 64,
                                       "NIJA_GAME_REPORTS_ENABLED": "false",
-                                      "STRIPE_SECRET_KEY": "sk_live_mock"}):
+                                      "STRIPE_SECRET_KEY": "sk_live_mock"}):  # pragma: allowlist secret - existing synthetic test key, no provider calls
             self.assertFalse(game.enabled())
             self.assertFalse(game.trusted_gateway({}))
             self.assertFalse(game.trusted_gateway({"X-NIJA-Game-Gateway": "wrong"}))
             self.assertTrue(game.trusted_gateway({"X-NIJA-Game-Gateway": "t" * 64}))
         with patch.dict(os.environ, {"NIJA_GAME_GATEWAY_TOKEN": "",
                                       "NIJA_GAME_REPORTS_ENABLED": "true",
-                                      "STRIPE_SECRET_KEY": "sk_live_mock"}):
+                                      "STRIPE_SECRET_KEY": "sk_live_mock"}):  # pragma: allowlist secret - existing synthetic test key, no provider calls
             self.assertFalse(game.enabled())
 
 
