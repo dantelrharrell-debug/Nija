@@ -126,12 +126,26 @@ jobs:
       with:
         python-version: '3.11'
 
+    - name: Validate baseline reporting regressions
+      run: |
+        set -euo pipefail
+        pip install 'detect-secrets==1.5.0' 'pytest==8.2.2'
+        NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -m pytest -q tests/test_baseline_secret_scan_reporting.py
+
     - name: Enforce baseline-aware scanning
       run: |
         set -euo pipefail
-        pip install 'detect-secrets==1.5.0'
         detect-secrets --version
-        git ls-files -z | xargs -0 -r detect-secrets-hook --baseline .secrets.baseline
+        python scripts/run_baseline_secret_scan.py --report secret-scan-report.json
+
+    - name: Retain value-free secret scan evidence
+      if: always()
+      uses: actions/upload-artifact@v4.4.3
+      with:
+        name: secret-scan-report
+        path: secret-scan-report.json
+        if-no-files-found: error
+        retention-days: 7
 
   bandit-scan:
     name: Python Security Linting (Bandit)

@@ -25,6 +25,30 @@ review branch. It defines exactly one Oregon web service with:
 - A pinned 72-decision published-game manifest and a fail-closed entitlement DB.
 - No production Stripe secrets, no test secrets in Git, no trading credentials.
 
+### Non-root image and disk ownership
+
+The image now starts directly as UID/GID **10001:10001**, including its
+launcher. Startup never runs chown, invokes gosu, or elevates privileges.
+Disabled health can run without a disk and still exposes no payment routes.
+Enabled startup requires the exact configured database path
+`/var/data/trading_iq_sandbox.sqlite3`, an actual mount at `/var/data`, ownership
+by the runtime UID, directory permissions **0700**, and a successful temporary
+write/fsync probe. A missing, shared, incorrectly owned or read-only mount
+denies startup; no disposable-storage fallback is permitted.
+
+Before enabling this staging service, establish the dedicated disk's ownership
+and permissions through an approved platform provisioning mechanism and verify
+them under UID 10001. Image-layer ownership does not establish mounted-disk
+ownership. Platform support for provisioning the actual disk is still unverified;
+keep the service disabled if the required ownership cannot be established.
+Do not use root runtime overrides or broad write permissions to make it start.
+No existing Render disk is changed by this source correction.
+
+The sandbox-image CI job rehearses real non-root startup, root-override denial,
+unprovisioned/missing/read-only mount denial, SQLite persistence across two
+processes, and disabled HTTP behavior using a disposable Docker volume with no
+provider credentials and no network. It does not certify a live Render mount.
+
 **Cost**: Render Starter compute and persistent disk are billable. An operator
 must review provider pricing and explicitly authorize the exact costs before
 approving the Blueprint plan. Simply selecting the workspace is not cost
