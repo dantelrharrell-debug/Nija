@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'game_sandbox/**'
+      - 'nija_game_*.py'
+      - 'tests/test_nija_game*.py'
       - 'tests/test_game_sandbox.py'
       - 'tests/fixtures/ionos_served_ui_reference.mjs'
       - 'tests/test_game_sandbox_source_pin.py'
@@ -34,6 +36,11 @@ jobs:
           node-version: '22'
       - run: pip install -r game_sandbox/requirements.txt pytest bandit detect-secrets pip-audit
       - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox.py
+      - name: Hosted checkout reservations, abuse controls and customer access
+        run: python -m pytest tests/test_nija_game_billing.py tests/test_nija_game_hosted.py tests/test_nija_game_checkout_protections.py -q
+      - run: python -m py_compile nija_game_billing.py nija_game_hosted_routes.py nija_game_checkout_store.py
+      - run: python -m bandit -q nija_game_billing.py nija_game_hosted_routes.py nija_game_checkout_store.py
+      - run: detect-secrets-hook nija_game_billing.py nija_game_hosted_routes.py nija_game_checkout_store.py tests/test_nija_game_checkout_protections.py
       - run: python -m pytest tests/test_game_sandbox.py -q
       - run: node --test game_sandbox/ionos_parity.test.mjs
       - run: node --test game_sandbox/preview_export_parity.test.mjs

@@ -129,12 +129,16 @@ def validate_price(stripe: Any) -> None:
         raise RuntimeError("game_price_identity_mismatch")
 
 
-def create_checkout(stripe: Any, decisions: Any, origin: str, *, hosted: bool = False) -> tuple[str, str, str]:
+def create_checkout(stripe: Any, decisions: Any, origin: str, *, hosted: bool = False,
+                    proof: str | None = None, idempotency_key: str | None = None) -> tuple[str, str, str]:
     if origin not in ALLOWED_ORIGINS:
         raise ValueError("untrusted_origin")
     attempt = validate_attempt(decisions)
     validate_price(stripe)
-    proof = secrets.token_hex(32)
+    proof = proof or secrets.token_hex(32)
+    if HEX.fullmatch(proof) is None:
+        raise ValueError("invalid_proof")
+    options = {"idempotency_key": idempotency_key} if idempotency_key else {}
     checkout = stripe.checkout.Session.create(
         mode="payment",
         line_items=[{"price": PRICE_ID, "quantity": 1}],
@@ -145,6 +149,7 @@ def create_checkout(stripe: Any, decisions: Any, origin: str, *, hosted: bool = 
                     else origin + "/?checkout=cancelled"),
         metadata={"nija_offer": OFFER, "nija_product": PRODUCT_ID,
                   "nija_version": "1", "attempt": attempt, "proof_sha256": proof_hash(proof)},
+        **options,
     )
     url = field(checkout, "url", "")
     parsed = urlparse(url)

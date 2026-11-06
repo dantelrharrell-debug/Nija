@@ -45,6 +45,7 @@ def test_enabled_health_bypasses_persistent_api_limit(monkeypatch, tmp_path):
     from types import SimpleNamespace
     from game_sandbox import app as sandbox_http
 
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_INGRESS_MODE", "direct")
     path = tmp_path / "staging_limits.sqlite3"
     with sqlite3.connect(path) as conn:
         conn.execute(

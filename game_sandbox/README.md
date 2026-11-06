@@ -93,3 +93,13 @@ Provider references: https://render.com/docs/disks and https://render.com/docs/w
 Browser evidence: completed the publicly served Standard/Beginner game through all 72 Hold decisions in a 1363x936 desktop viewport. Completion showed Trading IQ 50 and six challenge scores of 50, matching server replay. The report remained locked with Adults 18+ Only — $1 — Coming Soon and no payment button. Page width was 1359px within the 1363px viewport. This is desktop flow evidence, not phone/tablet or preview-report layout certification.
 
 The existing prebuild copy-policy check required shortening one adult Academy lesson caption to “Advanced Investing”. The linked lesson ID, age group, score formulas and decision feedback are unchanged; the Academy itself is not edited.
+
+### Required ingress review before enabling
+
+Set `NIJA_IQ_SANDBOX_INGRESS_MODE` explicitly: `direct` only with verified direct
+socket clients, or `proxy` with `NIJA_IQ_SANDBOX_TRUSTED_PROXY_CIDRS` restricted
+to the actual peer. The proxy must strip incoming X-Forwarded-For and overwrite
+it with one verified client address. Unknown peers, missing or multiple addresses
+fail closed; never infer identity from Origin or blindly choose the leftmost
+forwarded value. Without that proof leave staging disabled. See
+[checkout corrections and release review](../docs/trading_iq_checkout_corrections_20261106.md).

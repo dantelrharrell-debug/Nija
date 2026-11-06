@@ -1,21 +1,35 @@
 """Five-round report fidelity and guarded hosted checkout tests."""
 import os
 import unittest
+import tempfile
+from pathlib import Path
+from nija_game_checkout_store import OWNER_COOKIE
 from unittest.mock import patch
 from flask import Flask
 from nija_game_billing import cookie_name
 from nija_game_report_scoring import build_report
 from nija_game_hosted_routes import register_hosted_routes
 
-SID="cs_live_0123456789ABCDEFGHIJKLMNOP"
+SID="cs_live_0123456789ABCDEFGHIJKLMNOP"  # pragma: allowlist secret -- synthetic checkout ID
 ATTEMPT="l,20,2;s,20,2;w,0,0;w,0,0;l,20,2"
 ORIGIN="https://nija-trading-challenge.vercel.app"
 
 class Tests(unittest.TestCase):
  def setUp(self):
+  self.directory = tempfile.TemporaryDirectory()
+  self.addCleanup(self.directory.cleanup)
+  path = Path(self.directory.name) / "checkout.sqlite3"
+  path.touch(mode=0o600)
+  config = patch.dict(os.environ, {"NIJA_GAME_INGRESS_MODE": "direct", "NIJA_GAME_CHECKOUT_DATABASE": str(path), "NIJA_GAME_CHECKOUT_MOUNT": self.directory.name})
+  mount = patch("nija_game_checkout_store.ismount", return_value=True)
+  mount.start()
+  self.addCleanup(mount.stop)
+  config.start()
+  self.addCleanup(config.stop)
   app=Flask(__name__)
   register_hosted_routes(app)
   self.client=app.test_client()
+  self.client.set_cookie(OWNER_COOKIE,"b"*64)
 
  def test_canonical_report(self):
   r=build_report(ATTEMPT)
@@ -24,12 +38,12 @@ class Tests(unittest.TestCase):
   with self.assertRaises(ValueError):build_report("w,0,0")
 
  def test_flag_blocks_checkout(self):
-  with patch.dict(os.environ,{"NIJA_GAME_BROWSER_CHECKOUT_ENABLED":"false","STRIPE_SECRET_KEY":"sk_live_mock"}):
+  with patch.dict(os.environ,{"NIJA_GAME_BROWSER_CHECKOUT_ENABLED":"false","STRIPE_SECRET_KEY":"sk_live_mock"}):  # pragma: allowlist secret -- synthetic test key
    self.assertFalse(self.client.get("/game/status").json["checkout_available"])
    self.assertEqual(self.client.post("/game/checkout/start",headers={"Origin":ORIGIN},data={"adult":"yes","attempt":ATTEMPT}).status_code,503)
 
  def test_origin_age_gate_and_secure_cookie(self):
-  with patch.dict(os.environ,{"NIJA_GAME_BROWSER_CHECKOUT_ENABLED":"true","STRIPE_SECRET_KEY":"sk_live_mock"}):
+  with patch.dict(os.environ,{"NIJA_GAME_BROWSER_CHECKOUT_ENABLED":"true","STRIPE_SECRET_KEY":"sk_live_mock"}):  # pragma: allowlist secret -- synthetic test key
    self.assertEqual(self.client.post("/game/checkout/start",headers={"Origin":"https://attacker.example"},data={"adult":"yes","attempt":ATTEMPT}).status_code,403)
    self.assertEqual(self.client.post("/game/checkout/start",headers={"Origin":ORIGIN},data={"attempt":ATTEMPT}).status_code,403)
    with patch("nija_game_hosted_routes.stripe_client",return_value=object()),patch("nija_game_hosted_routes.create_checkout",return_value=("https://checkout.stripe.com/c/pay/demo","a"*64,SID)):
@@ -40,7 +54,7 @@ class Tests(unittest.TestCase):
   self.assertNotEqual(cookie_name(SID),cookie_name(SID+"2"))
 
  def test_report_requires_proof_even_with_session(self):
-  with patch.dict(os.environ,{"STRIPE_SECRET_KEY":"sk_live_mock"}):
+  with patch.dict(os.environ,{"STRIPE_SECRET_KEY":"sk_live_mock"}):  # pragma: allowlist secret -- synthetic test key
    self.assertEqual(self.client.get("/game/results?session_id="+SID).status_code,403)
    self.client.set_cookie(cookie_name(SID),"a"*64)
    with patch("nija_game_hosted_routes.stripe_client",return_value=object()),patch("nija_game_hosted_routes.verify_paid_attempt",return_value=ATTEMPT):
