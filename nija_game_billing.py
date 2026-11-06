@@ -247,7 +247,8 @@ def register_game_routes(app: Any) -> None:
         try:
             attempt = verify_paid_attempt(
                 stripe_client(), request.args.get("session_id"),
-                request.cookies.get(cookie_name(request.args.get("session_id"))))
+                request.cookies.get(cookie_name(request.args.get("session_id")))
+                or request.cookies.get("__Host-nija-report"))
         except ValueError:
             return jsonify({"error": "verified_purchase_required"}), 403
         except Exception:
