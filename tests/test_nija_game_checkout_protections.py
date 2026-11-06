@@ -383,40 +383,54 @@ def test_browser_confirmation_redirect_and_replay(setup, monkeypatch):
     stripe._create = provider
     monkeypatch.setattr(routes, "stripe_client", lambda: stripe)
     monkeypatch.setattr(routes, "create_checkout", create_checkout)
+    import base64
     posts, stripe_gets = [], []
     http = app.test_client(use_cookies=False)
 
-    def serve(route):
-        req = route.request
-        parsed = urlsplit(req.url)
-        if parsed.netloc == "game.nijaaitrading.com":
-            route.fulfill(content_type="text/html", body=(
-                '<form method="post" action="' + BILLING_ORIGIN + '/game/checkout/start">'
-                '<input name="adult" value="yes"><input name="attempt" value="' + ATTEMPT + '">'
-                '<button>Optional report</button></form>'))
-        elif parsed.netloc == "nija-billing-api.onrender.com":
-            if req.method == "POST":
-                posts.append(req.all_headers())
-            result = http.open(req.url, method=req.method, headers=req.all_headers(), data=req.post_data)
-            route.fulfill(status=result.status_code, headers=dict(result.headers), body=result.data)
-        elif parsed.netloc == "checkout.stripe.com":
-            stripe_gets.append(req)
-            route.fulfill(content_type="text/html", body="<title>Stripe fixture</title>")
-        else:
-            raise AssertionError("Unexpected browser request: " + req.url)
-
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=os.getenv("NIJA_TEST_CHROMIUM"))
-        context = browser.new_context()
-        context.route("**/*", serve)
+        context = browser.new_context(service_workers="block")
         page = context.new_page()
+        # Playwright route() only intercepts the first URL in a redirect chain.
+        # CDP Fetch intercepts every hop, including the 303 target: no Stripe I/O.
+        cdp = context.new_cdp_session(page)
+
+        def serve(event):
+            req = event["request"]
+            parsed = urlsplit(req["url"])
+            headers = {k.lower(): v for k, v in req["headers"].items()}
+            status, response_headers = 200, {"Content-Type": "text/html"}
+            if parsed.netloc in ("game.nijaaitrading.com", "attacker.example"):
+                body = ('<form method="post" action="' + BILLING_ORIGIN + '/game/checkout/start">'
+                        '<input name="adult" value="yes"><input name="attempt" value="' + ATTEMPT + '">'
+                        '<button>Optional report</button></form>').encode()
+            elif parsed.netloc == "nija-billing-api.onrender.com":
+                if req["method"] == "POST":
+                    posts.append(headers)
+                result = http.open(req["url"], method=req["method"], headers=headers, data=req.get("postData"))
+                status, response_headers, body = result.status_code, dict(result.headers), result.data
+            elif parsed.netloc == "checkout.stripe.com":
+                stripe_gets.append(headers)
+                body = b"<title>Stripe fixture</title>"
+            else:
+                # Fail closed without ever continuing an unexpected network call.
+                cdp.send("Fetch.failRequest", {"requestId": event["requestId"], "errorReason": "BlockedByClient"})
+                raise AssertionError("Unexpected browser request: " + req["url"])
+            cdp.send("Fetch.fulfillRequest", {
+                "requestId": event["requestId"], "responseCode": status,
+                "responseHeaders": [{"name": k, "value": v} for k, v in response_headers.items()],
+                "body": base64.b64encode(body).decode(),
+            })
+
+        cdp.on("Fetch.requestPaused", serve)
+        cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*"}]})
         page.goto(ORIGIN)
         page.get_by_role("button", name="Optional report").click()
         page.get_by_role("button", name="Continue to secure checkout — $1").click()
         page.wait_for_url("https://checkout.stripe.com/**")
         assert posts[0]["origin"] == ORIGIN
         assert posts[1]["origin"] == BILLING_ORIGIN
-        assert "referer" not in stripe_gets[0].all_headers()
+        assert "referer" not in stripe_gets[0]
         assert provider.call_count == 1
         # Browser-owned resubmission after returning to the free game reuses the
         # same session and receipt, without a second provider session creation.
@@ -426,4 +440,9 @@ def test_browser_confirmation_redirect_and_replay(setup, monkeypatch):
         assert provider.call_count == 1
         assert len(stripe_gets) == 2
         assert any(c["name"] == cookie_name(SID) for c in context.cookies(BILLING_ORIGIN))
+        page.goto("https://attacker.example")
+        page.get_by_role("button", name="Optional report").click()
+        assert "origin_not_allowed" in page.content()
+        assert posts[-1]["origin"] == "https://attacker.example"
+        assert provider.call_count == 1 and len(stripe_gets) == 2
         browser.close()
