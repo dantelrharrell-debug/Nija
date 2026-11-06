@@ -29,9 +29,18 @@ def register_hosted_routes(app: Any) -> None:
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["X-Frame-Options"] = "DENY"
             if response.mimetype == "text/html":
+                checkout_form = request.endpoint == "hosted_game_checkout"
+                # no-referrer makes form POST Origin opaque in browsers. Keep the
+                # strict allowlist below; disclose referrers only within this origin.
+                if checkout_form:
+                    response.headers["Referrer-Policy"] = "same-origin"
+                # CSP applies to the form's redirect chain in some browsers too.
+                # Match only the HTTPS Stripe hosts validated by create_checkout.
+                form_action = ("'self' https://checkout.stripe.com https://*.checkout.stripe.com"
+                               if checkout_form else "'self'")
                 response.headers["Content-Security-Policy"] = (
                     "default-src 'none'; style-src 'unsafe-inline'; "
-                    "base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+                    "base-uri 'none'; frame-ancestors 'none'; form-action " + form_action)
         return response
 
     @app.get("/game/status")

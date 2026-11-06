@@ -55,15 +55,26 @@ class CheckoutStore:
     def __init__(self, path: str):
         target = Path(path)
         mount = Path(os.getenv("NIJA_GAME_CHECKOUT_MOUNT", ""))
+        # Check raw components before resolve: resolving first hides traversal and
+        # symlinks. Configuration must name an existing private journal on the disk.
+        if ".." in target.parts or ".." in mount.parts:
+            raise CheckoutDenied("dedicated_checkout_mount_required")
+        if any(p.is_symlink() for p in [target, *target.parents, mount, *mount.parents]):
+            raise CheckoutDenied("private_checkout_storage_required")
+        try:
+            resolved_target = target.resolve(strict=True)
+            resolved_mount = mount.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise CheckoutDenied("private_checkout_storage_required") from error
         if (not mount.is_absolute() or mount == Path("/") or not ismount(mount)
-                or mount.is_symlink() or not target.is_relative_to(mount)):
+                or not resolved_target.is_relative_to(resolved_mount)):
             raise CheckoutDenied("dedicated_checkout_mount_required")
         if not target.is_absolute() or not target.is_file() or any(p.is_symlink() for p in [target, *target.parents]):
             raise CheckoutDenied("private_checkout_storage_required")
         if (target.stat().st_uid != os.geteuid() or target.stat().st_mode & 0o077
                 or target.parent.stat().st_uid != os.geteuid() or target.parent.stat().st_mode & 0o077):
             raise CheckoutDenied("private_checkout_storage_required")
-        self.path = str(target)
+        self.path = str(resolved_target)
         with self.db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS checkout_limits (bucket TEXT PRIMARY KEY, started INTEGER, count INTEGER)")
             db.execute("""CREATE TABLE IF NOT EXISTS checkout_reservations (

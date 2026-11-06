@@ -23,7 +23,7 @@ permissions:
   contents: read
 jobs:
   sandbox:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,7 +34,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: pip install -r game_sandbox/requirements.txt pytest bandit detect-secrets pip-audit
+      - run: pip install -r game_sandbox/requirements.txt pytest bandit detect-secrets pip-audit playwright==1.56.0
+      - name: Install browser for hosted confirmation security regression
+        run: python -m playwright install --with-deps chromium
       - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox.py
       - name: Hosted checkout reservations, abuse controls and customer access
         run: python -m pytest tests/test_nija_game_billing.py tests/test_nija_game_hosted.py tests/test_nija_game_checkout_protections.py -q
