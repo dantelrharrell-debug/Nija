@@ -31,6 +31,9 @@ def test_disabled_staging_never_exposes_payment_or_report(monkeypatch, path, met
 
 
 def test_enabling_without_isolated_credentials_fails_startup(monkeypatch):
+    # Isolate the credential failure from the independent private-disk gate.
+    from game_sandbox import staging_bootstrap
+    monkeypatch.setattr(staging_bootstrap, "validate_runtime", lambda: None)
     monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
     for name in ("NIJA_IQ_SANDBOX_ORIGIN", "NIJA_IQ_SANDBOX_STRIPE_KEY"):
         monkeypatch.delenv(name, raising=False)
@@ -44,7 +47,10 @@ def test_enabled_health_bypasses_persistent_api_limit(monkeypatch, tmp_path):
     from contextlib import contextmanager
     from types import SimpleNamespace
     from game_sandbox import app as sandbox_http
+    from game_sandbox import staging_bootstrap
 
+    # Simulate an approved disk for the HTTP quota test, not for startup safety.
+    monkeypatch.setattr(staging_bootstrap, "validate_runtime", lambda: None)
     monkeypatch.setenv("NIJA_IQ_SANDBOX_INGRESS_MODE", "direct")
     path = tmp_path / "staging_limits.sqlite3"
     with sqlite3.connect(path) as conn:
@@ -87,3 +93,48 @@ def test_enabled_health_bypasses_persistent_api_limit(monkeypatch, tmp_path):
         assert client.get("/sandbox/health").status_code == 200
     assert client.get("/sandbox/health").status_code == 429
     assert client.get("/healthz").status_code == 200
+
+
+def test_enabled_direct_wsgi_startup_rejects_missing_private_mount_first(monkeypatch):
+    """Direct Gunicorn imports must never bypass the private-disk requirement."""
+    from game_sandbox import staging_bootstrap
+    from game_sandbox import app as sandbox_http
+
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_DATABASE", "/var/data/trading_iq_sandbox.sqlite3")
+    monkeypatch.setattr(staging_bootstrap.os, "geteuid", lambda: 10001)
+    monkeypatch.setattr(staging_bootstrap, "has_dedicated_mount", lambda path: False)
+    calls = []
+
+    def no_payment_initialization():
+        calls.append("payment")
+        raise AssertionError("payment service reached before storage preflight")
+
+    monkeypatch.setattr(sandbox_http, "from_environment", no_payment_initialization)
+
+    with pytest.raises(RuntimeError, match="sandbox_persistent_mount_required"):
+        create_staging_app()
+    assert calls == []
+
+
+def test_enabled_direct_wsgi_startup_rejects_root_before_payment(monkeypatch):
+    from game_sandbox import staging_bootstrap
+    from game_sandbox import app as sandbox_http
+
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
+    monkeypatch.setattr(staging_bootstrap.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sandbox_http, "from_environment",
+                        lambda: pytest.fail("payment initialized under root"))
+    with pytest.raises(RuntimeError, match="sandbox_non_root_user_required"):
+        create_staging_app()
+
+
+def test_disabled_wsgi_entrypoint_never_needs_or_calls_storage_preflight(monkeypatch):
+    from game_sandbox import staging_bootstrap
+
+    monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "false")
+    monkeypatch.setattr(staging_bootstrap, "validate_runtime",
+                        lambda: pytest.fail("disabled standby probed payment disk"))
+    client = create_staging_app().test_client()
+    assert client.get("/healthz").json["status"] == "staging_holding"
+    assert client.post("/sandbox/runs").status_code == 503
