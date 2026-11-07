@@ -13,8 +13,15 @@ def create_staging_app():
     from flask import Flask, jsonify
 
     if os.environ.get("NIJA_IQ_SANDBOX_ENABLED") == "true":
-        # from_environment fails closed if Stripe test credentials, manifest,
-        # dedicated persistent disk, exact origin, or report integrity are missing.
+        # Existing Render services can import this WSGI module directly,
+        # bypassing staging_bootstrap.main(). Require its non-root and
+        # private, actually mounted storage checks in both startup paths.
+        from .staging_bootstrap import validate_runtime
+
+        validate_runtime()
+
+        # Initialize the Stripe gateway and entitlement storage only after
+        # the dedicated persistent disk preflight succeeds.
         from .app import from_environment
 
         app = from_environment()
