@@ -1,5 +1,31 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Project status — November 7, 2026 (documentation checkpoint)
+
+**Status: revenue launch and live trading are not independently certified.** This section summarizes the latest reported project evidence; verify current production state before making public launch or operational claims.
+
+### Education and revenue
+
+- **Trading Foundations ($99):** A Stripe payment link exists, but the complete production payment-to-entitlement-to-course-delivery journey has not been independently certified.
+- **Trading IQ personalized results ($1):** A Stripe product and application checkout implementation exist, but deployed checkout and verified paid-report fulfillment remain uncertified.
+- **Founding 100:** Waitlist/pilot onboarding is distinct from an approved, publicly available live brokerage connection or authorized trading service.
+- **Revenue reporting:** Analytics traffic and event totals are not equivalent to verified unique visitors, captured payments, or attributable profit. Reconcile Stripe charges, refunds, fees, lead records, marketing costs, and visitor attribution before claiming the $1 profit-per-visitor target.
+- **Lead intake:** Independently verify published IONOS forms, durable production storage, consent provenance, and downstream delivery acknowledgments. Do not interpret a saved enquiry as successful CRM delivery.
+
+Track launch certification in [issue #3696](https://github.com/dantelrharrell-debug/Nija/issues/3696), and use [issue #3537](https://github.com/dantelrharrell-debug/Nija/issues/3537) as a dated revenue-verification baseline rather than current revenue proof.
+
+### Trading and production boundaries
+
+- Trading commissioning code and documentation do **not** establish production installation, execution authority, or a verified live trade.
+- Keep order admission fail-closed pending authenticated account/ledger reconciliation, pending-close resolution, protective-order readback, writer/nonce authority, risk limits, kill-switch clearance, and independent production certification.
+- A passing CI suite, merged pull request, healthy deployment, or connected broker does not authorize real-money execution.
+- Deployment, billing activation, and live-order approval require separate explicit authorization and verification.
+
+**Change scope:** README documentation only; no payments, production configuration, lead records, or trading controls are modified.
+
+---
+
+
 ## Commissioning proposal — not installed or deployed
 
 The cold-start order-or-fill proof dependency is documented in
@@ -1080,7 +1106,7 @@ execution path. No real historical dataset is bundled with this repository.
 - **Website:** https://nijaaitrading.com
 - **Mobile documentation:** `mobile/README.md`
 - **Owner:** NIJA AI Trading LLC
-- **Business phone:** 425-765-0283
+- **Business phone:** 425-756-0283
 
 ## Disclaimer
 
