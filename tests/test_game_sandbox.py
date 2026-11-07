@@ -636,8 +636,12 @@ def test_unpaid_run_expiration_stays_fail_closed(setup):
 def test_enabled_staging_health_probes_do_not_consume_api_quota(setup, monkeypatch):
     """Render probes remain healthy beyond the persistent SQLite limit."""
     from game_sandbox import app as sandbox_app
+    from game_sandbox import staging_bootstrap
     from game_sandbox.staging_entrypoint import create_staging_app
 
+    # Test API quotas using setup's isolated test database; separate startup
+    # tests assert that a real enabled service requires an actual private mount.
+    monkeypatch.setattr(staging_bootstrap, "validate_runtime", lambda: None)
     service = setup[0]
     monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
     monkeypatch.setattr(sandbox_app, "from_environment", lambda: create_app(service))
@@ -664,8 +668,11 @@ def test_enabled_staging_health_probes_do_not_consume_api_quota(setup, monkeypat
 
 def test_health_exemption_is_exact_and_does_not_bypass_other_routes(setup, monkeypatch):
     from game_sandbox import app as sandbox_app
+    from game_sandbox import staging_bootstrap
     from game_sandbox.staging_entrypoint import create_staging_app
 
+    # The endpoint's rate-limit exemption is independent of mount security.
+    monkeypatch.setattr(staging_bootstrap, "validate_runtime", lambda: None)
     service = setup[0]
     monkeypatch.setenv("NIJA_IQ_SANDBOX_ENABLED", "true")
     monkeypatch.setattr(sandbox_app, "from_environment", lambda: create_app(service))
