@@ -25,7 +25,7 @@ concurrency:
 jobs:
   read-only-course-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Verify public storefront, payment backend and private asset protection
         shell: bash
@@ -72,13 +72,50 @@ jobs:
                   obj = {}
               return code, obj
 
+          # Render free-tier instances may need time to start after inactivity.
+          # Gate functional and security checks on confirmed application liveness;
+          # never treat a transient platform 503 as an authorization success.
+          startup_deadline = time.monotonic() + 240
+          startup_attempts = 0
+          startup_http_statuses = []
+          while True:
+              startup_attempts += 1
+              startup_code, startup_body = fetch(billing, "/healthz", attempts=1)
+              startup_http_statuses.append(startup_code)
+              try:
+                  startup_payload = json.loads(startup_body)
+              except (ValueError, UnicodeError):
+                  startup_payload = {}
+              if startup_code == 200 and startup_payload.get("status") == "ok":
+                  break
+              if time.monotonic() >= startup_deadline:
+                  print(json.dumps({
+                      "startup_gate": "failed",
+                      "attempts": startup_attempts,
+                      "http_statuses": startup_http_statuses,
+                      "note": "No functional or authorization probes were run before liveness",
+                  }))
+                  sys.exit(1)
+              time.sleep(8)
+
+          # Expose HTTP codes only, not response bodies, credentials or customer data.
+          http_statuses = {"/healthz": startup_code}
+          print(json.dumps({
+              "startup_gate": "passed",
+              "attempts": startup_attempts,
+              "http_statuses": startup_http_statuses,
+          }))
+
           health_code, health = json_path(billing, "/healthz")
+          http_statuses["/healthz"] = health_code
           status["billing_health"] = health_code == 200 and health.get("status") == "ok"
 
           billing_code, billing_ready = json_path(billing, "/readyz")
+          http_statuses["/readyz"] = billing_code
           status["billing_provider_ready"] = billing_code == 200 and billing_ready.get("status") == "ready"
 
           course_code, course = json_path(billing, "/course-portal/readyz")
+          http_statuses["/course-portal/readyz"] = course_code
           for flag in ["ready", "access_ready", "assets_present",
                        "email_configured", "access_key_configured"]:
               status["course_" + flag] = course_code == 200 and course.get(flag) is True
@@ -88,26 +125,31 @@ jobs:
           course_checkout_access = course.get("checkout_access_enabled")
 
           portal_code, portal_body = fetch(billing, "/course-portal/")
+          http_statuses["/course-portal/"] = portal_code
           status["course_recovery_page_online"] = (
               portal_code == 200 and b"Course Access" in portal_body
           )
           page_code, _ = fetch(website, "/trading-foundations")
+          http_statuses["/trading-foundations"] = page_code
           status["public_course_page_online"] = page_code == 200
 
           forbidden_file_code, _ = fetch(
               billing, "/course-portal/file/NIJA_Trading_Foundations_eBook.pdf"
           )
+          http_statuses["/course-portal/file/<redacted>"] = forbidden_file_code
           status["anonymous_paid_file_denied"] = forbidden_file_code == 403
 
           invalid_claim_code, _ = fetch(
               billing, "/course-portal/claim?token=public-health-invalid"
           )
+          http_statuses["/course-portal/claim?<redacted>"] = invalid_claim_code
           status["invalid_access_claim_denied"] = invalid_claim_code == 403
 
           profit_code, _ = json_path(
               billing, "/api/admin/website-profit?period=2026-09"
           )
-          status["anonymous_profit_access_denied"] = profit_code in (401, 503)
+          http_statuses["/api/admin/website-profit"] = profit_code
+          status["anonymous_profit_access_denied"] = profit_code == 401
           if profit_code == 200:
               errors.append("profit_admin_endpoint_publicly_accessible")
 
@@ -115,6 +157,7 @@ jobs:
           report = {
               "read_only_probes_passed": passed,
               "checks": status,
+              "http_statuses": http_statuses,
               "server_created_course_checkout_access_reported": course_checkout_access,
               "stripe_payment_link_active_from_live_api": "not_checked_no_secrets",
               "real_paid_course_purchase_completed": "not_checked_no_charge",
