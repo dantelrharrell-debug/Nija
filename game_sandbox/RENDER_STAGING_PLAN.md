@@ -82,6 +82,30 @@ checkout attempts, webhook events and entitlements in the isolated backend
 rather than writing to unverified IONOS storage. A GitHub merge is not
 authenticated IONOS preview access, source-parity evidence or publication.
 
+## Guard direct WSGI startup as well as the reviewed launcher (2026-11-06)
+
+The existing `nija-iq72-staging` free Render web service uses
+`gunicorn ... game_sandbox.staging_entrypoint:application` directly, rather
+than the reviewed `staging_bootstrap.main()` launcher. Previously, an enabled
+direct import would not run the bootstrap's verified private-mount, ownership,
+non-root, write/fsync and exact database-path preflight before opening the
+Stripe and entitlement service.
+
+The enabled `create_staging_app()` now invokes that identical
+`validate_runtime()` check **before** `from_environment()`. Regression
+tests cover absent mounts, root identity, and the disabled holding mode.
+The service therefore fails startup if someone enables sandbox payments on
+the existing free no-disk service, even with its direct Gunicorn command.
+The disabled `/healthz` and unavailable checkout remain unchanged.
+
+This is an application-level safety fix, not evidence of a provisioned disk,
+authorized IONOS preview storage, live server-side Stripe test credentials,
+a Trading IQ webhook, or completed hosted checkout QA. Keep the payment
+sandbox disabled until a separately approved isolated persistent-disk
+deployment passes original-report parity, signed webhook, purchase,
+reopen/refund/dispute and backup/restore checks. No deployment is authorized
+by this documentation or PR.
+
 ## After authorized infrastructure creation
 
 1. Verify service builds, the published `/healthz` is honest, and every

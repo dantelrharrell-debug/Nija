@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import secrets
@@ -75,8 +76,23 @@ def create_app(service: Sandbox) -> Any:
             return jsonify(error="origin_required"), 403
         if request.method != "GET" and request.mimetype != "application/json":
             return jsonify(error="json_required"), 415
-        # Dedicated ingress must additionally rate-limit by verified client IP.
-        bucket = digest(request.remote_addr or "unknown")
+        # Explicit ingress policy; never combine visitors under the proxy's IP
+        # or trust arbitrary caller-supplied forwarding headers.
+        mode = os.environ.get("NIJA_IQ_SANDBOX_INGRESS_MODE")
+        try:
+            peer = ipaddress.ip_address(request.environ.get("REMOTE_ADDR", ""))
+            if mode == "direct":
+                client = str(peer)
+            elif mode == "proxy":
+                networks = os.environ.get("NIJA_IQ_SANDBOX_TRUSTED_PROXY_CIDRS", "").split(",")
+                if not any(peer in ipaddress.ip_network(net.strip()) for net in networks if net.strip()):
+                    return jsonify(error="untrusted_ingress"), 403
+                client = str(ipaddress.ip_address(request.headers.get("X-Forwarded-For", "")))
+            else:
+                return jsonify(error="reviewed_ingress_required"), 503
+        except ValueError:
+            return jsonify(error="invalid_ingress_identity"), 403
+        bucket = digest(client)
         now = int(time.time())
         with service.db() as db:
             row = db.execute("SELECT * FROM limits WHERE owner_hash=?", (bucket,)).fetchone()
