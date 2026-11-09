@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { TIQ12_VERSION, TIQ12_ROUNDS, validateTiq12Manifest,
   validateTiq12Answers, requireAdultCompletedRun, requireVerifiedTiq12Entitlement, scorePurchasedTiq12,
-  ownerProofHash, matchesVerifiedTiq12Payment } from "../server/tiq12-contract.mjs";
+  ownerProofHash, matchesVerifiedTiq12Payment, matchesTiq12WebhookPaymentSnapshot } from "../server/tiq12-contract.mjs";
 
 const makeManifest = () => ({ version: TIQ12_VERSION, rounds: Array.from({length: 12}, (_, i) => ({
   id: "round_" + (i + 1), category: ["risk", "research", "discipline"][i % 3],
@@ -127,4 +127,39 @@ test("payment requires exact adult run, receipt proof, 100 cents, charge, produc
     x=>x.expectedPriceId=undefined,x=>x.expectedProductId=undefined,
     x=>x.session.id="cs_live_123456789012",x=>x.livemode="false"];
   for(const change of bad){const item=receipt();change(item);assert.equal(matchesVerifiedTiq12Payment(item),false);}
+});
+
+
+test("server-side webhook reconciliation uses persisted owner hash without bearer proof", () => {
+  const good = receipt();
+  delete good.proof;
+  assert.equal(matchesTiq12WebhookPaymentSnapshot(good), true);
+  // The browser still requires the private proof and cannot recover it from
+  // an event, public URL, Stripe metadata, or the checkout receipt.
+  assert.equal(matchesVerifiedTiq12Payment(good), false);
+  const negative = [
+    x => x.session.metadata.owner_proof_hash = "c".repeat(64),
+    x => x.storedRun.ownerProofHash = "c".repeat(64),
+    x => x.storedRun.persisted = false,
+    x => x.storedRun.answers = [],
+    x => x.session.status = "open",
+    x => x.session.livemode = true,
+    x => x.livemode = true,
+    x => x.session.payment_intent.status = "requires_payment_method",
+    x => x.session.payment_intent.latest_charge.refunded = true,
+    x => x.session.payment_intent.latest_charge.disputed = true,
+    x => x.session.payment_intent.latest_charge.amount_refunded = 100,
+    x => x.lineItems.has_more = true,
+    x => x.lineItems.data[0].price.product = "prod_unrelated",
+    x => x.lineItems.data[0].quantity = 2,
+  ];
+  for (const mutate of negative) {
+    const snapshot = receipt();
+    delete snapshot.proof;
+    mutate(snapshot);
+    assert.equal(matchesTiq12WebhookPaymentSnapshot(snapshot), false);
+  }
+  // The pure matcher cannot authenticate webhook signatures or prove durable
+  // writes. A real server must handle those before granting entitlements.
+  assert.equal(matchesTiq12WebhookPaymentSnapshot({}), false);
 });
