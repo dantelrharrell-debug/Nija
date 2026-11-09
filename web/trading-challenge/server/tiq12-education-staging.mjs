@@ -21,8 +21,7 @@ function writeJSON(res, code, value) {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-    "Access-Control-Allow-Origin": "null"
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
   });
   res.end(JSON.stringify(value));
 }
