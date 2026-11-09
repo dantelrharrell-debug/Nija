@@ -36,6 +36,8 @@ jobs:
           node --check server/scoring.mjs
       - name: Test scoring and simulated checkout verification
         run: npm test
+      - name: Verify isolated TIQ12 storage constraints (synthetic only)
+        run: python3 -m unittest discover -s tests -p 'test_tiq12_storage.py' -v
       - name: Ensure no live broker integrations are loaded
         run: |
           if grep -R -n -E "from .*bot/|require\(.*bot/|FORCE_TRADE=true|NIJA_DISABLE_WRITER_LOCK=true" public server; then

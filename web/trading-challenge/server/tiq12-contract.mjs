@@ -89,9 +89,47 @@ export function requireAdultCompletedRun(storedRun, manifest) {
   return validateTiq12Answers(manifest, storedRun.answers);
 }
 
-// Compute *after* an authenticated, verified $1 entitlement; not in public JavaScript.
-export function scorePurchasedTiq12(manifest, storedRun) {
+// Defense in depth only. Both the completed run and grant MUST be loaded from a
+// private, durable database by an authenticated backend, NEVER from a request,
+// Checkout redirect, browser localStorage, or unauthenticated event. A boolean
+// 'providerVerified' alone is not evidence of a signed webhook; the consuming
+// service must authenticate Stripe's raw-body signature, reconcile the payment
+// with Stripe, and commit the irreversible audit/event ledger before storing it.
+// For Upgrade 6 this function intentionally accepts test-mode grants ONLY.
+export function requireVerifiedTiq12Entitlement(manifest, storedRun, entitlement, offer) {
   const answers = requireAdultCompletedRun(storedRun, manifest);
+  const isId = (value, kind) => typeof value === "string" &&
+    new RegExp("^" + kind + "_[A-Za-z0-9_]{3,250}$").test(value);
+  if (!offer || !isId(offer.priceId, "price") || !isId(offer.productId, "prod") ||
+      !entitlement || typeof entitlement !== "object" || Array.isArray(entitlement) ||
+      entitlement.persisted !== true || entitlement.providerVerified !== true ||
+      entitlement.webhookSignatureVerified !== true ||
+      entitlement.status !== "granted" || entitlement.livemode !== false ||
+      entitlement.runId !== storedRun.id ||
+      !equalDigest(entitlement.manifestDigest, manifest.digest) ||
+      !equalDigest(entitlement.ownerProofHash, storedRun.ownerProofHash) ||
+      entitlement.priceId !== offer.priceId || entitlement.productId !== offer.productId ||
+      entitlement.amountPaid !== 100 || entitlement.currency !== "usd" ||
+      !isId(entitlement.checkoutSessionId, "cs_test") ||
+      !isId(entitlement.stripeEventId, "evt") ||
+      entitlement.refunded !== false || entitlement.disputed !== false ||
+      entitlement.revokedAt !== null ||
+      typeof entitlement.verifiedAt !== "string" ||
+      !Number.isFinite(Date.parse(entitlement.verifiedAt)) ||
+      typeof entitlement.expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(entitlement.expiresAt)) ||
+      Date.parse(entitlement.expiresAt) <= Date.now() ||
+      Date.parse(entitlement.expiresAt) <= Date.parse(entitlement.verifiedAt)) {
+    fail("Durable, verified, unexpired and unreversed Stripe test entitlement required");
+  }
+  return answers;
+}
+
+// Do not compute a paid report without a matching durable, verified grant.
+// This is deliberately a breaking change to the PRIVATE, currently unwired
+// 12-round contract; no public game, payment route, or live entitlement changes.
+export function scorePurchasedTiq12(manifest, storedRun, entitlement, offer) {
+  const answers = requireVerifiedTiq12Entitlement(manifest, storedRun, entitlement, offer);
   const totals = new Map();
   const decisions = answers.map((answer, index) => {
     const round = manifest.rounds[index];
@@ -112,23 +150,25 @@ export function scorePurchasedTiq12(manifest, storedRun) {
     disclaimer: "Educational simulation only. Not investment advice or a prediction of returns." };
 }
 
-// Defense-in-depth receipt check. A signed Stripe webhook and durable, idempotent
-// payment/revocation ledger are STILL mandatory before granting any entitlement.
-export function matchesVerifiedTiq12Payment({ session, lineItems, proof, storedRun, manifest,
+// A webhook handler cannot possess the buyer's private HttpOnly browser receipt.
+// This pure helper only matches a RECONCILED Stripe snapshot to a privately
+// loaded run. It DOES NOT verify the webhook signature, Stripe event origin,
+// event replay, reservation ownership, or persistent payment accounting. Those
+// are required duties of the restricted API before recording any grant.
+function reconciledPurchaseMatches({ session, lineItems, storedRun, manifest,
   expectedPriceId, expectedProductId, livemode }) {
   try {
     requireAdultCompletedRun(storedRun, manifest);
     if (typeof expectedPriceId !== "string" || !/^price_[A-Za-z0-9_]+$/.test(expectedPriceId) ||
         typeof expectedProductId !== "string" || !/^prod_[A-Za-z0-9_]+$/.test(expectedProductId) ||
-        typeof livemode !== "boolean" ||
-        typeof session?.id !== "string" ||
+        typeof livemode !== "boolean" || typeof session?.id !== "string" ||
         !new RegExp("^cs_" + (livemode ? "live" : "test") + "_[A-Za-z0-9_]{8,250}$").test(session.id) ||
-        typeof proof !== "string" || !hexPattern.test(proof) ||
-        !equalDigest(ownerProofHash(proof), storedRun.ownerProofHash) ||
         session?.metadata?.run_id !== storedRun.id ||
         session?.metadata?.game_version !== TIQ12_VERSION ||
         !equalDigest(session?.metadata?.manifest_digest, manifest.digest) ||
-        !equalDigest(session?.metadata?.owner_proof_hash, ownerProofHash(proof)) ||
+        // Server-side webhook reconciliation binds to the HASH STORED AT RUN CREATION.
+        // Never store the original bearer proof just to make webhooks work.
+        !equalDigest(session?.metadata?.owner_proof_hash, storedRun.ownerProofHash) ||
         session?.livemode !== livemode || session?.mode !== "payment" ||
         session?.status !== "complete" || session?.payment_status !== "paid" ||
         session?.amount_total !== 100 || session?.currency !== "usd") return false;
@@ -145,4 +185,22 @@ export function matchesVerifiedTiq12Payment({ session, lineItems, proof, storedR
     return row.quantity === 1 && row.amount_total === 100 && row.currency === "usd" &&
       priceId === expectedPriceId && productId === expectedProductId;
   } catch { return false; }
+}
+
+// Browser report/reopen verification requires possession of the original buyer
+// receipt as well as every server-side payment and manifest check.
+export function matchesVerifiedTiq12Payment(args) {
+  try {
+    if (!reconciledPurchaseMatches(args) || typeof args?.proof !== "string" ||
+        !hexPattern.test(args.proof)) return false;
+    return equalDigest(ownerProofHash(args.proof), args.storedRun.ownerProofHash);
+  } catch { return false; }
+}
+
+// For use ONLY after the API has authenticated the Stripe raw-body webhook
+// signature, loaded the pinned run/checkout reservation, fetched current
+// authoritative Stripe session + line items/charge, and checked event replay.
+// In particular this function NEVER grants an entitlement by itself. Test only.
+export function matchesTiq12WebhookPaymentSnapshot(args) {
+  return args?.livemode === false && reconciledPurchaseMatches(args);
 }
