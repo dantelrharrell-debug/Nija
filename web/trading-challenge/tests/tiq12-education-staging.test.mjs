@@ -65,6 +65,5 @@ test("an attempted flag/config activation is rejected at startup", () => {
     assert.throws(() => createEducationStagingServer(config), /cannot be enabled/);
   }
   const server = createEducationStagingServer({});
-  assert.ok(server);
-  server.close();
+  assert.ok(server); // never started; no socket or external provider connection
 });
