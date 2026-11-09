@@ -89,9 +89,43 @@ export function requireAdultCompletedRun(storedRun, manifest) {
   return validateTiq12Answers(manifest, storedRun.answers);
 }
 
-// Compute *after* an authenticated, verified $1 entitlement; not in public JavaScript.
-export function scorePurchasedTiq12(manifest, storedRun) {
+// Defense in depth only. Both the completed run and grant MUST be loaded from a
+// private, durable database by an authenticated backend, NEVER from a request,
+// Checkout redirect, browser localStorage, or unauthenticated event. A boolean
+// 'providerVerified' alone is not evidence of a signed webhook; the consuming
+// service must authenticate Stripe's raw-body signature, reconcile the payment
+// with Stripe, and commit the irreversible audit/event ledger before storing it.
+// For Upgrade 6 this function intentionally accepts test-mode grants ONLY.
+export function requireVerifiedTiq12Entitlement(manifest, storedRun, entitlement, offer) {
   const answers = requireAdultCompletedRun(storedRun, manifest);
+  const isId = (value, kind) => typeof value === "string" &&
+    new RegExp("^" + kind + "_[A-Za-z0-9_]{3,250}$").test(value);
+  if (!offer || !isId(offer.priceId, "price") || !isId(offer.productId, "prod") ||
+      !entitlement || typeof entitlement !== "object" || Array.isArray(entitlement) ||
+      entitlement.persisted !== true || entitlement.providerVerified !== true ||
+      entitlement.webhookSignatureVerified !== true ||
+      entitlement.status !== "granted" || entitlement.livemode !== false ||
+      entitlement.runId !== storedRun.id ||
+      !equalDigest(entitlement.manifestDigest, manifest.digest) ||
+      !equalDigest(entitlement.ownerProofHash, storedRun.ownerProofHash) ||
+      entitlement.priceId !== offer.priceId || entitlement.productId !== offer.productId ||
+      entitlement.amountPaid !== 100 || entitlement.currency !== "usd" ||
+      !isId(entitlement.checkoutSessionId, "cs_test") ||
+      !isId(entitlement.stripeEventId, "evt") ||
+      entitlement.refunded !== false || entitlement.disputed !== false ||
+      entitlement.revokedAt !== null ||
+      typeof entitlement.verifiedAt !== "string" ||
+      !Number.isFinite(Date.parse(entitlement.verifiedAt))) {
+    fail("Durable, verified, unreversed Stripe test entitlement required");
+  }
+  return answers;
+}
+
+// Do not compute a paid report without a matching durable, verified grant.
+// This is deliberately a breaking change to the PRIVATE, currently unwired
+// 12-round contract; no public game, payment route, or live entitlement changes.
+export function scorePurchasedTiq12(manifest, storedRun, entitlement, offer) {
+  const answers = requireVerifiedTiq12Entitlement(manifest, storedRun, entitlement, offer);
   const totals = new Map();
   const decisions = answers.map((answer, index) => {
     const round = manifest.rounds[index];
