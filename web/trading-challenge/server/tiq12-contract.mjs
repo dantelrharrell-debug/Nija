@@ -115,8 +115,12 @@ export function requireVerifiedTiq12Entitlement(manifest, storedRun, entitlement
       entitlement.refunded !== false || entitlement.disputed !== false ||
       entitlement.revokedAt !== null ||
       typeof entitlement.verifiedAt !== "string" ||
-      !Number.isFinite(Date.parse(entitlement.verifiedAt))) {
-    fail("Durable, verified, unreversed Stripe test entitlement required");
+      !Number.isFinite(Date.parse(entitlement.verifiedAt)) ||
+      typeof entitlement.expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(entitlement.expiresAt)) ||
+      Date.parse(entitlement.expiresAt) <= Date.now() ||
+      Date.parse(entitlement.expiresAt) <= Date.parse(entitlement.verifiedAt)) {
+    fail("Durable, verified, unexpired and unreversed Stripe test entitlement required");
   }
   return answers;
 }
