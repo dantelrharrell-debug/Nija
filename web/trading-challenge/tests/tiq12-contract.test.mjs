@@ -61,6 +61,7 @@ const storedEntitlement = () => ({
   amountPaid: 100, currency: "usd", checkoutSessionId: "cs_test_123456789012",
   stripeEventId: "evt_123456789012", refunded: false, disputed: false,
   revokedAt: null, verifiedAt: "2026-11-09T20:00:00.000Z",
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
 });
 const testOffer = Object.freeze({ priceId: "price_test_123", productId: "prod_test_123" });
 
@@ -101,6 +102,10 @@ test("tampered, expired, refunded, disputed or differently owned grants fail clo
     x => x.revokedAt = "2026-11-10T00:00:00Z",
     x => x.verifiedAt = "invalid",
     x => delete x.verifiedAt,
+    x => x.expiresAt = "2020-01-01T00:00:00.000Z",
+    x => x.expiresAt = "not-a-date",
+    x => x.verifiedAt = "2099-01-01T00:00:00.000Z",
+    x => delete x.expiresAt,
   ];
   for (const mutate of negative) {
     const grant = storedEntitlement(); mutate(grant);
