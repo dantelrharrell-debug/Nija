@@ -8,12 +8,14 @@ from unittest.mock import patch
 import pytest
 
 from bot.execution_admission_acceptance_v468 import inspect_execution_admission
+import bot.pretrade_independent_attestation as attestation
 
 
 @pytest.mark.parametrize("account_scope", [
     "", " account", "account ", "account name", "account\tname", "account\nname", None,
 ])
-def test_invalid_scope_is_never_reported_as_configured(account_scope):
+def test_invalid_scope_is_never_reported_as_configured(account_scope, monkeypatch):
+    monkeypatch.setattr(attestation, "_COLLECTOR", None)
     fake = types.ModuleType("preactivation_readiness_convergence_v16_patch")
     fake._strict_authority_ready = lambda: (True, "synthetic")
     fake._kill_switch_clear = lambda: (True, "synthetic")
@@ -27,7 +29,8 @@ def test_invalid_scope_is_never_reported_as_configured(account_scope):
     assert result["dispatch_admission_granted"] is False
 
 
-def test_valid_scope_without_collector_still_denied():
+def test_valid_scope_without_collector_still_denied(monkeypatch):
+    monkeypatch.setattr(attestation, "_COLLECTOR", None)
     fake = types.ModuleType("preactivation_readiness_convergence_v16_patch")
     fake._strict_authority_ready = lambda: (True, "synthetic")
     fake._kill_switch_clear = lambda: (True, "synthetic")
