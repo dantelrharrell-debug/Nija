@@ -122,7 +122,16 @@
     });
     const feedback = el("feedback");
     clear(feedback);
-    feedback.append(node("strong", {}, "DECISION REVIEW"), node("p", {}, s.options[index].feedback));
+    feedback.append(node("strong", {}, "NIJA COACH · DECISION REVIEW"), node("p", {}, s.options[index].feedback));
+    const lessons = {
+      risk: ["Risk management and position sizing", "https://nijaaitrading.com/academy"],
+      discipline: ["Patience, planning, and emotional discipline", "https://nijaaitrading.com/academy"],
+      research: ["Source verification and market research", "https://nijaaitrading.com/academy"]
+    };
+    const lesson = lessons[s.category] || lessons.risk;
+    feedback.append(node("p", {}, "Practice focus: " + lesson[0] + ". This feedback is educational, not investment advice."));
+    const lessonLink = node("a", { href: lesson[1], target: "_blank", rel: "noopener noreferrer" }, "Explore free NIJA Academy lessons ↗");
+    feedback.append(lessonLink);
     feedback.classList.remove("hidden");
     text("next", round === scenarios.length - 1 ? "See challenge summary →" : "Next market moment →");
     el("next").classList.remove("hidden");
