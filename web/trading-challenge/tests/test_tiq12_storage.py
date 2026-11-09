@@ -105,5 +105,36 @@ class TestTiq12Storage(unittest.TestCase):
                                 ("run_new", version, "a"*64, "b"*64,
                                  "[0,1,0,1,0,1,0,1,0,1,0,1]", age, "2026", "2026"))
 
+
+    def test_wrong_run_cannot_receive_another_run_purchase(self):
+        self.commit_checkout()
+        self.event()
+        self.verified_payment()
+        self.db.execute("INSERT INTO tiq12_runs VALUES (?,?,?,?,?,?,?,?)",
+                        ("run_other", "nija-trading-iq-12-v1", "d"*64, "e"*64,
+                         "[0,1,0,1,0,1,0,1,0,1,0,1]", 1, "2026", "2026"))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.grant("run_other")
+
+    def test_backup_restore_preserves_dispute_revocation(self):
+        self.commit_checkout()
+        self.event()
+        self.verified_payment()
+        self.grant()
+        self.db.execute("INSERT INTO tiq12_webhook_events VALUES (?,?,?,?,?,?,?)",
+                        ("evt_dispute", "charge.dispute.created", "cs_test_123456789012", "f"*64,
+                         "2026-11-09T04:00:00Z", "2026-11-09T04:00:00Z", "applied"))
+        self.db.execute("INSERT INTO tiq12_revocations VALUES (?,?,?,?)",
+                        ("cs_test_123456789012", "evt_dispute", "dispute", "2026-11-09T04:00:00Z"))
+        self.db.commit()
+        restored = sqlite3.connect(":memory:")
+        self.db.backup(restored)
+        restored.execute("PRAGMA foreign_keys=ON")
+        self.assertEqual(restored.execute("SELECT status FROM tiq12_report_entitlements").fetchone()[0], "revoked")
+        self.assertEqual(restored.execute("SELECT reason FROM tiq12_revocations").fetchone()[0], "dispute")
+        with self.assertRaises(sqlite3.IntegrityError):
+            restored.execute("UPDATE tiq12_report_entitlements SET status='granted', revoked_at=NULL")
+        restored.close()
+
 if __name__ == "__main__":
     unittest.main()
