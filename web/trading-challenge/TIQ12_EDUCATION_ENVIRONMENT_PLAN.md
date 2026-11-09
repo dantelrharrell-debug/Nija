@@ -11,6 +11,14 @@
 - **No existing service adoption:** The Render Blueprint must use `existingResources=create_new`, `autoSync=false`, its own ID and path. Do not change the separate `game_sandbox/render.staging.yaml` Blueprint: that is for the unrelated **72-decision** prototype.
 - **Build boundary:** `Dockerfile.tiq12-education` copies **only two holding-server source files** from the education project, runs Node 22 as unprivileged UID 10001, and has no imported trading, brokerage, billing, game report, or Stripe code.
 
+## Render plan-only registration — verified 2026-11-09
+
+- Created isolated Blueprint `exs-dbp50cmgekts73e81v00` (`nija-tiq12-education-holding-review`), in the **Nija** workspace only. Its exact source is feature branch `feature/tiq12-education-isolation-20261109` and `web/trading-challenge/render.tiq12-education.yaml`.
+- Registered with **`autoSync=false`**, **`existingResources=create_new`**. **No preexisting service was adopted**.
+- First read-only plan returned **`planningOutcome=failed`**, `billing_suspended`, `sync=null`. Subsequent Blueprint read-back: **`resources=[]`**, `status=created`.
+- Therefore **no new service or persistent disk was provisioned**, no charge was initiated and no deploy occurred. Do not call `approve_blueprint` on the failed plan. The separate trading-bot workspace is **not** suspended and is deliberately **not** the destination for this education service.
+- After owner restores billing and approves exact billed resources and recurring costs, first re-plan this *exact* Blueprint, compare its proposed create-only diff, and separately approve the first deploy. Even then the resulting service is a **holding-only** health endpoint and cannot enable payments.
+
 ## Actual functionality — intentionally nothing billable to a customer
 
 `GET /healthz` returns 200 `status=holding` with explicit false capability fields so the hosting provider can observe a safe stopped project. `GET /readyz` and all `/game`, `/api`, `/checkout`, `/stripe`, `/report`, and `/admin` paths return HTTP 503. Any attempt to set a non-holding mode or enable flag **throws at startup**, not merely enables unfinished checkout. No CORS authorization is emitted. No public game, buyer account, report, Stripe session, payment secret, live market order, or customer data is accessible.
