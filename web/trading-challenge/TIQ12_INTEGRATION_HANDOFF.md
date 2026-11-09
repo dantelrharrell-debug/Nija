@@ -15,6 +15,14 @@
 
 These functions are **not** wired into server/index.mjs or billing_service.py, and they **must not** be imported into public/scenarios.js, public/app.js or a browser bundle. This deliberate separation avoids changing the currently merged six-round experience or switching on payment under a mismatched configuration.
 
+### Private paid-score guard (review branch, not deployed)
+
+The previously standalone `scorePurchasedTiq12(manifest, storedRun)` helper could compute a paid score from an adult-completed run without being passed evidence of a verified entitlement. The review-only fix now requires `scorePurchasedTiq12(manifest, storedRun, entitlement, offer)`. The `requireVerifiedTiq12Entitlement` validator rejects missing, mismatched, unpaid, unpersisted, live-mode, reversed, revoked, expired or unverified test-mode grants before invoking the existing canonical score calculation. Regression tests use fictional grants; no real payment is represented.
+
+**Important trust boundary:** fields such as `persisted`, `providerVerified`, and `webhookSignatureVerified` are *assertions made by trusted backend code*, not cryptographic proof by themselves. The future backend must load both the run and entitlement from a private, durable store after authentication, validate a signed Stripe raw-body webhook and a fresh reconciled Stripe purchase, and atomically record event and entitlement provenance. Never use client JSON, localStorage, a Checkout success URL, an unverified event body, or a browser-supplied grant as the entitlement. The scoring guard alone does **not** implement the database, payment webhook, API, IONOS integration or complete Upgrade 6.
+
+A grant is additionally restricted to the dedicated Stripe **test-mode** USD 100-cent price/product, matching run ID, manifest digest, owner proof hash, valid Checkout Session/Event IDs, explicit unreversed status, and an unexpired server-approved grant window. Live purchases require a separate independently reviewed design and are not enabled by this code.
+
 ## Required IONOS source export before implementation
 Obtain the current project export from AI App & Site Builder project aibuilder-4dfdf (Code > Export all), excluding secret files and private customer data, then:
 1. Locate the actual twelve-round scenario definitions and private scoring rules; compare the published/preview version and age rules.
