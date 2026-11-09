@@ -96,7 +96,8 @@ def register_hosted_routes(app: Any) -> None:
                     idempotency_key="nija-hosted-v1-" + reservation["id"])
                 store.finish(reservation["id"], checkout_url, session_id)
         except CheckoutDenied as error:
-            response = jsonify({"error": str(error)})
+            app.logger.info("NIJA hosted checkout denied")
+            response = jsonify({"error": "checkout_denied"})
             response.headers["Retry-After"] = "120"
             return response, error.status
         except ValueError:
