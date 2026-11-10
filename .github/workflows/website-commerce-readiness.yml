@@ -29,6 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Check out verification source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify local probe import
+        run: python -c "from scripts.course_profit_probe import classify_profit_probe"
       - name: Verify public storefront, payment backend and private asset protection
         shell: bash
         run: |
