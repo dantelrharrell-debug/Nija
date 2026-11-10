@@ -61,3 +61,7 @@ test('out-of-order dispute blocks later paid entitlement',()=>{
 test('missing isolated schema cannot be created without migration approval',()=>{
  assert.throws(()=>new Tiq12Upgrade6Store(':memory:'),/not installed/);
 });
+
+test('persistent database migration cannot be started by review branch code',()=>{
+ assert.throws(()=>new Tiq12Upgrade6Store('/tmp/tiq12-do-not-create.sqlite',{initialize:true}),/separate approval/);
+});
