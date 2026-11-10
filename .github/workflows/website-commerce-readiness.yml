@@ -9,6 +9,8 @@ on:
     paths:
       - '.github/workflows/website-commerce-readiness.yml'
       - 'FOUNDATIONS_DELIVERY_RUNBOOK.md'
+      - 'scripts/course_profit_probe.py'
+      - 'tests/test_course_profit_probe.py'
   push:
     branches: [main]
     paths:
@@ -35,6 +37,7 @@ jobs:
           import os
           import sys
           import time
+          from scripts.course_profit_probe import classify_profit_probe
           from urllib.error import HTTPError, URLError
           from urllib.request import Request, urlopen
 
@@ -145,13 +148,16 @@ jobs:
           http_statuses["/course-portal/claim?<redacted>"] = invalid_claim_code
           status["invalid_access_claim_denied"] = invalid_claim_code == 403
 
-          profit_code, _ = json_path(
+          profit_code, profit_payload = json_path(
               billing, "/api/admin/website-profit?period=2026-09"
           )
           http_statuses["/api/admin/website-profit"] = profit_code
-          status["anonymous_profit_access_denied"] = profit_code == 401
-          if profit_code == 200:
-              errors.append("profit_admin_endpoint_publicly_accessible")
+          profit_classification = classify_profit_probe(profit_code, profit_payload)
+          # Optional reporting can be disabled fail-closed. This does NOT
+          # certify authentication or signed financial evidence.
+          status["anonymous_profit_access_not_public"] = profit_classification != "failed"
+          if profit_classification == "failed":
+              errors.append("profit_admin_endpoint_unexpected_response")
 
           passed = all(status.values()) and not errors
           report = {
@@ -161,6 +167,8 @@ jobs:
               "server_created_course_checkout_access_reported": course_checkout_access,
               "stripe_payment_link_active_from_live_api": "not_checked_no_secrets",
               "real_paid_course_purchase_completed": "not_checked_no_charge",
+              "profit_reporting_probe_classification": profit_classification,
+              "profit_admin_authentication_verified": profit_classification == "configured_auth_denied",
               "profit_per_unique_visitor_verified": False,
               "customer_records_changed": False,
               "emails_sent": False,
@@ -198,6 +206,8 @@ jobs:
       - name: Install local billing test dependencies
         run: |
           python -m pip install -r requirements-billing.txt pytest
+      - name: Verify profit-reporting fail-closed response classification
+        run: python -m pytest -q tests/test_course_profit_probe.py
       - name: Assert synthetic payment, one-time delivery and refund denial
         run: |
           python -m pytest -q \
