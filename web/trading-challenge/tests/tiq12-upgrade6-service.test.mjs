@@ -8,18 +8,19 @@ const config={mode:'test',enabled:true,stripeSecret:'sk_test_abcdefgh1234',webho
 const sourceManifest={version:'nija-trading-iq-12-v1',rounds:Array.from({length:12},(_,i)=>({id:'round_'+(i+1),category:'risk',title:'Synthetic '+i,choices:[{label:'No',points:0,feedback:'Review downside',lesson:'Risk first'},{label:'Yes',points:5,feedback:'Study context',lesson:'Measure risk'}]}))};
 const manifest=validateTiq12Manifest(sourceManifest);
 const answers=manifest.rounds.map(r=>({roundId:r.id,choice:1}));
-function setup(){
+function setup({tamperCheckout}={}){
  const store=new Tiq12Upgrade6Store(':memory:',{initialize:true});
  let sessionId='cs_test_abcdefgh12345', session;
  const provider={
   verifyPrice:async()=>true,
   createCheckout:async(intent,idempotencyKey)=>{
    if(!session){session={id:sessionId,livemode:false,mode:'payment',amount_total:100,currency:'usd',url:'https://checkout.stripe.com/test123',
-    status:'complete',payment_status:'paid',metadata:intent.metadata,
+    status:'open',payment_status:'unpaid',metadata:intent.metadata,client_reference_id:intent.metadata.run_id,
     payment_intent:{id:'pi_test_1234',status:'succeeded',amount_received:100,currency:'usd',latest_charge:{id:'ch_test_1234',status:'succeeded',paid:true,refunded:false,disputed:false,amount_refunded:0}}};}
+   if (tamperCheckout) tamperCheckout(session);
    return session;
   },
-  reconcileCheckout:async()=>({session,lineItems:{data:[{quantity:1,amount_total:100,currency:'usd',price:{id:config.priceId,product:config.productId}}]}}),
+  reconcileCheckout:async()=>({session:{...session,status:session.status==='open'?'complete':session.status,payment_status:session.mockPending===true?'unpaid':session.payment_status==='unpaid'?'paid':session.payment_status},lineItems:{has_more:false,data:[{quantity:1,amount_total:100,currency:'usd',price:{id:config.priceId,product:config.productId}}]}}),
   resolveReversalSession:async()=>sessionId,
   get session(){return session;},
  };
@@ -96,5 +97,69 @@ test('out of order reversal stays revoked before delayed paid webhook',async()=>
  const paid=event('checkout.session.completed','evt_test_1234567');
  assert.deepEqual(await service.webhook(paid.raw,paid.signature),{status:'reversed'});
  await assert.rejects(service.report({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin));
+ store.close();
+});
+
+test('signed asynchronous pending completion records no entitlement until separately verified paid event',async()=>{
+ const {service,store,provider}=setup();
+ const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
+ await service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin);
+ provider.session.mockPending=true;
+ const pending=event('checkout.session.completed','evt_pending_123456');
+ assert.deepEqual(await service.webhook(pending.raw,pending.signature),{status:'pending'});
+ assert.equal(store.getGrant(run.runId),null);
+ assert.equal(store.getCheckoutBySession(provider.session.id).state,'pending');
+ await assert.rejects(service.report({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin));
+ provider.session.mockPending=false;
+ const success=event('checkout.session.async_payment_succeeded','evt_success_123456');
+ assert.deepEqual(await service.webhook(success.raw,success.signature),{status:'granted'});
+ assert.equal((await service.report({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin)).score,100);
+ store.close();
+});
+test('asynchronous failed payment blocks checkout and rejects any later completion',async()=>{
+ const {service,store,provider}=setup();
+ const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
+ await service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin);
+ provider.session.mockPending=true;
+ const failed=event('checkout.session.async_payment_failed','evt_failed_123456');
+ assert.deepEqual(await service.webhook(failed.raw,failed.signature),{status:'blocked'});
+ assert.equal(store.getCheckoutBySession(provider.session.id).state,'blocked');
+ provider.session.mockPending=false;
+ const pay=event('checkout.session.async_payment_succeeded','evt_success_123456');
+ assert.deepEqual(await service.webhook(pay.raw,pay.signature),{status:'blocked'});
+ assert.equal(store.getGrant(run.runId),null);
+ store.close();
+});
+test('verified expired checkout fails closed without granting or second session',async()=>{
+ const {service,store,provider}=setup();
+ const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
+ await service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin);
+ provider.session.status='expired';provider.session.mockPending=true;
+ const expired=event('checkout.session.expired','evt_expired_123456');
+ assert.deepEqual(await service.webhook(expired.raw,expired.signature),{status:'blocked'});
+ await assert.rejects(service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin));
+ assert.equal(store.getGrant(run.runId),null);
+ store.close();
+});
+test('Checkout creation must bind the exact private run metadata before exposing the payment URL',async()=>{
+ for(const tamperCheckout of [s=>s.metadata.owner_proof_hash='f'.repeat(64),s=>s.metadata.manifest_digest='f'.repeat(64),
+   s=>s.client_reference_id='run_wrong',s=>s.status='complete',s=>s.url='https://checkout.stripe.com.evil.example/test']){
+   const {service,store}=setup({tamperCheckout});
+   const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
+   await assert.rejects(service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin),/Untrusted/);
+   const rows=store.db.prepare('SELECT checkout_session_id FROM tiq12_checkout_reservations WHERE run_id=?').all(run.runId);
+   assert.equal(rows.length,1);assert.equal(rows[0].checkout_session_id,null);
+   store.close();
+ }
+});
+test('unpaid Checkout with mismatched stored price cannot become pending',async()=>{
+ const {service,store,provider}=setup();
+ const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
+ await service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin);
+ provider.session.mockPending=true;provider.session.metadata.owner_proof_hash='f'.repeat(64);
+ const e=event('checkout.session.completed','evt_badpending_12345');
+ await assert.rejects(service.webhook(e.raw,e.signature),/not verified/);
+ assert.equal(store.getGrant(run.runId),null);
+ assert.equal(store.hasEvent('evt_badpending_12345'),false);
  store.close();
 });
