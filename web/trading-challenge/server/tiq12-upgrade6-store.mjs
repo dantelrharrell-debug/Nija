@@ -106,10 +106,14 @@ export class Tiq12Upgrade6Store {
       const hash = createHash('sha256').update(rawBody).digest('hex');
       const sessionId = reservation.checkout_session_id;
       const reversed = this.db.prepare('SELECT 1 FROM tiq12_revocations WHERE checkout_session_id=?').get(sessionId);
+      const current = this.db.prepare('SELECT state FROM tiq12_checkout_reservations WHERE reservation_id=?').get(reservation.reservation_id);
+      if (!current) throw new Upgrade6Error('Missing checkout reservation',422);
+      const blocked = current.state==='blocked' || current.state==='canceled';
       const alreadyPaid = this.db.prepare('SELECT 1 FROM tiq12_verified_payments WHERE checkout_session_id=?').get(sessionId);
       this.db.prepare(`INSERT INTO tiq12_webhook_events VALUES (?,?,?,?,?,?,?)`)
-        .run(event.id, event.type, sessionId, hash, now, now, (reversed || alreadyPaid) ? 'ignored' : 'applied');
+        .run(event.id, event.type, sessionId, hash, now, now, (reversed || blocked || alreadyPaid) ? 'ignored' : 'applied');
       if (reversed) return 'reversed';
+      if (blocked) return 'blocked';
       if (alreadyPaid) return 'already_paid';
       this.db.prepare(`INSERT INTO tiq12_verified_payments VALUES (?,?,?,?,?,?,?,?,?)`)
         .run(sessionId, reservation.reservation_id, paymentIntentId, chargeId, event.id, 100, 'usd', 0, now);
@@ -118,6 +122,35 @@ export class Tiq12Upgrade6Store {
       this.db.prepare("UPDATE tiq12_checkout_reservations SET state='paid' WHERE reservation_id=?")
         .run(reservation.reservation_id);
       return 'granted';
+    });
+  }
+  // Signed asynchronous completion is pending, never a paid entitlement.
+  recordPending({event,rawBody,reservation,now=nowISO()}) {
+    return this.transaction(() => {
+      if (this.hasEvent(event.id)) return 'duplicate';
+      const row=this.db.prepare('SELECT state FROM tiq12_checkout_reservations WHERE reservation_id=?').get(reservation.reservation_id);
+      if (!row) throw new Upgrade6Error('Missing checkout reservation',422);
+      const terminal=['paid','blocked','canceled'].includes(row.state);
+      this.db.prepare('INSERT INTO tiq12_webhook_events VALUES (?,?,?,?,?,?,?)')
+        .run(event.id,event.type,reservation.checkout_session_id,
+          createHash('sha256').update(rawBody).digest('hex'),now,now,'ignored');
+      if (!terminal) this.db.prepare("UPDATE tiq12_checkout_reservations SET state='pending' WHERE reservation_id=?")
+        .run(reservation.reservation_id);
+      return terminal?'terminal':'pending';
+    });
+  }
+  recordCheckoutFailure({event,rawBody,reservation,now=nowISO()}) {
+    return this.transaction(() => {
+      if (this.hasEvent(event.id)) return 'duplicate';
+      const row=this.db.prepare('SELECT state FROM tiq12_checkout_reservations WHERE reservation_id=?').get(reservation.reservation_id);
+      if (!row) throw new Upgrade6Error('Missing checkout reservation',422);
+      this.db.prepare('INSERT INTO tiq12_webhook_events VALUES (?,?,?,?,?,?,?)')
+        .run(event.id,event.type,reservation.checkout_session_id,
+          createHash('sha256').update(rawBody).digest('hex'),now,now,
+          row.state==='paid'?'ignored':'applied');
+      if (row.state!=='paid')this.db.prepare("UPDATE tiq12_checkout_reservations SET state='blocked' WHERE reservation_id=?")
+        .run(reservation.reservation_id);
+      return row.state==='paid'?'already_paid':'blocked';
     });
   }
   // Reversal is sticky, including when it arrives before paid confirmation.
