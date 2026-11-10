@@ -1,7 +1,7 @@
 // Isolated test-only SQLite adapter. Uses existing tiq12-storage.schema.sql;
 // never open, migrate, or write any NIJA production/customer/trading database.
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import { Upgrade6Error } from './tiq12-upgrade6-security.mjs';
 
@@ -15,6 +15,14 @@ export class Tiq12Upgrade6Store {
   constructor(filename, { initialize = false } = {}) {
     if (typeof filename !== 'string' || (!filename.startsWith('/') && filename !== ':memory:')) {
       throw new Upgrade6Error('An absolute isolated database filename is required', 503);
+    }
+    // In this review branch, schema initialization is restricted to synthetic
+    // in-memory tests. No code path may perform a disk migration implicitly.
+    if (initialize === true && filename !== ':memory:') {
+      throw new Upgrade6Error('Persistent migration requires separate approval', 503);
+    }
+    if (filename !== ':memory:' && !existsSync(filename)) {
+      throw new Upgrade6Error('Approved isolated database does not exist', 503);
     }
     this.db = new DatabaseSync(filename);
     this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;');
