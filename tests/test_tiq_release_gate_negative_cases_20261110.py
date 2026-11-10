@@ -4,7 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_tiq_canonical_release_gate_20261110 import verify_export
+import runpy
+
+verify_export = runpy.run_path(str(Path(__file__).with_name('test_tiq_canonical_release_gate_20261110.py')))['verify_export']
 
 REQUIRED = ("chromium", "webkit", "mobile", "keyboard", "reduced_motion",
             "storage_denied", "practice_lab_4", "scorecard", "voiceover", "talkback")
