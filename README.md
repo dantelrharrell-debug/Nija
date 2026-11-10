@@ -1,5 +1,33 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Project status — November 10, 2026 (documentation update)
+
+**Certification:** Live trading, complete course commerce, paid Trading IQ results, and automated outreach remain **not independently certified**. These are evidence and approval gates, not claims of live activation.
+
+### Trading IQ Challenge and advanced simulator
+- The canonical twelve-round IONOS game remains the design/source baseline pending authenticated export and visual reconciliation ([issue #3703](https://github.com/dantelrharrell-debug/Nija/issues/3703)).
+- The Vercel custom domain `game.nijaaitrading.com` has been reported as valid in Vercel, but public TLS, routing, exact deployed game build, mobile presentation, and anonymous full-run completion require fresh independent checks. A working deployment URL does not prove the custom domain or design is certified.
+- [Draft PR #3723](https://github.com/dantelrharrell-debug/Nija/pull/3723) contains an isolated deterministic advanced-simulator engine and tests; it is not the canonical game, a deployed product, or live brokerage execution. Review CI/security and artifact-scan failures before merge.
+- The optional $1 personalized-results flow requires separate Stripe test-mode verification, authenticated fulfillment, refund/error handling, and explicit live-payment approval. No checkout activation is implied.
+
+### Course commerce and protected endpoints
+- The November 10 read-only course-commerce verification reportedly passed 11 of 12 production checks; the protected `/api/admin/website-profit` endpoint returned HTTP 503 instead of the expected HTTP 401. This is a readiness failure, **not** evidence of anonymous financial-data access.
+- Invalid course claims and anonymous paid-file access reportedly returned HTTP 403. Mocked checkout success does not establish a completed real purchase or entitlement delivery.
+- Correct and test the protected endpoint on an isolated draft branch; preserve authorization boundaries. Require hosted CI, independent review, and explicit deployment approval.
+
+### Website, leads, and outreach
+- Preserve private CRM records, consent provenance, suppression/DNC screening, and delivery acknowledgments. A form submission saved in IONOS does not prove Zapier or inbox delivery.
+- Verify `/apply`, `/free`, `/outreach-center`, the iPad dialer and Caller #1 readiness before campaign activation. Caller #2 requires demonstrated results and separate approval.
+- Do not initiate calling, messaging, lead exports, webhook dispatch, or campaign activation from this documentation update.
+
+### Live trading and release safety
+- Continue fail-closed order admission while broker-authenticated positions, protective orders, ledger reconciliation, kill-switch truth, nonce ownership, and execution authority are unresolved.
+- Do not infer production readiness from a merged PR, healthy service, green unit tests, or paper simulation. Live trading, DNS, payment activation, publishing, and production deployment require distinct owner approvals.
+
+**Evidence discipline:** Treat historical snapshots below as dated records. Record the source, inspection time, exact environment, and verified/provisional/blocked/unverified status before upgrading any launch claim.
+
+---
+
 ## Project status — November 7, 2026 (documentation checkpoint)
 
 **Status: revenue launch and live trading are not independently certified.** This section summarizes the latest reported project evidence; verify current production state before making public launch or operational claims.
