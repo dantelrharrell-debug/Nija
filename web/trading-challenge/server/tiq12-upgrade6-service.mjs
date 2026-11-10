@@ -25,6 +25,32 @@ function requireProvider(provider) {
   }
   return provider;
 }
+// An unpaid Checkout may be complete while asynchronous payment is pending.
+// A signed event must never grant until Stripe confirms cleared funds.
+function matchesBaseCheckout(snapshot, storedRun, manifest, offer) {
+  const s=snapshot?.session, rows=snapshot?.lineItems;
+  const price=rows?.data?.[0]?.price;
+  const product=typeof price?.product==='string' ? price.product : price?.product?.id;
+  return s?.livemode===false && /^cs_test_[A-Za-z0-9_]{8,250}$/.test(s?.id||'') &&
+    s?.mode==='payment' && s?.amount_total===100 && s?.currency==='usd' &&
+    s?.metadata?.run_id===storedRun.id &&
+    s?.metadata?.game_version===manifest.version &&
+    s?.metadata?.manifest_digest===manifest.digest &&
+    s?.metadata?.owner_proof_hash===storedRun.ownerProofHash &&
+    rows?.has_more===false && rows?.data?.length===1 &&
+    rows.data[0].quantity===1 && rows.data[0].amount_total===100 &&
+    rows.data[0].currency==='usd' && price?.id===offer.priceId && product===offer.productId;
+}
+function matchesPendingCheckoutSnapshot(snapshot,run,manifest,offer) {
+  return matchesBaseCheckout(snapshot,run,manifest,offer) &&
+    snapshot.session.status==='complete' && snapshot.session.payment_status==='unpaid';
+}
+function matchesInactiveCheckoutSnapshot(snapshot,run,manifest,offer,eventType) {
+  return matchesBaseCheckout(snapshot,run,manifest,offer) &&
+    (eventType==='checkout.session.expired'
+      ? snapshot.session.status==='expired'
+      : snapshot.session.status==='complete' && snapshot.session.payment_status==='unpaid');
+}
 export function createUpgrade6Service({ sourceManifest, approvedManifestDigest,
     store, provider, config, now = () => new Date() }) {
   const settings = requireTestConfiguration(config);
@@ -79,7 +105,12 @@ export function createUpgrade6Service({ sourceManifest, approvedManifestDigest,
     const session=await provider.createCheckout(intent,reservation.stripe_idempotency_key);
     requireStripeTestSession(session?.id);
     if (session?.livemode !== false || session?.mode !== 'payment' ||
-        session?.amount_total !== 100 || session?.currency !== 'usd' ||
+        session?.status !== 'open' || session?.amount_total !== 100 ||
+        session?.currency !== 'usd' || session?.client_reference_id !== runId ||
+        (session?.metadata?.run_id !== runId ||
+         session?.metadata?.game_version !== manifest.version ||
+         session?.metadata?.manifest_digest !== manifest.digest ||
+         session?.metadata?.owner_proof_hash !== run.ownerProofHash) ||
         typeof session?.url !== 'string' ||
         !session.url.startsWith('https://checkout.stripe.com/')) {
       throw new Upgrade6Error('Untrusted Stripe test checkout response',503);
@@ -100,6 +131,10 @@ export function createUpgrade6Service({ sourceManifest, approvedManifestDigest,
       const storedRun=store.getRun(reservation.run_id);
       if (!storedRun) throw new Upgrade6Error('Missing run',422);
       const snapshot=await provider.reconcileCheckout(id);
+      if (event.type === 'checkout.session.completed' &&
+          matchesPendingCheckoutSnapshot(snapshot, storedRun, manifest, offer)) {
+        return {status:store.recordPending({event,rawBody,reservation,now:now().toISOString()})};
+      }
       if (!matchesTiq12WebhookPaymentSnapshot({
         session:snapshot.session,lineItems:snapshot.lineItems,storedRun,manifest,
         expectedPriceId:offer.priceId,expectedProductId:offer.productId,livemode:false,
@@ -117,6 +152,20 @@ export function createUpgrade6Service({ sourceManifest, approvedManifestDigest,
         paymentIntentId:intent.id,chargeId:charge.id,now:when.toISOString(),
         expiresAt:new Date(when.getTime()+365*86400000).toISOString()});
       return {status:result};
+    }
+    if (event.type==='checkout.session.async_payment_failed' ||
+        event.type==='checkout.session.expired') {
+      const id=requireStripeTestSession(event.data?.object?.id);
+      const reservation=store.getCheckoutBySession(id);
+      if (!reservation) throw new Upgrade6Error('Unknown Checkout reservation',422);
+      const run=store.getRun(reservation.run_id);
+      if (!run) throw new Upgrade6Error('Missing run',422);
+      const snapshot=await provider.reconcileCheckout(id);
+      if (!matchesInactiveCheckoutSnapshot(snapshot,run,manifest,offer,event.type)) {
+        throw new Upgrade6Error('Checkout failure cannot be reconciled',422);
+      }
+      return {status:store.recordCheckoutFailure({event,rawBody,reservation,
+        now:now().toISOString()})};
     }
     if (event.type==='charge.refunded' || event.type==='charge.dispute.created') {
       const sessionId=await provider.resolveReversalSession(event);
