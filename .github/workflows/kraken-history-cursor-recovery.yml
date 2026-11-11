@@ -1,5 +1,7 @@
 name: Kraken history cursor recovery (offline)
 on:
+  push:
+    branches: [release/justcall-handoff-only-20261017]
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:

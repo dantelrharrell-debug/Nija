@@ -2,7 +2,7 @@ name: Security Scanning
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, release/justcall-handoff-only-20261017 ]
   pull_request:
     branches: [ main, release/justcall-handoff-only-20261017 ]
   schedule:

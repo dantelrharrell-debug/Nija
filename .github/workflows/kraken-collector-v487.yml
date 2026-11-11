@@ -1,5 +1,7 @@
 name: Kraken independent collector v487 offline regression
 on:
+  push:
+    branches: [release/justcall-handoff-only-20261017]
   pull_request:
     branches:
       - main
