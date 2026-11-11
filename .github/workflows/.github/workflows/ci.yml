@@ -56,7 +56,7 @@ jobs:
       - name: Run tests
         run: pytest
 
-      - name: Optional: Smoke test Coinbase connection
+      - name: 'Optional: Smoke test Coinbase connection'
         run: |
           python - <<'PY'
           import os

@@ -43,3 +43,30 @@ def test_real_bandit_hook_bootstraps_and_still_denies_unsafe_code(tmp_path):
     assert "B301" in unsafe.stdout
     assert "ModuleNotFoundError" not in unsafe.stdout + unsafe.stderr
     assert "Unknown test" not in unsafe.stdout + unsafe.stderr
+
+
+def test_real_yaml_hook_accepts_documents_and_rejects_malformed_yaml(tmp_path):
+    """Valid Kubernetes document streams must pass without disabling safe loading."""
+    config = yaml.safe_load((ROOT / ".pre-commit-config.yaml").read_text())
+    repository = next(row for row in config["repos"]
+                      if any(hook["id"] == "check-yaml" for hook in row["hooks"]))
+    hook = next(row for row in repository["hooks"] if row["id"] == "check-yaml")
+    isolated = {"repos": [{"repo": repository["repo"], "rev": repository["rev"], "hooks": [hook]}]}
+    (tmp_path / ".pre-commit-config.yaml").write_text(yaml.safe_dump(isolated))
+    git = shutil.which("git")
+    assert git is not None
+    subprocess.run([git, "init", "--quiet"], cwd=tmp_path, check=True)  # nosec B603 # Fixed Git arguments.
+    environment = dict(os.environ, NIJA_DEFER_RUNTIME_SITE_HOOKS="1")
+    environment["PRE_COMMIT_HOME"] = str(tmp_path / "hook-cache")
+    paths = ["namespace.yaml", "workflow.yaml"]
+    for name, source in zip(paths, ["k8s/base/namespace.yaml", ".github/workflows/.github/workflows/ci.yml"]):
+        (tmp_path / name).write_bytes((ROOT / source).read_bytes())
+    command = [sys.executable, "-m", "pre_commit", "run", "check-yaml", "--files", *paths]
+    clean = subprocess.run(command, cwd=tmp_path, env=environment,  # nosec B603 # Fixed scanner arguments, no shell.
+                           capture_output=True, text=True, timeout=180)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    (tmp_path / "workflow.yaml").write_text("name: invalid: scalar\n")
+    invalid = subprocess.run(command, cwd=tmp_path, env=environment,  # nosec B603 # Same fixed scanner arguments.
+                             capture_output=True, text=True, timeout=60)
+    assert invalid.returncode == 1
+    assert "Failed" in invalid.stdout
