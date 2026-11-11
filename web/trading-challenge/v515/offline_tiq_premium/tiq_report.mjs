@@ -69,7 +69,7 @@ export function judgeRound(action, held, p0, p1, stopFired) {
   return fb;
 }
 
-// Existing Academy lessons (ids and titles match src/pages/academy/lessonData.js; a test checks that).
+// Existing Academy lesson IDs; report labels use neutral educational wording.
 export const REPORT_LESSONS = {
   risk: [
     { id: "18-25-5", ageGroup: "ages-18-25", title: "Renting vs. Buying and Risk Management" },
@@ -80,7 +80,7 @@ export const REPORT_LESSONS = {
     { id: "18-25-4", ageGroup: "ages-18-25", title: "Retirement Accounts and Investing" },
   ],
   discipline: [
-    { id: "26-45-4", ageGroup: "ages-26-45", title: "Advanced Investing and Passive Income" },
+    { id: "26-45-4", ageGroup: "ages-26-45", title: "Advanced Investing and Income Planning" },
     { id: "46-65-5", ageGroup: "ages-46-65", title: "Protecting and Diversifying Wealth" },
   ],
   diversification: [
@@ -88,7 +88,7 @@ export const REPORT_LESSONS = {
     { id: "18-25-4", ageGroup: "ages-18-25", title: "Retirement Accounts and Investing" },
   ],
   consistency: [
-    { id: "26-45-4", ageGroup: "ages-26-45", title: "Advanced Investing and Passive Income" },
+    { id: "26-45-4", ageGroup: "ages-26-45", title: "Advanced Investing and Income Planning" },
     { id: "18-25-5", ageGroup: "ages-18-25", title: "Renting vs. Buying and Risk Management" },
   ],
 };
