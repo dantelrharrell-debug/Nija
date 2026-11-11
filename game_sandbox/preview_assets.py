@@ -29,7 +29,9 @@ UI_CSP = (
 class PreviewAssets:
     """Cache only verified public assets; any mismatch prevents startup."""
 
-    def __init__(self, root: Path, manifest_sha256: str) -> None:
+    def __init__(self, root: Path, manifest_sha256: str, game_manifest: str | None = None) -> None:
+        if game_manifest is not None and not re.fullmatch(r'[a-f0-9]{64}', game_manifest):
+            raise ValueError('reviewed_game_manifest_pin_required')
         if not root.is_absolute() or root.resolve() != root or not root.is_dir():
             raise ValueError('reviewed_preview_root_required')
         if not re.fullmatch(r'[a-f0-9]{64}', manifest_sha256 or ''):
@@ -45,7 +47,7 @@ class PreviewAssets:
         if (not isinstance(manifest, dict)
                 or set(manifest) != {'version', 'game_manifest', 'files'}
                 or type(manifest['version']) is not int or manifest['version'] != 1
-                or manifest['game_manifest'] != PublishedGame().digest
+                or manifest['game_manifest'] != (game_manifest if game_manifest is not None else PublishedGame().digest)
                 or not isinstance(manifest['files'], dict)
                 or not 2 <= len(manifest['files']) <= MAX_FILES
                 or 'index.html' not in manifest['files']):
@@ -100,6 +102,6 @@ def install_preview_ui(app: Any) -> PreviewAssets:
     pin = os.environ.get('NIJA_IQ_SANDBOX_UI_MANIFEST_SHA256', '')
     if not root:
         raise ValueError('reviewed_preview_root_required')
-    assets = PreviewAssets(Path(root), pin)
+    assets = PreviewAssets(Path(root), pin, app.config.get('NIJA_IQ_MANIFEST_SHA256'))
     assets.register(app)
     return assets
