@@ -73,6 +73,7 @@ repos:
         name: Fix end of files
       - id: check-yaml
         name: Check YAML syntax
+        args: ['--allow-multiple-documents']
         exclude: |
           (?x)^(
             k8s/.*secrets\.yaml$

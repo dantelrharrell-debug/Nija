@@ -1,3 +1,7 @@
 {
-  "status": "statistical_fail",
-  "step1_passed": 
+  "report_status": "incomplete_historical_report",
+  "valid_for_certification": false,
+  "reason": "Original committed file is truncated and is not a complete JSON report. Missing results have not been reconstructed.",
+  "original_fragment_utf8": "{\n  \"status\": \"statistical_fail\",\n  \"step1_passed\": ",
+  "original_fragment_bytes": 52
+}
