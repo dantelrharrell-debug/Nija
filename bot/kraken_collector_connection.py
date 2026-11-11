@@ -56,6 +56,20 @@ def connect_reviewed_kraken_collector(
         if (not isinstance(pin, str) or len(pin) != 64
                 or any(ch not in "0123456789abcdef" for ch in pin)):
             raise KrakenCollectorConnectionDenied("approved_identity_pins_required")
+    # Validate the complete, unique reviewed registry before constructing any
+    # provider.  This is structural validation, never evidence of approval.
+    if (not isinstance(reviewed_provider_ids, Mapping)
+            or set(reviewed_provider_ids) != set(REQUIRED)
+            or any(not isinstance(value, str) or not value
+                   or value != value.strip()
+                   for value in reviewed_provider_ids.values())
+            or len(set(reviewed_provider_ids.values())) != len(REQUIRED)):
+        raise KrakenCollectorConnectionDenied("unique_reviewed_provider_ids_required")
+    if (not isinstance(independent_remaining, Mapping)
+            or not isinstance(reviewed_source_owners, Mapping)
+            or not callable(independent_open_intents)
+            or not callable(independent_positions)):
+        raise KrakenCollectorConnectionDenied("independent_source_bindings_required")
     providers = compose_authenticated_kraken_collector_sources(
         broker=broker,
         approved_api_key_sha256=approved_api_key_sha256,
