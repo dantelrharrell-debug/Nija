@@ -8,6 +8,8 @@ BLOCKED = [
     r"\b(my|our)\b.{0,25}\b(balance|portfolio|account number|holdings|income)\b",
     r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
     r"\b(?:\d[ -]*?){13,19}\b",
+    r"\b(ignore|override|disregard)\b.{0,60}\b(instructions|rules|safety|system prompt)\b",
+    r"\b(reveal|print|show)\b.{0,40}\b(system prompt|developer message|hidden instructions)\b",
 ]
 def validate_question(question):
     if not isinstance(question, str) or not 3 <= len(question.strip()) <= 300:
