@@ -129,8 +129,10 @@ jobs:
     - name: Validate baseline reporting regressions
       run: |
         set -euo pipefail
-        pip install 'detect-secrets==1.5.0' 'pytest==8.2.2'
-        NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -m pytest -q tests/test_baseline_secret_scan_reporting.py
+        pip install 'detect-secrets==1.5.0' 'pytest==8.2.2' 'PyYAML==6.0.3'
+        NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -m pytest -q \
+          tests/test_baseline_secret_scan_reporting.py \
+          tests/test_precommit_trufflehog_enforcement.py
 
     - name: Enforce baseline-aware scanning
       run: |
