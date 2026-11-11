@@ -143,7 +143,11 @@ test('verified expired checkout fails closed without granting or second session'
 });
 test('Checkout creation must bind the exact private run metadata before exposing the payment URL',async()=>{
  for(const tamperCheckout of [s=>s.metadata.owner_proof_hash='f'.repeat(64),s=>s.metadata.manifest_digest='f'.repeat(64),
-   s=>s.client_reference_id='run_wrong',s=>s.status='complete',s=>s.url='https://checkout.stripe.com.evil.example/test']){
+   s=>s.client_reference_id='run_wrong',s=>s.status='complete',s=>s.url='https://checkout.stripe.com.evil.example/test',
+   s=>s.url='https://checkout.stripe.com@evil.example/test',
+   s=>s.url='https://checkout.stripe.com:444/test',
+   s=>s.url='http://checkout.stripe.com/test',
+   s=>s.url='https://checkout.stripe.com/#unsafe']){
    const {service,store}=setup({tamperCheckout});
    const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
    await assert.rejects(service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin),/Untrusted/);
