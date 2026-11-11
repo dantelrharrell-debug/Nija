@@ -139,3 +139,10 @@ def test_precommit_failure_propagates_and_reports_real_outcome():
 
     assert upload["with"]["path"] == "pre-commit-report.json"
     assert upload["with"]["if-no-files-found"] == "error"
+
+    from scripts.run_precommit_validation import HOOKS
+    config = yaml.safe_load((SCRIPT.parents[1] / ".pre-commit-config.yaml").read_text())
+    for repository in config["repos"]:
+        for hook in repository["hooks"]:
+            if "name" in hook:
+                assert HOOKS.get(hook["name"]) == hook["id"]
