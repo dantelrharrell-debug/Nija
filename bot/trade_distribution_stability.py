@@ -18,6 +18,8 @@ Date: February 15, 2026
 """
 
 import logging
+
+from bot.report_json import write_report_json
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
@@ -25,7 +27,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from scipy import stats
 from collections import deque
-import json
 from pathlib import Path
 
 logger = logging.getLogger("nija.trade_distribution")
@@ -704,8 +705,7 @@ class TradeDistributionStabilityEngine:
             'recommendations': result.recommendations
         }
         
-        with open(filepath, 'w') as f:
-            json.dump(export_data, f, indent=2)
+        write_report_json(filepath, export_data)
         
         logger.info(f"📄 Results exported to: {filepath}")
         

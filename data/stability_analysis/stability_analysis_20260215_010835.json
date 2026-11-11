@@ -1,9 +1,7 @@
 {
-  "timestamp": "2026-02-15T01:08:35.166063",
-  "stability": {
-    "is_stable": false,
-    "stability_score": 0.8,
-    "confidence_level": 0.95
-  },
-  "tests": {
-    "ks_test": 
+  "report_status": "incomplete_historical_report",
+  "valid_for_certification": false,
+  "reason": "Original committed file is truncated and is not a complete JSON report. Missing results have not been reconstructed.",
+  "original_fragment_utf8": "{\n  \"timestamp\": \"2026-02-15T01:08:35.166063\",\n  \"stability\": {\n    \"is_stable\": false,\n    \"stability_score\": 0.8,\n    \"confidence_level\": 0.95\n  },\n  \"tests\": {\n    \"ks_test\": ",
+  "original_fragment_bytes": 178
+}
