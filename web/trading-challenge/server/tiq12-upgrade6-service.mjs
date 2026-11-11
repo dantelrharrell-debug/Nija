@@ -14,7 +14,7 @@ import {
 // A string-prefix check can be bypassed with encoded/userinfo or sibling hosts.
 // Parse and enforce the exact Stripe Checkout HTTPS origin.
 function isTrustedStripeCheckoutUrl(value) {
-  if (typeof value !== 'string' || value.length > 4096) return false;
+  if (typeof value !== 'string' || value.length > 4096 || value.includes('\\')) return false;
   try {
     const url = new URL(value);
     return url.protocol === 'https:' && url.hostname === 'checkout.stripe.com' &&
