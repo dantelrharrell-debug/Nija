@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, release/justcall-handoff-only-20261017 ]
   schedule:
     # Run weekly on Mondays at 3am UTC
     - cron: '0 3 * * 1'
@@ -119,6 +119,8 @@ jobs:
           ${{ steps.grype-scan.outputs.sarif }}
 
   python-package-scan:
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
     name: Python Package Security Scan
     runs-on: ubuntu-latest
     strategy:
@@ -157,8 +159,13 @@ jobs:
       if: ${{ !cancelled() && steps.production-deps.outcome == 'success' }}
       run: |
         set -euo pipefail
-        pip install guarddog
-        guarddog pypi verify "${{ matrix.requirements }}" --output-format json --exit-non-zero-on-finding > guarddog-report.json
+        pip install 'guarddog==3.2.0'
+        if guarddog pypi verify "${{ matrix.requirements }}" --output-format json --exit-non-zero-on-finding > guarddog-report.json; then
+          guarddog_status=0
+        else
+          guarddog_status=$?
+        fi
+        python -S scripts/check_guarddog_report.py guarddog-report.json "$guarddog_status"
 
     - name: Upload GuardDog report
       uses: actions/upload-artifact@v4

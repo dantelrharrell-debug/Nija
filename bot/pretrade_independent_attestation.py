@@ -36,12 +36,15 @@ def inspect_authenticated_attestations(
     installing a collector or by submitting its own producer status.
     """
     denied = {field: False for field in FIELDS}
+    # Pin one collector for the whole observation; concurrent replacement must
+    # not change the reported installation state or the producer being called.
+    collector = _COLLECTOR
 
     def report(reason: str, checks: Mapping[str, bool] = denied) -> dict[str, Any]:
         return {
             "checks": dict(checks),
             "producer_status": reason,
-            "collector_installed": callable(_COLLECTOR),
+            "collector_installed": callable(collector),
             "authorizes_orders": False,
             "failure_reasons": {field: reason for field in FIELDS if checks.get(field) is not True},
         }
@@ -49,10 +52,10 @@ def inspect_authenticated_attestations(
     if (not isinstance(account, str) or not account or account != account.strip()
             or any(char.isspace() for char in account)):
         return report("account_scope_invalid")
-    if _COLLECTOR is None:
+    if collector is None:
         return report("collector_missing")
     try:
-        raw = _COLLECTOR(account)
+        raw = collector(account)
         if not isinstance(raw, Mapping):
             return report("collector_result_invalid")
         stamp = raw.get("observed_at_epoch")

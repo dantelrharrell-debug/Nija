@@ -94,7 +94,7 @@ def test_cursor_budget_never_falls_back_to_offset():
 
     with pytest.raises(IncompleteHistory, match="page limit"):
         collect_history(read, account_scope="platform:kraken", use_cursor=True, max_pages=1)
-    assert calls == [{"with_cursor": True}]
+    assert calls == [{"with_cursor": True, "consolidate_taker": False}]
 
 
 @pytest.mark.parametrize("cursor", [True, False, "true", 1])
@@ -115,7 +115,7 @@ def test_private_request_selects_cursor_explicitly_without_replay(tmp_path, curs
             return {"error": [], "result": {"open": {}}}
         if cursor is True:
             return page(endpoint, params)
-        assert set(params) == {"ofs"}
+        assert set(params) == ({"ofs", "consolidate_taker"} if endpoint == "TradesHistory" else {"ofs"})
         return {"error": [], "result": {FIELDS[endpoint]: {}, "count": 0}}
 
     broker = SimpleNamespace(broker_type="kraken", account_type="platform", user_id=None,
@@ -187,7 +187,7 @@ def test_recovery_transport_mode_diagnostic_is_fixed_label_without_gateway_addre
     from bot.kraken_live_history_recovery import _transport_mode_label
 
     assert _transport_mode_label(SimpleNamespace(_gateway_url="", _gateway_only_mode=False)) == "direct_krakenex_configured"
-    secret_url = "https://private.example/path?token=never-log"
+    secret_url = "https://private.example/path?token=never-log"  # pragma: allowlist secret -- synthetic URL redaction fixture
     label = _transport_mode_label(SimpleNamespace(_gateway_url=secret_url, _gateway_only_mode=True))
     assert label == "gateway_configured"
     assert "private" not in label and "token" not in label
