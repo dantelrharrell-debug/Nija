@@ -23,6 +23,8 @@ Rejecting non-finite values can expose an existing undefined statistic as an err
 
 ## Validation and release hold
 
-Nine filesystem/integration tests cover finite round trips, unsupported values, non-finite values, failed flush/replacement, both actual exporter methods, and exact preservation of the historical fragments. The full security regression group, including these tests, passes locally: 53 tests and seventeen subtests. The mandatory security workflow runs the added regressions. Both package and legacy sibling-import contexts are covered without importing the bot startup graph.
+Nine filesystem/integration tests cover finite round trips, unsupported values, non-finite values, failed flush/replacement, both actual exporter methods, and exact preservation of the historical fragments. The full security regression group, including these tests, passes locally: 54 tests and seventeen subtests. The mandatory security workflow runs the added regressions. Both package and legacy sibling-import contexts are covered without importing the bot startup graph.
 
 The previous full scan still blocks 214 unreviewed candidates. This candidate does not dispose of those findings, image/package findings, remaining whitespace-hook failures, missing Kraken identity evidence, collector installation, ledger/exit certification, independent review, or production backup/restore requirements. New hosted checks on the exact candidate and separate release approval remain required. No deployment or order activation is performed.
+
+The candidate also integrates the merged Bandit bootstrap repair from main. The real pinned hook boots successfully against safe synthetic code and rejects the unsafe synthetic probe with B301; the probe is scanned as text and never executed. Combined local checks pass on main base `c26aa02a878a6a40069a606b111ea0f83f4d7145`. This does not constitute an approved production release.

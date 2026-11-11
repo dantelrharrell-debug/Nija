@@ -115,6 +115,9 @@ repos:
     hooks:
       - id: bandit
         name: Bandit security check
+        # Bandit 1.7.5 imports pbr.version at startup; newer stevedore no
+        # longer installs that dependency transitively into this hook's venv.
+        additional_dependencies: ['pbr==6.1.1']
         args: ['-c', '.bandit.yml']
         exclude: |
           (?x)^(
