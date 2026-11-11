@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#0B1220" rx="4"/>
+  <!-- Sword blade -->
+  <polygon points="15,2 17,2 16,28" fill="#A8C8DC"/>
+  <line x1="16" y1="2" x2="16" y2="28" stroke="#E8F4FF" stroke-width="0.8" opacity="0.6"/>
+  <!-- Guard -->
+  <path d="M10,10 L22,10 L21.5,13 L10.5,13 Z" fill="#C9A84C"/>
+  <line x1="10" y1="10" x2="22" y2="10" stroke="#FFF0A0" stroke-width="0.8" opacity="0.5"/>
+  <!-- Left hook -->
+  <path d="M10,10 Q7,9 6,11 Q5,13 7,14 Q9,15 10.5,13" fill="#C9A84C"/>
+  <!-- Right hook -->
+  <path d="M22,10 Q25,9 26,11 Q27,13 25,14 Q23,15 21.5,13" fill="#C9A84C"/>
+  <!-- Grip -->
+  <rect x="14.5" y="13" width="3" height="8" rx="1.2" fill="#1A0608"/>
+  <line x1="14.5" y1="14.5" x2="17.5" y2="13" stroke="#8B0000" stroke-width="1" opacity="0.9"/>
+  <line x1="14.5" y1="16.5" x2="17.5" y2="15" stroke="#8B0000" stroke-width="1" opacity="0.9"/>
+  <line x1="14.5" y1="18.5" x2="17.5" y2="17" stroke="#8B0000" stroke-width="1" opacity="0.9"/>
+  <!-- Pommel -->
+  <circle cx="16" cy="22" r="2.5" fill="#C9A84C"/>
+  <circle cx="15.4" cy="21.4" r="1" fill="#FFF0A0" opacity="0.5"/>
+  <!-- N letterform hint -->
+  <text x="16" y="8" text-anchor="middle" font-family="Georgia,serif" font-size="5" font-weight="900" fill="#C9A84C" opacity="0.9">N</text>
+</svg>
