@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, release/justcall-handoff-only-20261017 ]
   schedule:
     # Run weekly on Mondays at 3am UTC
     - cron: '0 3 * * 1'
