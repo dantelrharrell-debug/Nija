@@ -1450,6 +1450,17 @@ def main() -> int:
             _startup_stage_ts["step2.5_done"] - _startup_stage_ts.get("step2.5_start", _startup_stage_ts["step2.5_done"]),
         )
 
+        # The protected composition root supplies reviewed runtime bindings and
+        # authenticated release receipts explicitly. Missing bindings do not
+        # synthesize evidence or authorize orders; monitoring can still start.
+        from bot.kraken_startup_evidence_binding import install_from_canonical_startup
+
+        collector_status = install_from_canonical_startup(manager, strategy)
+        logger.warning(
+            "KRAKEN_STARTUP_EVIDENCE status=%s authorizes_orders=false",
+            collector_status,
+        )
+
         logger.info("\n[STEP 3] Starting Trading Loop")
         # Arm the startup watchdog.  It will dump per-thread stacks if
         # CANONICAL_CORE_THREAD_REGISTERED is not reached within the deadline.
