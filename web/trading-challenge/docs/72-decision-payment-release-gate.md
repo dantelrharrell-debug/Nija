@@ -34,3 +34,21 @@ Free game, existing Stripe accounts/products, NIJA Academy, trading safety contr
 - Local `node --test *_test.mjs` in `offline_tiq_premium/` completed **7/7 test-file subtests passing**, zero failures. These are offline tests, **not** Stripe sandbox E2E tests.
 - `GAME_BACKEND_INTEGRATION_SPEC.md` explicitly states **SPECIFICATION ONLY. NOT IMPLEMENTED** for server integration; `LAUNCH_VERIFICATION_20261109.md` states preview-only and paid report coming soon. The included payment flow and storage modules are not proof of deployed durable payment infrastructure.
 - Implement the new payment backend against this verified archive; do not reuse the older six-answer `web/trading-challenge` checkout without adaptation and independent test certification.
+
+## Applied implementation research (Stripe and Vercel official guidance)
+
+- Stripe recommends Checkout Sessions and **webhook-driven fulfillment** rather than relying on success-page redirects. Handle `checkout.session.completed`, `checkout.session.async_payment_succeeded`, and async failures; grant only after payment status is paid. Source: https://github.com/stripe/ai/blob/main/skills/stripe-best-practices/references/payments.md
+- Vercel Functions scale to separate/concurrent invocations; process-local memory is not a durable payment or idempotency store. Source: https://vercel.com/docs/functions
+- Vercel connects external Postgres through Marketplace; Vercel Postgres itself is no longer offered. Source: https://vercel.com/docs/postgres
+- Vercel environment variable changes apply to **new deployments**, not existing deployments. Source: https://vercel.com/docs/environment-variables
+
+### Specific adaptation to the verified v515 game
+
+1. Treat `offline_tiq_premium/GAME_BACKEND_INTEGRATION_SPEC.md` as a design specification, not deployed code. Its `payment_flow_6b.mjs` explicitly gates on `mode === "test"` and must **not** be flipped to live by merely changing a flag.
+2. Wire `tiq_engine.mjs` and `tiq_report.mjs` to an authenticated server endpoint that recomputes the **72 decisions** from the approved client schema. Never trust browser scores.
+3. Implement a real database adapter for `storage_spec_6b.mjs` semantics with unique constraints on event ID, payment intent ID, and entitlement/run ID. Checkout reservation and Stripe session creation must use stable idempotency keys across retries, including crashes between remote creation and local commit.
+4. Stripe webhook endpoint must verify the **raw** body signature and process paid/async/refund/dispute events idempotently; no fulfillment solely from redirect or a client-provided session ID.
+5. Enforce server-side adult eligibility; provide a secure receipt recovery path. Preserve free play without collecting personal information.
+6. Configure test-only credentials and sandbox webhook, run a real $1 test-mode purchase and report recovery, then separately stage a production build with live-mode credentials and owner-approved activation.
+
+**Current blocker:** no deployed durable adapter, live-mode webhook, verified sandbox E2E, or production release evidence. Do not claim these exist merely because offline mocks pass.
