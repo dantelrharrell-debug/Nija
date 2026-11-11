@@ -11,6 +11,17 @@ import {
   fixedTiq12Checkout, verifyTiq12StripeWebhook, requireStripeTestSession,
 } from './tiq12-upgrade6-security.mjs';
 
+// A string-prefix check can be bypassed with encoded/userinfo or sibling hosts.
+// Parse and enforce the exact Stripe Checkout HTTPS origin.
+function isTrustedStripeCheckoutUrl(value) {
+  if (typeof value !== 'string' || value.length > 4096) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'checkout.stripe.com' &&
+      url.port === '' && url.username === '' && url.password === '' &&
+      url.hash === '' && url.pathname.startsWith('/') && url.pathname.length > 1;
+  } catch { return false; }
+}
 function requireRunId(id) {
   if (typeof id !== 'string' || !/^run_[0-9a-f]{32}$/.test(id)) {
     throw new Upgrade6Error('Invalid run identifier', 422);
@@ -111,8 +122,7 @@ export function createUpgrade6Service({ sourceManifest, approvedManifestDigest,
          session?.metadata?.game_version !== manifest.version ||
          session?.metadata?.manifest_digest !== manifest.digest ||
          session?.metadata?.owner_proof_hash !== run.ownerProofHash) ||
-        typeof session?.url !== 'string' ||
-        !session.url.startsWith('https://checkout.stripe.com/')) {
+        !isTrustedStripeCheckoutUrl(session?.url)) {
       throw new Upgrade6Error('Untrusted Stripe test checkout response',503);
     }
     store.attachSession(reservation.reservation_id,session.id);
