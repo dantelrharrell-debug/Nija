@@ -1,0 +1,44 @@
+name: NIJA recovery evidence gates (offline)
+on:
+  pull_request:
+    paths:
+      - 'tests/test_tiq_canonical_evidence_gate_20261110.py'
+      - 'tests/test_trading_evidence_boundary_20261110.py'
+      - 'game_sandbox/ionos_parity.test.mjs'
+      - 'game_sandbox/README.md'
+      - 'scripts/nija_kraken_readonly_history_collector_v441.py'
+      - 'scripts/render_entrypoint.sh'
+      - 'docs/recovery/**'
+      - '.github/workflows/recovery-evidence-gates.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-recovery-gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      GH_TOKEN: ''
+      KRAKEN_API_KEY: ''
+      KRAKEN_API_SECRET: ''
+      REDIS_URL: ''
+      NIJA_FORCE_ACTIVATION: 'false'
+      FORCE_TRADE: 'false'
+      NIJA_ALLOW_LIVE_HEARTBEAT_ORDERS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run source-boundary regression gates without production imports
+        run: |
+          python -S -m unittest discover -s tests -p 'test_tiq_canonical_evidence_gate_20261110.py' -v
+          python -S -m unittest discover -s tests -p 'test_trading_evidence_boundary_20261110.py' -v
+      - name: Check served-game 72-decision parity only (not preview certification)
+        run: node --test game_sandbox/ionos_parity.test.mjs
