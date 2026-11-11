@@ -1,5 +1,10 @@
 # Isolated Trading IQ payment sandbox
 
+Current recovery evidence and verified-UI startup contract:
+[STAGING_RECOVERY_20261111.md](STAGING_RECOVERY_20261111.md). The GitHub account
+billing lock, matching frontend package and reviewed paid staging apply remain
+external completion requirements.
+
 Preview client and return-page integration are now available on a review branch;
 see [CLIENT_INTEGRATION.md](CLIENT_INTEGRATION.md) for exact installation, tests
 and current hosting blockers. This is not proof of installation in IONOS or

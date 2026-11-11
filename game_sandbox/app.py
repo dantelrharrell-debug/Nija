@@ -114,6 +114,10 @@ def create_app(service: Sandbox) -> Any:
                 "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
             }
         )
+        if request.endpoint in {"preview_root", "preview_game", "preview_asset"}:
+            from .preview_assets import UI_CSP
+
+            response.headers["Content-Security-Policy"] = UI_CSP
         if request.endpoint == "report_return":
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
