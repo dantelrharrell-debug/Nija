@@ -26,3 +26,11 @@ Related issue: #3754.
 ## Preserve
 
 Free game, existing Stripe accounts/products, NIJA Academy, trading safety controls, and all existing customer records. Do not create a new game, Stripe product, or payment account.
+
+## Verified approved archive inspection (2026-11-11)
+
+- Original owner-supplied `nija-trading-iq-game-only-v515-77079538(1).zip` SHA-256 **matches** `77079538953000d0ebbd741665c081820de3a8c6f60debc0cb6c72502f99d224`.
+- The archive includes `offline_tiq_premium/tiq_engine.mjs`, `tiq_scoring.mjs`, `tiq_report.mjs`, `payment_flow_6b.mjs`, `storage_spec_6b.mjs`, and `GAME_BACKEND_INTEGRATION_SPEC.md`.
+- Local `node --test *_test.mjs` in `offline_tiq_premium/` completed **7/7 test-file subtests passing**, zero failures. These are offline tests, **not** Stripe sandbox E2E tests.
+- `GAME_BACKEND_INTEGRATION_SPEC.md` explicitly states **SPECIFICATION ONLY. NOT IMPLEMENTED** for server integration; `LAUNCH_VERIFICATION_20261109.md` states preview-only and paid report coming soon. The included payment flow and storage modules are not proof of deployed durable payment infrastructure.
+- Implement the new payment backend against this verified archive; do not reuse the older six-answer `web/trading-challenge` checkout without adaptation and independent test certification.
