@@ -36,8 +36,7 @@ def enabled() -> bool:
     # The legacy five-decision report cannot fulfill the approved 72-decision game.
     # Explicitly fail closed until the server-authoritative 72-decision payment
     # and fulfillment contract replaces this legacy integration.
-    if os.getenv("NIJA_GAME_APPROVED_DECISIONS", "72") != "5":
-        return False
+    return False  # Legacy five-decision checkout permanently disabled pending replacement
     token = os.getenv("NIJA_GAME_GATEWAY_TOKEN", "")
     return (os.getenv("NIJA_GAME_REPORTS_ENABLED") == "true" and len(token) >= 48
             and os.getenv("STRIPE_SECRET_KEY", "").startswith(("sk_live_", "rk_live_")))
