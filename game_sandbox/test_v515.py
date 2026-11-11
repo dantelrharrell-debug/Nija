@@ -11,8 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from game_sandbox.ionos import PublishedGame
-from game_sandbox.service import Config, Denied, Sandbox
-from game_sandbox.v515 import MODULE_DIGESTS, V515Game, build_v515_report
+from game_sandbox.service import Config, Denied, Manifest, Sandbox
+from game_sandbox.v515 import MODULE_DIGESTS, SOURCE_SHA256, V515Game, build_v515_report
 
 
 def completed_run() -> dict:
@@ -106,6 +106,33 @@ class V515Tests(unittest.TestCase):
         self.assertNotEqual(game.digest, PublishedGame().digest)
         self.assertEqual(len(game.rounds), 72)
         self.assertIn("v515", game.version)
+
+    def test_copy_revision_cannot_reopen_pre_revision_runs(self) -> None:
+        original = Manifest({
+            "version": "ionos-v515-iq72-" + SOURCE_SHA256[:16],
+            "source_sha256": SOURCE_SHA256,
+            "structure": "12_per_challenge",
+            "challenges": [{"rounds": [{"id": f"challenge_{i}_round_{j}", "choices": 6}
+                                       for j in range(12)]} for i in range(6)],
+        })
+        self.assertNotEqual(original.digest, V515Game().digest)
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(database=str(Path(directory) / "trading_iq_sandbox.sqlite3"),
+                            origin="https://fixture.example", key="sk_test_" + "fixture",
+                            webhook_secret="whsec_" + "fixture", price="price_v515_fixture",
+                            product="prod_v515_fixture", enabled=True)
+            provider = ProviderFixture()
+            old = Sandbox(config, original, provider, lambda payload: {})
+            run_id, owner, _ = old.start(True)
+            revised = Sandbox(config, V515Game(), provider, build_v515_report)
+            with self.assertRaisesRegex(Denied, "ownership_required"):
+                revised.report(run_id, owner)
+            self.assertEqual(provider.calls, 0)
+
+    def test_tampered_report_copy_is_rejected(self) -> None:
+        with patch.dict(MODULE_DIGESTS, {"tiq_report.mjs": "0" * 64}):
+            with self.assertRaisesRegex(Denied, "integrity_mismatch"):
+                V515Game()
 
     def test_report_matches_approved_v515_instead_of_legacy_score(self) -> None:
         result = build_v515_report(completed_run())

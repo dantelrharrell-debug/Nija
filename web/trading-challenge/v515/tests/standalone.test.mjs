@@ -6,7 +6,7 @@ import {previewSimulationAllowed} from '../src/lib/tiqReportReopen.js';
 import {releaseStatus} from '../server/release-status.mjs';
 import {ROUNDS,CHALLENGES,SCENARIOS,replayRun} from '../offline_tiq_premium/tiq_engine.mjs';
 const root=new URL('../',import.meta.url);
-test('approved gameplay, scoring, lessons, visuals and offline tests stay byte-identical',()=>{
+test('all source files match the pinned report-copy revision',()=>{
  const hashes=JSON.parse(readFileSync(new URL('approved-source-hashes.json',root)));
  for(const [file,hash] of Object.entries(hashes)) assert.equal(createHash('sha256').update(readFileSync(new URL(file,root))).digest('hex'),hash,file);
 });
