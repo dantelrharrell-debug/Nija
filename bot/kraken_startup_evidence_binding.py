@@ -62,12 +62,15 @@ def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
     factory, verifier = _factory, _verify_receipts
     if not callable(factory) or not callable(verifier):
         return "trusted_startup_binding_missing"
+    failure_status = "reviewed_startup_binding_denied"
     try:
         from bot.broker_manager import KrakenBroker
         from bot.kraken_authenticated_account_identity_v478 import _broker_account_scope
         from bot.kraken_collector_composition_v487 import install_reviewed_kraken_collector
 
+        failure_status = "startup_binding_factory_failed"
         binding = factory(manager=manager, strategy=strategy)
+        failure_status = "reviewed_startup_binding_denied"
         if (type(binding) is not ReviewedStartupBinding
                 or binding.manager is not manager or binding.strategy is not strategy
                 or manager is None or strategy is None):
@@ -85,10 +88,12 @@ def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
                 or getattr(broker, "connected", False) is not True
                 or _broker_account_scope(broker) != "platform:kraken"):
             return "canonical_kraken_binding_mismatch"
+        failure_status = "release_receipt_verification_failed"
         if (set(binding.receipts) != RECEIPTS
                 or any(value is None for value in binding.receipts.values())
                 or verifier(binding) is not True):
             return "authenticated_release_receipts_required"
+        failure_status = "collector_registration_failed"
         install_reviewed_kraken_collector(
             providers=binding.providers,
             reviewed_provider_ids=binding.reviewed_provider_ids,
@@ -99,4 +104,4 @@ def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
         return "diagnostic_collector_installed"
     except Exception:
         # Provider exceptions can include credentials or private exchange data.
-        return "reviewed_startup_binding_denied"
+        return failure_status

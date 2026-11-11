@@ -86,7 +86,7 @@ def test_each_failed_provider_prevents_atomic_install(runtime, field):
     binding = runtime[3]
     providers = dict(binding.providers)
     providers[field] = lambda: {"verified": False}
-    assert invoke(runtime, replace(binding, providers=providers)) == "reviewed_startup_binding_denied"
+    assert invoke(runtime, replace(binding, providers=providers)) == "collector_registration_failed"
     assert attestation._COLLECTOR is None
 
 
@@ -144,7 +144,7 @@ def test_invalid_evidence_is_not_relabelled_or_refreshed(runtime, failure):
         observation["authorizes_orders"] = True
     providers = dict(binding.providers)
     providers[field] = lambda: observation
-    assert invoke(runtime, replace(binding, providers=providers)) == "reviewed_startup_binding_denied"
+    assert invoke(runtime, replace(binding, providers=providers)) == "collector_registration_failed"
     assert attestation._COLLECTOR is None
 
 
@@ -155,7 +155,7 @@ def test_exceptions_are_sanitized_and_preserve_existing_collector(runtime):
     def deny(binding):
         raise RuntimeError("private-provider-data")
 
-    assert invoke(runtime, verifier=deny) == "reviewed_startup_binding_denied"
+    assert invoke(runtime, verifier=deny) == "release_receipt_verification_failed"
     assert attestation._COLLECTOR is sentinel
 
 
@@ -177,3 +177,31 @@ def test_canonical_handoff_precedes_core_engine_start():
     assert calls["_publish_canonical_strategy_for_runtime"].lineno < hook.lineno
     assert hook.lineno < calls["start_trading_engine"].lineno
     assert [arg.id for arg in hook.args] == ["manager", "strategy"]
+
+
+@pytest.mark.parametrize("stage", ["factory", "verifier", "collector"])
+def test_startup_failure_stage_is_fixed_and_preserves_registry(runtime, stage):
+    sentinel = lambda account: {}
+    attestation._COLLECTOR = sentinel
+
+    def private_failure(*args, **kwargs):
+        raise RuntimeError("private-provider-response-must-never-escape")
+
+    manager, strategy, _, binding, verifier = runtime
+    factory = (lambda **kwargs: binding)
+    expected = "collector_registration_failed"
+    if stage == "factory":
+        factory = private_failure
+        expected = "startup_binding_factory_failed"
+    elif stage == "verifier":
+        verifier = private_failure
+        expected = "release_receipt_verification_failed"
+    else:
+        providers = dict(binding.providers)
+        providers[REQUIRED[0]] = private_failure
+        binding = replace(binding, providers=providers)
+    startup.register_reviewed_startup_binding(factory, verify_receipts=verifier)
+    assert startup.install_from_canonical_startup(manager, strategy) == expected
+    assert attestation._COLLECTOR is sentinel
+    if stage == "factory":
+        runtime[-1].assert_not_called()
