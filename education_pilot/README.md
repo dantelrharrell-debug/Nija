@@ -1,22 +1,27 @@
 # NIJA AI Education Pilot — offline mock only
 
-**Status:** Draft, not production-certified. No external AI service, broker, payment, customer account, database or trading integration.
+**Status:** Source merged into main by PR #3744; not production-certified or activated. The separate hardening changes are review-only on a fix/ branch and must not be merged or deployed without explicit authorization.
 
 ## Source and isolation
-Based on the reviewed curriculum in `education_system.py` (lesson_001, lesson_002, lesson_003, lesson_005). This package does not import that Flask module, avoiding its database dependencies and side effects. It is not registered as an HTTP endpoint. No existing files are changed.
+Based on reviewed curriculum in `education_system.py` (lesson_001, lesson_002, lesson_003, lesson_005). This package does not import the Flask module, register an HTTP endpoint, access a database, or connect to external AI, broker, payment, customer account, or trading services. The provider returns static educational examples, not generative AI.
 
-## Test
+## Offline test
 From repository root, with Python 3:
+
 ```sh
 python -m unittest discover -s education_pilot/tests -v
 ```
-This uses Python standard library only and does not need credentials or network access. The mock returns static responses and does not claim to provide generative AI.
 
-## Limitations
-Input screening is intentionally conservative and incomplete; do not submit actual PII, brokerage details, credentials, private customer prompts or financial data. This prototype is not an effective production DLP system. The budget counter is per process, not a billing-enforced hard cap. It does not prevent charges from unrelated projects.
+Tests use only the Python standard library, synthetic inputs, and no credentials or network. Independently verify tests and security scanning before approving any integration; runner-startup failures are not successful test runs.
 
-## Before any API experiment
-Obtain new explicit approval. Verify the actual credit grant, Personal organization and applicable model pricing. Review vendor data handling and retention, update `mobile/DATA_INVENTORY.md`, privacy disclosures, processor inventory and applicable consent before customer data is ever used. Add a separately reviewed provider adapter with server-side credentials, enforced budgets, timeouts and privacy protections. Do not activate mobile or production endpoints.
+## Limits and safety
+Input screening is intentionally incomplete and is **not** production data-loss prevention. Do not submit real personal information, brokerage details, credentials, private customer prompts, or financial data. The in-memory request counter is per Tutor instance, not a persistent, distributed, billing-enforced limit. It cannot prevent external costs. The mock-only response schema is checked, but this is not a substitute for production security review.
+
+## Render diagnosis (November 11, 2026)
+Render service `srv-d3qtoogdl3ps73c7ovog` failed to build merge commit `44ea9de` while installing existing Python dependencies. Logs show pandas Cython compilation under Python 3.13 failing because NumPy headers require Cython 3 or newer. The education pilot does not add dependencies. The failure is not evidence that the pilot was activated. Correcting Render, Python, requirements, or production configuration is outside this PR's authorization.
+
+## Before any integration
+Obtain separate explicit approval. Verify any API credits, organization ownership, model pricing, vendor data handling and retention. Review `mobile/DATA_INVENTORY.md`, privacy disclosures, processor inventory, and consent requirements. A future separately reviewed provider adapter would need server-side credentials, enforceable budgets, timeouts, and privacy safeguards. Do not enable AI API calls, production endpoints, customer data collection, payments, or trading.
 
 ## Acceptance
-Review diff and branch against main; execute offline tests independently; inspect security scanning; treat runner-startup failures as infrastructure failures, not passing tests. Do not merge, deploy, publish, collect customer data, enable payments or activate trading.
+Review this branch against main; run the offline tests independently; inspect security scanning; do not merge, deploy, publish, activate payments or trading.
