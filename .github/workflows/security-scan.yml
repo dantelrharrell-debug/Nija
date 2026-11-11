@@ -133,7 +133,8 @@ jobs:
         NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -m pytest -q \
           tests/test_baseline_secret_scan_reporting.py \
           tests/test_precommit_trufflehog_enforcement.py \
-          tests/test_guarddog_report_enforcement.py
+          tests/test_guarddog_report_enforcement.py \
+          tests/test_precommit_validation_report.py
 
     - name: Enforce baseline-aware scanning
       run: |
@@ -210,22 +211,17 @@ jobs:
       run: python -m pytest -q tests/test_bandit_hook_bootstrap.py
 
     # A hook initialization or detection failure must fail the job.
+    - name: Test pre-commit enforcement diagnostics
+      run: python -S -m unittest discover -s tests -p 'test_precommit_validation_report.py' -v
+
     - name: Run pre-commit on all files
       id: precommit
-      run: |
-        pre-commit run --all-files --show-diff-on-failure
-
-    - name: Generate pre-commit report
-      if: always()
-      env:
-        PRECOMMIT_OUTCOME: ${{ steps.precommit.outcome }}
-      run: |
-        printf 'Pre-commit step outcome: %s\n' "$PRECOMMIT_OUTCOME" > pre-commit-report.txt
-        echo "Review the full pre-commit job log; a failed step blocks the job." >> pre-commit-report.txt
+      run: python -S scripts/run_precommit_validation.py --report pre-commit-report.json
 
     - name: Upload pre-commit report
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: pre-commit-report
-        path: pre-commit-report.txt
+        path: pre-commit-report.json
+        if-no-files-found: error
