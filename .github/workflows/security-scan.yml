@@ -204,7 +204,10 @@ jobs:
     - name: Install pre-commit
       run: |
         python -m pip install --upgrade pip
-        pip install pre-commit
+        pip install pre-commit 'pytest==8.2.2' 'PyYAML==6.0.3'
+
+    - name: Verify isolated Bandit hook can scan and reject unsafe code
+      run: python -m pytest -q tests/test_bandit_hook_bootstrap.py
 
     # A hook initialization or detection failure must fail the job.
     - name: Run pre-commit on all files

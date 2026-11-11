@@ -27,7 +27,7 @@ tests:
   - B306  # Insecure mktemp
   - B307  # eval() usage
   - B308  # mark_safe usage
-  - B309  # HTTPSConnection
+  # B309 was removed; retain B323 for unverified TLS contexts below.
   - B310  # urllib urlopen
   - B311  # Random for crypto
   - B312  # Telnet usage
@@ -40,10 +40,10 @@ tests:
   - B319  # XML vulnerabilities
   - B320  # XML vulnerabilities
   - B321  # FTP usage
-  - B322  # Input function
+  # B322 was removed with Python 2 input; retain B307 for eval above.
   - B323  # Unverified SSL context
   - B324  # Insecure hash functions
-  - B325  # Insecure temp file
+  # B325 was removed; retain B306 for insecure temporary files above.
   - B401  # Import of telnetlib
   - B402  # Import of ftplib
   - B403  # Import of pickle
@@ -64,7 +64,7 @@ tests:
   - B505  # Weak cryptographic key
   - B506  # yaml.load
   - B507  # SSH with no host key verification
-  - B601  # Parameterized shell
+  # B601 remains in the existing skips list; it cannot also be selected here.
   - B602  # Shell injection
   - B603  # Subprocess without shell=True
   - B604  # Shell=True
