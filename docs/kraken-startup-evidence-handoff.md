@@ -10,6 +10,12 @@ The protected, independently reviewed deployment composition root must call
 same interpreter before entering canonical main. Importing a module does not
 register anything. No environment-variable factory loader is provided.
 
+Registration must occur after the last process replacement, inside the final
+canonical Python interpreter. A registration made before `os.execvpe`, a shell
+handoff, or a new Python process is lost. Preserve the ledger recovery bootstrap
+and canonical entrypoint chain; add the reviewed binding at the final Python
+composition boundary rather than registering in the earlier restore process.
+
 The factory receives the actual manager and strategy as keyword arguments and
 returns `ReviewedStartupBinding` with those same objects, the manager's exact
 connected native platform Kraken broker, the existing thirteen reviewed source
@@ -43,6 +49,46 @@ Monitoring startup continues, and existing fail-closed admission and execution
 proof gates remain responsible for blocking new orders.
 
 ## Release dependencies
+
+### Production observation: November 11, 2026, 23:35–23:44 UTC
+
+Read-only Render inspection identified the existing service
+`srv-d98dsr5aeets73fpbaqg` in workspace `tea-d37fhe8gjchc73c8eo0g`.
+Deployment `dep-dbqfl6on74is73c24ki0` reports commit
+`e1b0736cfe77665b30208d301bcb50b9d1d33a53`, live at 23:34:34 UTC.
+At 23:35:30 UTC the running startup hook reported
+`trusted_startup_binding_missing`. At 23:44:47 UTC independent certification
+still reported `ready=false`, `collector_installed=false`, and all thirteen
+observations missing because `producer_status=collector_missing`. These are
+missing observations, not thirteen independently confirmed safety failures.
+Separate current logs retained `verification_stale` and `allow_new_orders=false`.
+
+The dashboard command is `python -S /etc/secrets/.render-ledger-bootstrap.py`.
+Read-only AST inspection (without executing that script or printing credential
+values) identified bootstrap SHA-256
+`24c993b6f8a46989953bfe14f9f8cc0304a2117475cabc36e8875d289399b0dd`.
+Its final handoff is
+`os.execvpe('bash', ['bash', 'scripts/render_entrypoint.sh'], child_env)`.
+The inspected script did not name the startup binding registration or module.
+The live missing-binding diagnostic confirms registration was absent when the
+canonical hook ran. Another deployment of this same code alone cannot supply it.
+
+The remaining correction requires real production callback bindings, approved
+provider and account/credential identities, and an authenticated receipt verifier
+registered in the final interpreter. The three receipts must cover independent
+review, backup/restore, and broker/ledger/protective exits for the exact deployed
+release/image and callback registry. Neither this observation nor synthetic
+tests supplies those receipts or proves any callback's authenticated result.
+
+The existing validator must accept fresh authenticated evidence from all thirteen
+providers before pretrade certification. Then a separately authorized bounded
+commissioning attempt must produce genuine matching order/fill/fee, ledger and
+protective-exit evidence to replace stale execution proof. Heartbeats, cached
+positions, timestamp rewrites, and successful HTTP health checks cannot do so.
+Exact-commit hosted security checks also remain release dependencies: the
+observed deployed commit has failed container/package, secret and precommit jobs.
+Render currently reports auto-deploy enabled; this read-only review did not
+change it, the startup command, credentials, safeguards or order permissions.
 
 This repository hook is not an installed production collector. Before rollout,
 the operator must verify that the actual protected startup chain reaches this

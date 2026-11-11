@@ -2,6 +2,7 @@
 import ast
 from dataclasses import replace
 from pathlib import Path
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -71,6 +72,37 @@ def test_missing_registration_ignores_environment(runtime, monkeypatch):
     monkeypatch.setenv("NIJA_COLLECTOR_CERTIFIED", "true")
     assert startup.install_from_canonical_startup(*runtime[:2]) == "trusted_startup_binding_missing"
     assert attestation._COLLECTOR is None
+
+
+@pytest.mark.parametrize("shell_handoff", [False, True])
+def test_registration_does_not_survive_exec_into_final_runtime(shell_handoff):
+    """A bootstrap registration cannot install callbacks in a later interpreter."""
+    # Load this dependency-free module without running bot package startup hooks.
+    isolated_import = (
+        "import sys, types; package = types.ModuleType('bot'); "
+        "package.__path__ = ['bot']; sys.modules['bot'] = package; "
+    )
+    child = isolated_import + (
+        "from bot.kraken_startup_evidence_binding import install_from_canonical_startup; "
+        "print(install_from_canonical_startup(None, None))"
+    )
+    command = [sys.executable, "-S", "-c", child]
+    if shell_handoff:
+        command = ["bash", "-c", 'exec "$@"', "collector-test", *command]
+    bootstrap = isolated_import + (
+        "import os; "
+        "from bot.kraken_startup_evidence_binding import register_reviewed_startup_binding; "
+        "register_reviewed_startup_binding(lambda **kwargs: None, "
+        "verify_receipts=lambda binding: False); "
+        f"command = {command!r}; os.execvp(command[0], command)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", bootstrap],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, check=True, timeout=15,
+    )
+    assert result.stdout.strip() == "trusted_startup_binding_missing"
+    assert result.stderr == ""
 
 
 def test_real_installer_validates_all_thirteen_and_never_authorizes(runtime):
