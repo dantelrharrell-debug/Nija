@@ -647,8 +647,8 @@ def _forward_connect() -> sqlite3.Connection:
 def _claim_forward(event_key: str, *, legacy_event_key: str | None = None) -> str | None:
     """Claim a uniquely fenced lease; stale senders cannot finish a newer claim.
 
-    A provider can still receive a duplicate after a network-ambiguous failure;
-    the lease protects local state and confirmed outcomes, not exactly-once email.
+    An expired sender may already have reached the provider. Hold its outcome
+    for reconciliation rather than automatically sending again.
     """
     now = time.time()
     token = secrets.token_hex(16)
@@ -680,11 +680,16 @@ def _claim_forward(event_key: str, *, legacy_event_key: str | None = None) -> st
                 "VALUES (?, 'pending', 0)",
                 (event_key,),
             )
+            connection.execute(
+                """UPDATE website_lead_forwarding SET state='uncertain'
+                   WHERE event_key=? AND state='sending' AND lease_until <= ?""",
+                (event_key, now),
+            )
             claimed = connection.execute(
                 """UPDATE website_lead_forwarding
                    SET state='sending', lease_until=?, lease_token=?
                    WHERE event_key=?
-                     AND state IN ('pending', 'sending')
+                     AND state='pending'
                      AND lease_until <= ?""",
                 (now + _FORWARD_LOCK_LEASE_SECONDS, token, event_key, now),
             )
@@ -695,15 +700,16 @@ def _claim_forward(event_key: str, *, legacy_event_key: str | None = None) -> st
             raise
 
 
-def _finish_forward(event_key: str, *, claim_token: str, sent: bool) -> bool:
+def _finish_forward(event_key: str, *, claim_token: str, sent: bool, uncertain: bool = False) -> bool:
     """Only the current lease holder can record completion or retry state."""
-    retry_at = 0 if sent else time.time() + _FORWARD_RETRY_BACKOFF_SECONDS
+    next_state = 'uncertain' if uncertain else ('sent' if sent else 'pending')
+    retry_at = 0 if sent or uncertain else time.time() + _FORWARD_RETRY_BACKOFF_SECONDS
     with _DB_LOCK, _forward_connect() as connection:
         finished = connection.execute(
             """UPDATE website_lead_forwarding
                SET state=?, lease_until=?, lease_token=''
                WHERE event_key=? AND state='sending' AND lease_token=?""",
-            ("sent" if sent else "pending", retry_at, event_key, claim_token),
+            (next_state, retry_at, event_key, claim_token),
         )
         connection.commit()
         return finished.rowcount == 1
@@ -923,18 +929,35 @@ def handle_lead_intake_post(handler: Any) -> bool:
         claim_token = None
         forward_error = True
     if claim_token:
+        uncertain = False
         try:
             forwarded = _forward({**canonical, "event_id": forward_key})
         except Exception as exc:
             # The canonical lead is already persisted; never expose webhook
             # URL, provider credentials, or payloads in error logs.
             forward_error = True
+            uncertain = True
             print(f"NIJA_LEAD_FORWARD_FAILED reason={type(exc).__name__}", flush=True)
         finally:
             try:
-                _finish_forward(forward_key, claim_token=claim_token, sent=forwarded)
+                if not _finish_forward(forward_key, claim_token=claim_token, sent=forwarded, uncertain=uncertain):
+                    forward_error = True
             except (OSError, sqlite3.Error):
                 forward_error = True
+
+    # Report durable state separately from HTTP/provider acceptance. Missing
+    # visibility is never represented as pending or successful delivery.
+    try:
+        with _DB_LOCK, _forward_connect() as connection:
+            row = connection.execute(
+                "SELECT state FROM website_lead_forwarding WHERE event_key=?", (forward_key,)
+            ).fetchone()
+            forward_state = row['state'] if row else 'not_claimed'
+    except (OSError, sqlite3.Error):
+        forward_state = 'unavailable'
+        forward_error = True
+    if forward_state == 'uncertain':
+        forward_error = True
 
     _send_json(
         handler,
@@ -947,6 +970,7 @@ def handle_lead_intake_post(handler: Any) -> bool:
             "email_normalized": True,
             "forwarded": forwarded,
             "forward_error": forward_error,
+            "forward_state": forward_state,
             "crm_queued": crm_queued,
             "crm_queue_error": crm_error,
         },
