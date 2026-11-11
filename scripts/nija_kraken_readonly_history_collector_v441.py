@@ -162,7 +162,11 @@ def collect_history(
         """
         records: dict[str, Any] = {}
         seen_cursors: set[str] = set()
-        params: dict[str, Any] = {"with_cursor": True}
+        # Reconciliation needs individual fill IDs, not Kraken's default
+        # consolidation of executions for a taker order. Keep this choice fixed
+        # across every page and both verification passes.
+        trade_options = {"consolidate_taker": False} if endpoint == "TradesHistory" else {}
+        params: dict[str, Any] = {**trade_options, "with_cursor": True}
         for _ in range(max_pages):
             payload = private_read(endpoint, dict(params))
             if not isinstance(payload, Mapping) or payload.get("error") != []:
@@ -198,7 +202,7 @@ def collect_history(
                     raise IncompleteHistory(f"{endpoint}: non-JSON record") from exc
             if next_cursor is None or next_cursor == "":
                 return records
-            params = {"with_cursor": True, "cursor": next_cursor}
+            params = {**trade_options, "with_cursor": True, "cursor": next_cursor}
         raise IncompleteHistory(f"{endpoint}: page limit before all records")
 
     def read_open_orders() -> tuple[dict[str, Any], dict[str, float]]:
@@ -283,7 +287,10 @@ def collect_history(
             records: dict[str, Any] = {}
             expected: int | None = None
             for index in range(max_pages):
-                payload = private_read(endpoint, {"ofs": index * PAGE_SIZE})
+                params = {"ofs": index * PAGE_SIZE}
+                if endpoint == "TradesHistory":
+                    params["consolidate_taker"] = False
+                payload = private_read(endpoint, params)
                 if not isinstance(payload, Mapping) or payload.get("error") != []:
                     raise _api_failure(endpoint, payload)
                 result = payload.get("result")
@@ -408,12 +415,17 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         raise ValueError("Authenticated private call and monitoring category required")
 
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
-        history_read = endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"} and set(params) == {"ofs"}
+        trade_keys = {"consolidate_taker"} if endpoint == "TradesHistory" else set()
+        valid_trade_mode = endpoint != "TradesHistory" or params.get("consolidate_taker") is False
+        history_read = (
+            endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
+            and set(params) == ({"ofs"} | trade_keys) and valid_trade_mode
+        )
         if use_cursor:
             history_read = (
                 endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
-                and set(params) in ({"with_cursor"}, {"with_cursor", "cursor"})
-                and params.get("with_cursor") is True
+                and set(params) in ({"with_cursor"} | trade_keys, {"with_cursor", "cursor"} | trade_keys)
+                and valid_trade_mode and params.get("with_cursor") is True
                 and ("cursor" not in params or isinstance(params["cursor"], str) and bool(params["cursor"].strip()))
             )
         balance_read = include_balance and endpoint == "Balance" and not params

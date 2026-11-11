@@ -125,13 +125,17 @@ def test_precommit_failure_propagates_and_reports_real_outcome():
     assert setup["with"]["cache"] is False
     run = next(step for step in steps if step["name"] == "Run pre-commit on all files")
     assert run["id"] == "precommit"
-    assert "pre-commit run --all-files --show-diff-on-failure" in run["run"]
+    assert run["run"] == "python -S scripts/run_precommit_validation.py --report pre-commit-report.json"
+    from scripts.run_precommit_validation import COMMAND
+    assert COMMAND == ["pre-commit", "run", "--all-files", "--show-diff-on-failure"]
     assert "continue-on-error" not in job
     assert all("continue-on-error" not in step for step in steps)
     assert "|| true" not in run["run"]
-    report = next(step for step in steps if step["name"] == "Generate pre-commit report")
-    assert report["if"] == "always()"
-    assert "steps.precommit.outcome" in report["env"]["PRECOMMIT_OUTCOME"]
-    assert "PRECOMMIT_OUTCOME" in report["run"]
+    regression = next(step for step in steps if step["name"] == "Test pre-commit enforcement diagnostics")
+    assert "test_precommit_validation_report.py" in regression["run"]
+    assert steps.index(regression) < steps.index(run)
     upload = next(step for step in steps if step["name"] == "Upload pre-commit report")
     assert upload["if"] == "always()"
+
+    assert upload["with"]["path"] == "pre-commit-report.json"
+    assert upload["with"]["if-no-files-found"] == "error"

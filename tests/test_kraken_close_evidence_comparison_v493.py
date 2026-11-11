@@ -1,6 +1,8 @@
 import unittest
 
-from bot.kraken_close_evidence_comparison_v493 import (\n    verify_exact_close, verify_broker_readback_consistency,\n)
+from bot.kraken_close_evidence_comparison_v493 import (
+    verify_exact_close, verify_broker_readback_consistency,
+)
 
 
 class KrakenCloseEvidenceComparisonTests(unittest.TestCase):
