@@ -4,6 +4,7 @@ from .lesson_context import LESSONS
 from .provider import MockProvider
 from .safety import validate_question
 
+
 class Tutor:
     def __init__(self, provider=None, budget=None):
         self.provider = provider if provider is not None else MockProvider()
@@ -16,8 +17,13 @@ class Tutor:
         self.budget.consume()
         result = self.provider.explain(lesson_id, validated)
         required = ("explanation", "practice_question", "disclaimer", "provider")
-        if not isinstance(result, dict) or any(not isinstance(result.get(k), str) or not result[k] for k in required):
+        if not isinstance(result, dict) or any(
+            not isinstance(result.get(key), str)
+            or not result[key].strip()
+            or len(result[key]) > 2000
+            for key in required
+        ):
             raise ValueError("Invalid provider response")
         if result["provider"] != "mock":
             raise ValueError("Non-mock providers prohibited in this pilot")
-        return {"lesson_id": lesson_id, **result}
+        return {"lesson_id": lesson_id, **{key: result[key] for key in required}}
