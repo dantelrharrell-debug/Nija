@@ -22,7 +22,11 @@ Date: February 18, 2026
 """
 
 import logging
-import json
+
+if __package__:
+    from .report_json import write_report_json
+else:
+    from report_json import write_report_json
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
@@ -710,8 +714,7 @@ class AlphaValidationFramework:
         filename = f"alpha_validation_{timestamp}.json"
         filepath = self.results_dir / filename
         
-        with open(filepath, 'w') as f:
-            json.dump(result.to_dict(), f, indent=2)
+        write_report_json(filepath, result.to_dict())
         
         logger.debug(f"Saved alpha validation result to {filepath}")
     
