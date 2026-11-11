@@ -11,6 +11,8 @@ on:
       - 'tests/test_game_sandbox_provider_receipts.py'
       - 'tests/test_game_sandbox_staging.py'
       - 'tests/test_game_sandbox_bootstrap.py'
+      - 'tests/test_game_sandbox_assets.py'
+      - 'tests/test_game_sandbox_browser.py'
       - 'scripts/verify_game_sandbox_container.py'
       - 'tests/fixtures/stripe_iq72_sandbox.py'
       - 'tests/test_game_sandbox_client.mjs'
@@ -56,8 +58,8 @@ jobs:
       - run: node --check game_sandbox/client.mjs
       - run: node --check tests/test_game_sandbox_client.mjs
       - run: node --test tests/test_game_sandbox_client.mjs tests/test_game_sandbox_preview.mjs
-      - run: python -m pytest tests/test_game_sandbox_preview.py -q
-      - run: detect-secrets-hook game_sandbox/report.html tests/test_game_sandbox_preview.py tests/test_game_sandbox_preview.mjs
+      - run: python -m pytest tests/test_game_sandbox_preview.py tests/test_game_sandbox_assets.py tests/test_game_sandbox_browser.py -q
+      - run: detect-secrets-hook game_sandbox/report.html tests/test_game_sandbox_preview.py tests/test_game_sandbox_preview.mjs tests/test_game_sandbox_assets.py tests/test_game_sandbox_browser.py
       - run: python -m bandit -q -r game_sandbox
       - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_provider_receipts.py tests/test_game_sandbox_staging.py tests/fixtures/stripe_iq72_sandbox.py game_sandbox/sandbox_offer.json tests/test_game_sandbox_client.mjs
       - run: pip-audit -r game_sandbox/requirements.txt

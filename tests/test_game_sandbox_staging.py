@@ -72,6 +72,9 @@ def test_enabled_health_bypasses_persistent_api_limit(monkeypatch, tmp_path):
         finally:
             conn.close()
 
+    from game_sandbox import preview_assets
+    monkeypatch.setattr(preview_assets, "install_preview_ui", lambda app: SimpleNamespace(manifest_sha256="fixture"))
+
     service = SimpleNamespace(
         config=SimpleNamespace(origin="https://stage.example"),
         manifest=SimpleNamespace(digest="test-only"),
