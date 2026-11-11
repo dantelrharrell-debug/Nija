@@ -1,6 +1,6 @@
 # REVIEW/PLAN ONLY. This is a separate NIJA educational sandbox service.
 # Target workspace: Nija (tea-d3qjmmc9c44c73cqvpug).
-# The workspace currently has an existing service suspended for billing.
+# Read-only check 2026-11-11: existing workspace service is no longer billing-suspended.
 # Paid starter compute + 1 GB persistent disk require separate cost approval.
 # This file must NEVER be imported by live trading/billing deploy pipelines.
 services:
@@ -23,12 +23,16 @@ services:
         value: "false"
       - key: NIJA_IQ_SANDBOX_GAME
         value: published72
+      # Supply the reviewed existing UI package here before test-mode enablement.
+      # Its independently reviewed manifest digest stays in protected service settings.
+      - key: NIJA_IQ_SANDBOX_UI_ROOT
+        value: /app/game_sandbox/private_ui
       - key: NIJA_IQ_SANDBOX_DATABASE
         value: /var/data/trading_iq_sandbox.sqlite3
       # Public test-only identities; no API keys or webhook secrets in source.
       - key: NIJA_IQ_SANDBOX_PRICE_ID
-        value: price_1UYToJRS5Ezp77RQVkx96eS5
+        value: price_1UYToJRS5Ezp77RQVkx96eS5  # pragma: allowlist secret -- public test-only Stripe Price ID
       - key: NIJA_IQ_SANDBOX_PRODUCT_ID
         value: prod_nija_iq72_sandbox_v1
       - key: NIJA_IQ_SANDBOX_MANIFEST_SHA256
-        value: fe6b84326e9c9401a7f3f658d4c29441e3505ee52b94d615b991a88a610f1c90
+        value: fe6b84326e9c9401a7f3f658d4c29441e3505ee52b94d615b991a88a610f1c90  # pragma: allowlist secret -- public game manifest checksum

@@ -63,6 +63,7 @@ def create_app(service: Sandbox) -> Any:
 
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 65536
+    app.config["NIJA_IQ_MANIFEST_SHA256"] = service.manifest.digest
 
     @app.before_request
     def protect() -> Any:
@@ -114,6 +115,10 @@ def create_app(service: Sandbox) -> Any:
                 "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
             }
         )
+        if request.endpoint in {"preview_root", "preview_game", "preview_asset"}:
+            from .preview_assets import UI_CSP
+
+            response.headers["Content-Security-Policy"] = UI_CSP
         if request.endpoint == "report_return":
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
@@ -228,7 +233,12 @@ def from_environment() -> Any:
         enabled=os.environ.get("NIJA_IQ_SANDBOX_ENABLED") == "true",
     )
     config.validate()
-    if os.environ.get("NIJA_IQ_SANDBOX_GAME") == "published72":
+    if os.environ.get("NIJA_IQ_SANDBOX_GAME") == "v515":
+        from .v515 import V515Game, build_v515_report
+
+        manifest = V515Game()
+        report_builder = build_v515_report
+    elif os.environ.get("NIJA_IQ_SANDBOX_GAME") == "published72":
         from .ionos import PublishedGame, build_published_report
 
         manifest = PublishedGame()

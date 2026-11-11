@@ -636,7 +636,9 @@ def test_unpaid_run_expiration_stays_fail_closed(setup):
 def test_enabled_staging_health_probes_do_not_consume_api_quota(setup, monkeypatch):
     """Render probes remain healthy beyond the persistent SQLite limit."""
     from game_sandbox import app as sandbox_app
-    from game_sandbox import staging_bootstrap
+    from game_sandbox import staging_bootstrap, preview_assets
+    from types import SimpleNamespace
+    monkeypatch.setattr(preview_assets, "install_preview_ui", lambda app: SimpleNamespace(manifest_sha256="fixture"))
     from game_sandbox.staging_entrypoint import create_staging_app
 
     # Test API quotas using setup's isolated test database; separate startup
@@ -668,7 +670,9 @@ def test_enabled_staging_health_probes_do_not_consume_api_quota(setup, monkeypat
 
 def test_health_exemption_is_exact_and_does_not_bypass_other_routes(setup, monkeypatch):
     from game_sandbox import app as sandbox_app
-    from game_sandbox import staging_bootstrap
+    from game_sandbox import staging_bootstrap, preview_assets
+    from types import SimpleNamespace
+    monkeypatch.setattr(preview_assets, "install_preview_ui", lambda app: SimpleNamespace(manifest_sha256="fixture"))
     from game_sandbox.staging_entrypoint import create_staging_app
 
     # The endpoint's rate-limit exemption is independent of mount security.

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { TIQ12_VERSION, TIQ12_ROUNDS, validateTiq12Manifest,
-  validateTiq12Answers, requireAdultCompletedRun, scorePurchasedTiq12,
-  ownerProofHash, matchesVerifiedTiq12Payment } from "../server/tiq12-contract.mjs";
+  validateTiq12Answers, requireAdultCompletedRun, requireVerifiedTiq12Entitlement, scorePurchasedTiq12,
+  ownerProofHash, matchesVerifiedTiq12Payment, matchesTiq12WebhookPaymentSnapshot } from "../server/tiq12-contract.mjs";
 
 const makeManifest = () => ({ version: TIQ12_VERSION, rounds: Array.from({length: 12}, (_, i) => ({
   id: "round_" + (i + 1), category: ["risk", "research", "discipline"][i % 3],
@@ -51,12 +51,69 @@ test("adult, durable completion and exact scoring manifest are mandatory",()=>{
     {completedAt:""},{version:"nija-trading-iq-6-v1"}])
       assert.throws(()=>requireAdultCompletedRun({...storedRun(),...patch},manifest),TypeError);
 });
-test("private score derives exclusively from server-owned manifest",()=>{
-  const result=scorePurchasedTiq12(manifest,storedRun());
-  assert.equal(result.score,100);
-  assert.equal(result.decisions.length,12);
-  assert.equal(result.dimensions.length,3);
-  assert.equal(result.dimensions.every(x=>x.score===100),true);
+// This is a synthetic durable-database snapshot, NOT a Stripe webhook or
+// evidence of a real hosted entitlement. Never send it from a browser.
+const storedEntitlement = () => ({
+  persisted: true, providerVerified: true, webhookSignatureVerified: true,
+  status: "granted", livemode: false, runId: "run_12345",
+  manifestDigest: manifest.digest, ownerProofHash: ownerProofHash(proof),
+  priceId: "price_test_123", productId: "prod_test_123",
+  amountPaid: 100, currency: "usd", checkoutSessionId: "cs_test_123456789012",
+  stripeEventId: "evt_123456789012", refunded: false, disputed: false,
+  revokedAt: null, verifiedAt: "2026-11-09T20:00:00.000Z",
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+});
+const testOffer = Object.freeze({ priceId: "price_test_123", productId: "prod_test_123" });
+
+test("private 12-round report requires a durable, signed, test-mode entitlement", () => {
+  const result = scorePurchasedTiq12(manifest, storedRun(), storedEntitlement(), testOffer);
+  assert.equal(result.score, 100);
+  assert.equal(result.decisions.length, 12);
+  assert.equal(result.dimensions.length, 3);
+  assert.equal(result.dimensions.every(x => x.score === 100), true);
+  assert.equal(requireVerifiedTiq12Entitlement(manifest,storedRun(),storedEntitlement(),testOffer).length,12);
+  for (const missing of [undefined, null, {}, { persisted: true }]) {
+    assert.throws(() => scorePurchasedTiq12(manifest,storedRun(),missing,testOffer), TypeError);
+  }
+  assert.throws(() => scorePurchasedTiq12(manifest,storedRun(),storedEntitlement()), TypeError);
+  assert.throws(() => scorePurchasedTiq12(manifest,storedRun(),storedEntitlement(),{
+    ...testOffer,priceId:"price_other"
+  }),TypeError);
+});
+
+test("tampered, expired, refunded, disputed or differently owned grants fail closed", () => {
+  const negative = [
+    x => x.persisted = false,
+    x => x.providerVerified = false,
+    x => x.webhookSignatureVerified = false,
+    x => x.status = "pending",
+    x => x.livemode = true,
+    x => x.runId = "run_wrong",
+    x => x.manifestDigest = "b".repeat(64),
+    x => x.ownerProofHash = "b".repeat(64),
+    x => x.priceId = "price_other",
+    x => x.productId = "prod_other",
+    x => x.amountPaid = 99,
+    x => x.currency = "eur",
+    x => x.checkoutSessionId = "cs_live_123456789012",
+    x => x.stripeEventId = "fake-event",
+    x => x.refunded = true,
+    x => x.disputed = true,
+    x => x.revokedAt = "2026-11-10T00:00:00Z",
+    x => x.verifiedAt = "invalid",
+    x => delete x.verifiedAt,
+    x => x.expiresAt = "2020-01-01T00:00:00.000Z",
+    x => x.expiresAt = "not-a-date",
+    x => x.verifiedAt = "2099-01-01T00:00:00.000Z",
+    x => delete x.expiresAt,
+  ];
+  for (const mutate of negative) {
+    const grant = storedEntitlement(); mutate(grant);
+    assert.throws(() => scorePurchasedTiq12(manifest,storedRun(),grant,testOffer),TypeError);
+  }
+  assert.throws(() => scorePurchasedTiq12(manifest,{
+    ...storedRun(),adultConfirmed:false
+  },storedEntitlement(),testOffer), TypeError);
 });
 test("payment requires exact adult run, receipt proof, 100 cents, charge, product and version",()=>{
   const base=receipt();assert.equal(matchesVerifiedTiq12Payment(base),true);
@@ -70,4 +127,39 @@ test("payment requires exact adult run, receipt proof, 100 cents, charge, produc
     x=>x.expectedPriceId=undefined,x=>x.expectedProductId=undefined,
     x=>x.session.id="cs_live_123456789012",x=>x.livemode="false"];
   for(const change of bad){const item=receipt();change(item);assert.equal(matchesVerifiedTiq12Payment(item),false);}
+});
+
+
+test("server-side webhook reconciliation uses persisted owner hash without bearer proof", () => {
+  const good = receipt();
+  delete good.proof;
+  assert.equal(matchesTiq12WebhookPaymentSnapshot(good), true);
+  // The browser still requires the private proof and cannot recover it from
+  // an event, public URL, Stripe metadata, or the checkout receipt.
+  assert.equal(matchesVerifiedTiq12Payment(good), false);
+  const negative = [
+    x => x.session.metadata.owner_proof_hash = "c".repeat(64),
+    x => x.storedRun.ownerProofHash = "c".repeat(64),
+    x => x.storedRun.persisted = false,
+    x => x.storedRun.answers = [],
+    x => x.session.status = "open",
+    x => x.session.livemode = true,
+    x => x.livemode = true,
+    x => x.session.payment_intent.status = "requires_payment_method",
+    x => x.session.payment_intent.latest_charge.refunded = true,
+    x => x.session.payment_intent.latest_charge.disputed = true,
+    x => x.session.payment_intent.latest_charge.amount_refunded = 100,
+    x => x.lineItems.has_more = true,
+    x => x.lineItems.data[0].price.product = "prod_unrelated",
+    x => x.lineItems.data[0].quantity = 2,
+  ];
+  for (const mutate of negative) {
+    const snapshot = receipt();
+    delete snapshot.proof;
+    mutate(snapshot);
+    assert.equal(matchesTiq12WebhookPaymentSnapshot(snapshot), false);
+  }
+  // The pure matcher cannot authenticate webhook signatures or prove durable
+  // writes. A real server must handle those before granting entitlements.
+  assert.equal(matchesTiq12WebhookPaymentSnapshot({}), false);
 });
