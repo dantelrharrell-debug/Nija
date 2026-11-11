@@ -54,7 +54,13 @@ test('owner proof required; one real test checkout reservation only',async()=>{
  const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
  await assert.rejects(service.checkout({runId:run.runId,ownerProof:'a'.repeat(64)},config.allowedOrigin));
  const result=await service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin);
- assert.match(result.checkoutUrl,/^https:\/\/checkout\.stripe\.com/);
+ const checkoutUrl=new URL(result.checkoutUrl);
+ assert.equal(checkoutUrl.origin,'https://checkout.stripe.com');
+ assert.equal(checkoutUrl.hostname,'checkout.stripe.com');
+ assert.equal(checkoutUrl.protocol,'https:');
+ assert.equal(checkoutUrl.username,'');
+ assert.equal(checkoutUrl.password,'');
+ assert.equal(checkoutUrl.hash,'');
  await assert.rejects(service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin),/already exists/);
  assert.equal(store.db.prepare('SELECT count(*) n FROM tiq12_checkout_reservations').get().n,1);
  store.close();
@@ -166,4 +172,57 @@ test('unpaid Checkout with mismatched stored price cannot become pending',async(
  assert.equal(store.getGrant(run.runId),null);
  assert.equal(store.hasEvent('evt_badpending_12345'),false);
  store.close();
+});
+
+test('Checkout URL parser rejects ambiguous, malformed, and oversized provider URLs without attaching a session',async()=>{
+ const rejected=[
+  'https://checkout.stripe.com.evil.example/test',
+  'https://checkout.stripe.com@evil.example/test',
+  'https://evil.example@checkout.stripe.com/test',
+  'https://checkout.stripe.com:444/test',
+  'http://checkout.stripe.com/test',
+  'https://checkout.stripe.com/',
+  'https://checkout.stripe.com/test#fragment',
+  'https://checkout.stripe.com./test',
+  'https://checkout.stripe.com\\\\@evil.example/test',
+  'https://checkout.stripe.com:bad/test',
+  'not-a-url',
+  '',
+  'https://checkout.stripe.com/'+ 'a'.repeat(4096),
+  null,
+  42,
+ ];
+ for(const value of rejected){
+  const {service,store}=setup({tamperCheckout:s=>{s.url=value;}});
+  try{
+   const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
+   await assert.rejects(service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin),/Untrusted/,
+    'must reject '+String(value).slice(0,90));
+   const rows=store.db.prepare('SELECT checkout_session_id FROM tiq12_checkout_reservations WHERE run_id=?').all(run.runId);
+   assert.equal(rows.length,1);
+   assert.equal(rows[0].checkout_session_id,null);
+   assert.equal(store.getGrant(run.runId),null);
+   await assert.rejects(service.report({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin),/entitlement required/);
+  }finally{store.close();}
+ }
+});
+test('Checkout URL parser preserves legitimate Stripe origin with query, case normalization, and default TLS port',async()=>{
+ for(const value of [
+  'https://checkout.stripe.com/test123?prefilled_email=test%40example.com',
+  'https://CHECKOUT.STRIPE.COM/test123',
+  'https://checkout.stripe.com:443/test123',
+ ]){
+  const {service,store}=setup({tamperCheckout:s=>{s.url=value;}});
+  try{
+   const run=await service.completeRun({confirmedAdult:true,paidReportOptIn:true,answers},config.allowedOrigin);
+   const result=await service.checkout({runId:run.runId,ownerProof:run.ownerProof},config.allowedOrigin);
+   const parsed=new URL(result.checkoutUrl);
+   assert.equal(parsed.origin,'https://checkout.stripe.com');
+   assert.equal(parsed.username,'');
+   assert.equal(parsed.password,'');
+   assert.equal(parsed.hash,'');
+   assert.equal(result.checkoutUrl,value);
+   assert.equal(store.getGrant(run.runId),null);
+  }finally{store.close();}
+ }
 });
