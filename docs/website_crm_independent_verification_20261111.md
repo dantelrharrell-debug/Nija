@@ -80,3 +80,36 @@ Before a lead-only release:
 7. Only then obtain separate approval for a new nonmarketing live test. Verify one LIVE record, authenticated exact-event admin readback, one durable claim, provider acknowledgment, exact Apollo identity, intended single Resend receipt and no duplicate on retry. A distinct approved submission remains distinct.
 
 No operational server-mail replacement or end-to-end certification is claimed. The remaining production work cannot be completed by merging this PR.
+
+## Final read-only platform refresh
+
+Independent LIVE database UI now again shows exactly the two known internal-QA event IDs, including the exact saved event requested. Both stored is_qa flags remain false; exclude them by known provenance without rewriting them. LIVE delivery UI independently shows two receipts for the waitlist QA event: email failed (“mail service did not accept it”), Zapier pending (“Zapier address not set”), attempt one each. No new event was submitted.
+
+IONOS's read-only platform report (provider-reported, not an independent schema/backup restore execution) states:
+- LIVE events/delivery/dispatch/consent counts **2 / 2 / 0 / 0**.
+- The unique index is present: `CREATE UNIQUE INDEX idx_nija_lead_dispatch_event_purpose ON nija_lead_dispatch (event_id, purpose)`. Do not recreate it from stale missing-index notes.
+- Lead settings are absent; enabled/activated/live mode and hook-configured flags are false, and no delivery owner is set. The authenticated site-admin status route returned 403 to the platform reader; missing access is not a zero-valued status response.
+- Latest backup is `lead_backup_2026-11-07T00-51-21-542Z`; ten checksum lines reportedly match in both retained backups. A throwaway-file restore of the November 6 backup passed 84 checks. No separate November 7 restore or second running site restore is demonstrated.
+- These backups are working-folder files, **not immutable copies**. Counts matching current LIVE is not immutable-backup or production-restore certification.
+- Dispatcher source in root `pb_hooks/` matches the review copy, but documented `app/pb_hooks/` is absent. The runtime instance/environment and actual hook-directory ownership are not established. Handler-shaped forbidden responses support an installation inference, not certified runtime identity.
+- No private secret vault is available to the platform reader; the proposed admin-only settings location's access rules were not independently verified. Never write hook/provider secrets into source/history.
+- A prior publish removed the unique index and a later publish restored it; schema must be re-read after any future authorized release.
+- Provider reports 326 dispatch and 355 intake mock checks passing today; these are separate provider-reported results, not the independent 99 Python / 8 JS results.
+
+Captured caller SHA-256 values:
+- FreeAssessment.jsx: `5979cae084046d3a0b3c270ea8e6727c90a5bf1bae04cec77b8d1d7e2862bd04`.
+- FoundingWaitlist.jsx: `a5c6b281904d75dc477c506277c234962f88f3554a0c1de5c54621c216fa8095`.
+- Apply.jsx: `fad5fd0bbde3f56b1e0da7b0279ca7aee7ce8bac5ab95f6676635bc19f1ec35a`.
+
+## Hosted verification and owner actions
+
+PR **#3745** is draft and unmerged. Source-bearing commit `52fe71aa4c8754cb9e5304f93f86075ca068626b` has failed hosted workflows. Dedicated CRM run **43048016858**, job **130617118351**, reports failure with no steps/log URL recorded. Branch policy run **43048017002**, job **130617119186**, also has no steps. Security run **43048017311** has failed Bandit/dependency/secret/pre-commit jobs, all with no recorded steps/log URLs. CodeQL **43048021745**, CI **43048016546** and Artifact **43048016688** also failed. This is not evidence that local checks ran on hosted runners or that the source caused the failures. Runner availability/account/repository restriction root cause remains unverified; do not bypass checks or merge.
+
+Concrete owner dependencies:
+1. Restore usable GitHub Actions runner execution/account access, then obtain passing mandatory checks and independent review on the exact release revision. No purchase, billing change or gate waiver was attempted.
+2. Provide access to the Zapier login that actually exposes **business 28290328 / Zap 378270777**. Current chosen Google identity exposes only Individual 28465613; the observed Free plan does not describe the business account. Do not activate/pay/replace the Zap.
+3. Obtain IONOS evidence for the actual backend hook directory, runtime owner/instance lifecycle, private settings access rules, immutable backup copy and isolated restore. Existing support cases: `6aebeaf870f76ca9e19ceea2` and `6a9cf94cfc6297d06dc09d9a`. Prepared question: “For aibuilder-4dfdf, identify the directory and revision loaded by the live lead dispatcher, its runtime owner, how admin-only hook configuration is protected from public reads/history, and the supported immutable backup/isolated restore procedure. Please provide evidence without publishing, restarting, changing records or sending leads.”
+4. Resolve one authoritative sender and exact provider idempotency/acknowledgment mapping; no operational secure server-mail alternative is certified.
+5. Only after these prerequisites, obtain the separately required exact-release authorization, followed by separate authorization for nonmarketing live QA. No such new authorization is inferred here.
+
+This report is the completion of this safe source/independent-test pass, **not completion of production remediation**. The pipeline remains **NOT CERTIFIED**.
