@@ -8,6 +8,8 @@ import json
 import logging
 from pathlib import Path
 import tempfile
+import sys
+import types
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -106,6 +108,22 @@ class ReportIntegrityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 method(None, result, directory)
             self.assertEqual(path.read_bytes(), before)
+
+    def test_report_import_supports_package_and_legacy_sibling_contexts(self):
+        package = types.ModuleType("fixture_analysis_package")
+        package.__path__ = [str(ROOT / "bot")]
+        for path in ("bot/alpha_validation_framework.py", "bot/trade_distribution_stability.py"):
+            tree = ast.parse((ROOT / path).read_text())
+            binding = next(node for node in tree.body if isinstance(node, ast.If)
+                           and isinstance(node.test, ast.Name) and node.test.id == "__package__")
+            for context in ("", "fixture_analysis_package"):
+                with self.subTest(path=path, context=context), patch.dict(
+                    sys.modules, {"fixture_analysis_package": package, "report_json": REPORT_MODULE}
+                ):
+                    scope = {"__package__": context}
+                    exec(compile(ast.Module(body=[binding], type_ignores=[]), path, "exec"), scope)
+                    self.assertEqual(scope["write_report_json"].__name__, "write_report_json")
+                    self.assertEqual(Path(scope["write_report_json"].__code__.co_filename), ROOT / "bot/report_json.py")
 
     def test_historical_fragments_remain_exact_and_uncertifiable(self):
         for path in ("data/alpha_validation/alpha_validation_20260218_141638.json",

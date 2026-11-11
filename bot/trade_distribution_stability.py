@@ -19,7 +19,10 @@ Date: February 15, 2026
 
 import logging
 
-from bot.report_json import write_report_json
+if __package__:
+    from .report_json import write_report_json
+else:
+    from report_json import write_report_json
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
