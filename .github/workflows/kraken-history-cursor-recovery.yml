@@ -21,6 +21,7 @@ on:
       - 'tests/test_kraken_receipt_runtime_packaging_v464.py'
       - 'tests/test_kraken_cursor_wire_encoding_v490.py'
       - 'tests/test_kraken_cursor_read_wire_v490.py'
+      - 'tests/test_kraken_unconsolidated_history.py'
       - 'bot/kraken_cursor_read_wire_v490.py'
       - 'tests/test_kraken_authenticated_open_order_reconciliation_v482.py'
       - 'scripts/nija_kraken_failure_receipt_triage_v464.py'
@@ -70,3 +71,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: python -m pytest -q tests/test_kraken_authenticated_open_order_reconciliation_v482.py
 
+      - name: Verify individual Kraken fill IDs without broker access
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -m pytest tests/test_kraken_unconsolidated_history.py -q

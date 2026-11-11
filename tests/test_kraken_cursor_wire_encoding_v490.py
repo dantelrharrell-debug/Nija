@@ -83,3 +83,16 @@ def test_python_json_booleans_and_form_booleans_have_different_wire_text():
     assert '"trades": false' in as_json
     assert "with_cursor=True" in as_form
     assert "trades=False" in as_form
+
+
+def test_individual_fill_flag_is_signed_as_lowercase_false_for_cursor_and_offset():
+    from types import SimpleNamespace
+    from bot.kraken_cursor_read_wire_v490 import cursor_read_params
+
+    direct = SimpleNamespace(_gateway_url="", _gateway_only_mode=False)
+    for pagination in ({"with_cursor": True}, {"ofs": 0}):
+        original = {**pagination, "consolidate_taker": False}
+        _, body = _capture_private_form("TradesHistory", cursor_read_params(direct, "TradesHistory", original))
+        assert parse_qs(body)["consolidate_taker"] == ["false"]
+        assert original["consolidate_taker"] is False
+        assert "nonce" not in original
