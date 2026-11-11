@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 SOURCE_ROOT = ROOT.parent / "web" / "trading-challenge" / "v515" / "offline_tiq_premium"
 SOURCE_SHA256 = "77079538953000d0ebbd741665c081820de3a8c6f60debc0cb6c72502f99d224"  # pragma: allowlist secret - approved archive checksum
 MODULE_DIGESTS = {
-    "tiq_report.mjs": "124183166959dede0911828b88756df11cd40d7a18dd8d4fee691067a9439cc6",  # pragma: allowlist secret - public source checksum
+    "tiq_report.mjs": "a669a0ca2a70b3aa5536a0a0b7478e03b02b544dc2c2f7077c13c194e790b876",  # pragma: allowlist secret - public source checksum
     "tiq_engine.mjs": "6a05c0e1231fb5f4a9a0f3f88604150d138f977bc20c7956d421dd2be38a5ccc",  # pragma: allowlist secret - public source checksum
     "tiq_scoring.mjs": "2a4593bb379ec22c136069d9013273101204052a6293de0cc2ecca7404fcde9f",  # pragma: allowlist secret - public source checksum
 }
@@ -29,8 +29,9 @@ class V515Game(PublishedGame):
             if target.is_symlink() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
                 raise Denied("v515_source_integrity_mismatch")
         Manifest.__init__(self, {
-            "version": "ionos-v515-iq72-" + SOURCE_SHA256[:16],
+            "version": "ionos-v515-iq72-" + SOURCE_SHA256[:16] + "-copy1",
             "source_sha256": SOURCE_SHA256,
+            "derived_report_sha256": MODULE_DIGESTS["tiq_report.mjs"],
             "structure": "12_per_challenge",
             "challenges": [
                 {"rounds": [{"id": f"challenge_{i}_round_{j}", "choices": 6} for j in range(12)]}
@@ -40,7 +41,7 @@ class V515Game(PublishedGame):
 
 
 def build_v515_report(payload: dict) -> dict:
-    """Generate the original v515 report after the sandbox verifies entitlement."""
+    """Generate the pinned v515 report-copy revision after entitlement verification."""
     encoded = V515Game().answers(payload)
     node_path = shutil.which("node")
     if not node_path:
