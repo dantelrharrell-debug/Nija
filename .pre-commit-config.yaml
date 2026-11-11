@@ -35,7 +35,7 @@ repos:
     hooks:
       - id: trufflehog
         name: TruffleHog secret scanner
-        entry: bash -c 'trufflehog filesystem --directory=. --only-verified --json 2>&1 | grep -v "🐷" || true'
+        entry: python3 -S scripts/run_precommit_trufflehog.py
         language: golang
         pass_filenames: false
 
