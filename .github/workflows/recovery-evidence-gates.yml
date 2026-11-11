@@ -36,9 +36,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run source-boundary regression gates without production imports
-        run: |
-          python -S -m unittest discover -s tests -p 'test_tiq_canonical_evidence_gate_20261110.py' -v
-          python -S -m unittest discover -s tests -p 'test_trading_evidence_boundary_20261110.py' -v
+      - name: Run Trading IQ source-boundary regression
+        run: python -S -m unittest discover -s tests -p 'test_tiq_canonical_evidence_gate_20261110.py' -v
+      - name: Run trading fail-closed source-boundary regression
+        run: python -S -m unittest discover -s tests -p 'test_trading_evidence_boundary_20261110.py' -v
       - name: Check served-game 72-decision parity only (not preview certification)
         run: node --test game_sandbox/ionos_parity.test.mjs
+      - name: Publish diagnostic step outcomes to job summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo '## NIJA offline recovery gate'
+            echo "Overall job status: ${JOB_STATUS}"
+            echo 'This job does not certify the IONOS preview, hosted payments, or live trading.'
+            echo 'Review individual named steps for the first failure; do not waive security scans.'
+          } >> "$GITHUB_STEP_SUMMARY"
