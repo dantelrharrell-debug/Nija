@@ -133,7 +133,8 @@ jobs:
         NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -m pytest -q \
           tests/test_baseline_secret_scan_reporting.py \
           tests/test_precommit_trufflehog_enforcement.py \
-          tests/test_guarddog_report_enforcement.py
+          tests/test_guarddog_report_enforcement.py \
+          tests/test_precommit_validation_report.py
 
     - name: Enforce baseline-aware scanning
       run: |
