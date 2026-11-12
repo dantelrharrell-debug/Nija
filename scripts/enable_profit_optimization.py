@@ -16,6 +16,8 @@ Usage:
 import os
 import sys
 import shutil
+import re
+import tempfile
 
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'bot'))
@@ -110,6 +112,48 @@ def show_optimization_features():
         print()
 
 
+_ASSIGNMENT = re.compile(r"^\\s*(?:export\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(.*)$")
+_SENSITIVE_NAMES = {
+    "DATABASE_URL", "DSN", "TOKEN", "PASSWORD", "PASSPHRASE",
+    "CREDENTIAL", "CREDENTIALS", "API_KEY", "API_SECRET",
+    "SECRET", "SECRET_KEY", "CLIENT_SECRET", "PRIVATE_KEY",
+    "ACCESS_TOKEN", "AUTH_TOKEN", "WEBHOOK_SECRET",
+}
+
+
+def _is_sensitive_name(name):
+    name = name.upper()
+    return any(name == suffix or name.endswith("_" + suffix) for suffix in _SENSITIVE_NAMES)
+
+
+def validate_template_bytes(data):
+    """Validate the exact bytes to be written; never include values in errors."""
+    try:
+        source = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("invalid template encoding") from exc
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _ASSIGNMENT.fullmatch(raw)
+        if match is None:
+            raise ValueError("malformed template assignment")
+        name, value = match.groups()
+        if _is_sensitive_name(name) and value.strip():
+            raise ValueError("populated credential field")
+    return True
+
+
+def template_has_populated_credentials(path):
+    """Fail closed for invalid or populated templates without revealing values."""
+    try:
+        validate_template_bytes(open(path, "rb").read())
+    except (OSError, ValueError):
+        return True
+    return False
+
+
 def setup_env_file():
     """Set up optimized .env file."""
     print("📝 Setting up .env file...")
@@ -123,6 +167,15 @@ def setup_env_file():
     if not os.path.exists(env_template):
         print(f"❌ Template file not found: {env_template}")
         print("   Please ensure .env.profit_optimized exists in the repository root.")
+        return False
+
+    # Read and validate a stable snapshot before creating any backup.
+    try:
+        with open(env_template, "rb") as source:
+            template_bytes = source.read()
+        validate_template_bytes(template_bytes)
+    except (OSError, ValueError):
+        print("❌ Template rejected: invalid format or populated credential fields.")
         return False
 
     # Backup existing .env if it exists
@@ -139,8 +192,22 @@ def setup_env_file():
         shutil.copy(env_file, env_backup)
         print(f"✅ Backed up existing .env to {env_backup}")
 
-    # Copy template
-    shutil.copy(env_template, env_file)
+    # Write the validated snapshot, never re-read the mutable template path.
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=".", prefix=".env.review-", delete=False
+        ) as target:
+            temporary_path = target.name
+            target.write(template_bytes)
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, env_file)
+    except OSError:
+        print("❌ Failed to write validated environment configuration.")
+        return False
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
+            os.unlink(temporary_path)
     print(f"✅ Created new .env from template")
     print()
     print("⚠️  IMPORTANT: You must add your API credentials to .env")
@@ -175,7 +242,9 @@ def main():
 
     # Step 3: Setup .env
     print("=" * 70)
-    setup_env_file()
+    if not setup_env_file():
+        print("❌ SETUP FAILED; no optimization activation is authorized.")
+        sys.exit(1)
 
     # Final instructions
     print()
