@@ -79,7 +79,7 @@ class ReadonlyLeadStorageTests(unittest.TestCase):
         r = inspect_database(self.intake, self.root, 'intake')
         self.assertIsNone(r['row_count'])
         self.assertEqual(r['status'], 'UNVERIFIED')
-        self.assertTrue(r['reason'].startswith('sqlite_read_failed:'))
+        self.assertEqual(r['reason'], 'sqlite_header_invalid')
 
     def test_trade_ledger_name_cannot_be_read_as_lead_storage(self):
         restricted = self.root / 'trade_ledger.db'
