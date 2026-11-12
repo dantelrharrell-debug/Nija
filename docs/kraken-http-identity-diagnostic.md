@@ -39,6 +39,10 @@ one-shot replay denial. They establish diagnostic behavior only.
 Deployment still requires exact-release checks, independent review, verified
 backup/restore and owner approval. A fresh diagnostic request is an explicit
 operator step after an approved deployment. Never replay consumed requests.
+The request publisher's existing production consumer hashes are unchanged;
+they deliberately reject the modified consumer until its new hash receives
+independent approval. Offline publisher tests use isolated synthetic sources
+and explicit fixture pins, never an automatic production approval refresh.
 Credential rotation, full ledger/open-order/protective-exit reconciliation,
 authenticated release receipts and all thirteen collector observations remain
 separate prerequisites for trading readiness.

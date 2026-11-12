@@ -38,6 +38,12 @@ MAX_BYTES = 4 * 1024 * 1024
 IDENTITY_REQUEST = "85c2521edd9754d6f6f7df677f8d6231"
 RECOVERY_ROOT = Path("/data/kraken-history-recovery")
 APP_ROOT = Path("/app")
+IDENTITY_CONSUMER_PINS = (
+    ("bot/kraken_identity_request_recovery_v491.py",
+     "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2"),
+    ("bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py",
+     "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4"),
+)
 SIGNALS = {
     "INVALID_API_KEY": (
         "eapi:invalid key",
@@ -474,12 +480,7 @@ def identity_probe(*, publish: bool = False) -> dict:
             return {**result, "status": "CLAIMED", "reason": "consumed_request_never_replayed"}
         if not publish:
             return {**result, "status": "PENDING", "reason": "identity_receipt_not_available"}
-        for relative, expected in {
-            "bot/kraken_identity_request_recovery_v491.py":
-                "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2",
-            "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py":
-                "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
-        }.items():
+        for relative, expected in IDENTITY_CONSUMER_PINS:
             if hashlib.sha256(_read_regular(APP_ROOT / relative, MAX_BYTES)).hexdigest() != expected:
                 return {**result, "reason": "identity_consumer_source_changed"}
         binding = root / "approved-binding-platform-20261028.json"

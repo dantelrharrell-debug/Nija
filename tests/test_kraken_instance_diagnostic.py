@@ -255,7 +255,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
                     }],
                 }] * 9
                 with patch.dict("os.environ", {
-                    "RENDER_API_KEY": "synthetic-only",
+                    "RENDER_API_KEY": "synthetic-only",  # pragma: allowlist secret (offline mocked HTTP fixture)
                     "EXPECTED_RENDER_INSTANCE": SERVICE + "-7d458c8976-zsc58",
                     "NIJA_APPROVED_RENDER_DEPLOYMENT_ID": "dep-synthetic",
                 }, clear=True), patch(
@@ -302,7 +302,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
                     ]},
                 ] + [{"logs": []}] * 8
                 with patch.dict(os.environ, {
-                    "RENDER_API_KEY": "synthetic-only",
+                    "RENDER_API_KEY": "synthetic-only",  # pragma: allowlist secret (offline mocked HTTP fixture)
                     "EXPECTED_RENDER_INSTANCE": expected_instance,
                     "NIJA_APPROVED_RENDER_DEPLOYMENT_ID": "dep-synthetic",
                 }, clear=True), patch(
@@ -319,7 +319,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
             {"id": SERVICE, "branch": RELEASE_BRANCH},
             [{"deploy": {"id": "dep-current", "status": "live", "commit": {"id": "b" * 40}}}],
         ]
-        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-only"}, clear=True), patch(
+        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-only"}, clear=True), patch(  # pragma: allowlist secret (offline mocked HTTP fixture)
             "scripts.nija_kraken_instance_diagnostic.urlopen",
             side_effect=[io.BytesIO(json.dumps(row).encode()) for row in responses],
         ) as request:
@@ -347,8 +347,21 @@ class IdentityProbeTests(unittest.TestCase):
         }, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        # Request-publisher behavior uses explicitly approved synthetic source
+        # bytes, independently of changes to the real production consumers.
+        # Never refresh production approval digests merely to make tests pass.
+        from scripts.nija_kraken_instance_diagnostic import IDENTITY_CONSUMER_PINS
+        app_root = self.root / "synthetic-app"
+        fixture_pins = []
+        for relative, _ in IDENTITY_CONSUMER_PINS:
+            source = app_root / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            raw = ("synthetic-reviewed-source:" + relative).encode()
+            source.write_bytes(raw)
+            fixture_pins.append((relative, hashlib.sha256(raw).hexdigest()))
         for name, value in (
-            ("RECOVERY_ROOT", self.root), ("APP_ROOT", Path(__file__).resolve().parents[1]),
+            ("RECOVERY_ROOT", self.root), ("APP_ROOT", app_root),
+            ("IDENTITY_CONSUMER_PINS", tuple(fixture_pins)),
         ):
             change = patch("scripts.nija_kraken_instance_diagnostic." + name, value)
             change.start()
