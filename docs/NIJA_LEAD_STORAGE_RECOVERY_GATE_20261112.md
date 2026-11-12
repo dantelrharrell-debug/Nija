@@ -27,7 +27,9 @@ python scripts/verify_nija_lead_storage_readonly.py \
   --expected-persistent-root /data
 ```
 
-Only aggregate counts, database paths and schema/integrity statuses appear in the JSON. `mode=ro` is used; missing files are **never created**. An inaccessible or missing database yields `UNVERIFIED` and a nonzero exit code, **not zero records**. The tool intentionally never prints stored customer email, payload, consent, passwords, or webhook URLs. It refuses to inspect files named like the trading ledger.
+Only aggregate counts, database paths and schema/integrity statuses appear in the JSON. `mode=ro&immutable=1` is used **only after rejecting WAL headers and WAL/SHM/rollback-journal sidecars**; missing files and SQLite sidecars are never created by this probe. Active WAL or changing databases require an independently approved online-consistent snapshot before inspection. An inaccessible or missing database yields `UNVERIFIED` and a nonzero exit code, **not zero records**. The tool intentionally never prints stored customer email, payload, consent, passwords, or webhook URLs. It refuses to inspect files named like the trading ledger.
+
+The forwarding verification also requires `website_lead_forward_aliases` with `source_key`, `legacy_key` and `created_at`; absence is **UNVERIFIED**, never evidence that aliases do not exist elsewhere. A whitespace-only primary intake override is invalid and must not silently select the secondary path.
 
 The result `local_placement_and_integrity=checked` means **local placement and checks only**, not that the Render disk or backup has been verified independently. `production_pipeline_certified` is always `false`. Independent backup/restore, IONOS runtime, private delivery rules, sender identity and provider acknowledgments remain external gates.
 
