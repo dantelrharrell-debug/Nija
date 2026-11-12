@@ -1,0 +1,216 @@
+{
+  "scope": "synthetic_test_fixture_false_positives",
+  "source_commit_url": "https://github.com/dantelrharrell-debug/Nija/commit/ef2aa3f7137d5ca2488234083fd096d651061f6e",
+  "entries": [
+    {
+      "path": "bot/tests/test_alpaca_atomic_protected_entry.py",
+      "line": 115,
+      "type": "Secret Keyword",
+      "context": "_broker"
+    },
+    {
+      "path": "bot/tests/test_broker_auth_recovery_patch.py",
+      "line": 89,
+      "type": "Secret Keyword",
+      "context": "test_okx_accepts_passphrase_alias_and_global_region"
+    },
+    {
+      "path": "bot/tests/test_broker_auth_recovery_patch.py",
+      "line": 90,
+      "type": "Secret Keyword",
+      "context": "test_okx_accepts_passphrase_alias_and_global_region"
+    },
+    {
+      "path": "bot/tests/test_capital_refresh_and_kraken_recovery_v35.py",
+      "line": 365,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "bot/tests/test_capital_refresh_and_kraken_recovery_v35.py",
+      "line": 366,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "bot/tests/test_entrypoint_writer_authority.py",
+      "line": 54,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "bot/tests/test_funded_okx_capital_convergence_v31.py",
+      "line": 80,
+      "type": "Secret Keyword",
+      "context": "test_secondary_activation_prefers_authenticated_okx_over_zero_router"
+    },
+    {
+      "path": "bot/tests/test_funded_okx_capital_convergence_v31.py",
+      "line": 81,
+      "type": "Secret Keyword",
+      "context": "test_secondary_activation_prefers_authenticated_okx_over_zero_router"
+    },
+    {
+      "path": "bot/tests/test_kraken_adapter_connection.py",
+      "line": 50,
+      "type": "Secret Keyword",
+      "context": "_configured_adapter"
+    },
+    {
+      "path": "bot/tests/test_secondary_venue_activation_patch.py",
+      "line": 109,
+      "type": "Secret Keyword",
+      "context": "test_coinbase_credential_aliases_are_promoted"
+    },
+    {
+      "path": "bot/tests/test_secondary_venue_activation_patch.py",
+      "line": 110,
+      "type": "Secret Keyword",
+      "context": "test_coinbase_credential_aliases_are_promoted"
+    },
+    {
+      "path": "bot/tests/test_startup_verification_evidence.py",
+      "line": 51,
+      "type": "Secret Keyword",
+      "context": "__init__"
+    },
+    {
+      "path": "bot/tests/test_writer_authority_lease_invariant.py",
+      "line": 99,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "bot/tests/test_writer_authority_lifecycle_fix.py",
+      "line": 196,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "bot/tests/test_writer_core_thread_lease_regression.py",
+      "line": 102,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "bot/tests/test_writer_generation_tracker.py",
+      "line": 233,
+      "type": "Secret Keyword",
+      "context": "test_succeeds_when_manager_returns_valid_version"
+    },
+    {
+      "path": "bot/tests/test_writer_lease_lifecycle.py",
+      "line": 101,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "test_go_live.py",
+      "line": 203,
+      "type": "Secret Keyword",
+      "context": "test_kraken_credentials_check"
+    },
+    {
+      "path": "test_go_live.py",
+      "line": 204,
+      "type": "Secret Keyword",
+      "context": "test_kraken_credentials_check"
+    },
+    {
+      "path": "test_platform_account_safety.py",
+      "line": 711,
+      "type": "Secret Keyword",
+      "context": "test_alpaca_hierarchy_validation"
+    },
+    {
+      "path": "test_platform_account_safety.py",
+      "line": 724,
+      "type": "Secret Keyword",
+      "context": "test_alpaca_hierarchy_validation"
+    },
+    {
+      "path": "test_platform_account_safety.py",
+      "line": 725,
+      "type": "Secret Keyword",
+      "context": "test_alpaca_hierarchy_validation"
+    },
+    {
+      "path": "test_user_independent_trading.py",
+      "line": 222,
+      "type": "Secret Keyword",
+      "context": "test_load_individual_user_config_with_independent_trading"
+    },
+    {
+      "path": "test_user_independent_trading.py",
+      "line": 223,
+      "type": "Secret Keyword",
+      "context": "test_load_individual_user_config_with_independent_trading"
+    },
+    {
+      "path": "tests/test_conversion_delivery.py",
+      "line": 22,
+      "type": "Secret Keyword",
+      "context": "kwargs_for"
+    },
+    {
+      "path": "tests/test_conversion_delivery.py",
+      "line": 51,
+      "type": "Secret Keyword",
+      "context": "test_rejects_invalid_attribution_and_event"
+    },
+    {
+      "path": "tests/test_conversion_outbox.py",
+      "line": 161,
+      "type": "Secret Keyword",
+      "context": "test_invalid_attribution_does_not_claim_pending_conversion"
+    },
+    {
+      "path": "tests/test_founding_onboarding_api.py",
+      "line": 22,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "tests/test_founding_onboarding_api.py",
+      "line": 27,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "tests/test_founding_onboarding_api.py",
+      "line": 32,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "tests/test_member_broker_onboarding.py",
+      "line": 29,
+      "type": "Secret Keyword",
+      "context": "test_secure_connection_does_not_return_keys"
+    },
+    {
+      "path": "tests/test_member_broker_onboarding_api.py",
+      "line": 40,
+      "type": "Secret Keyword",
+      "context": "test_rejects_unauthorized_and_never_returns_secrets"
+    },
+    {
+      "path": "tests/test_member_broker_verification.py",
+      "line": 26,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "tests/test_paid_user_live_trading_access.py",
+      "line": 90,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    },
+    {
+      "path": "tests/test_paid_user_live_trading_access.py",
+      "line": 91,
+      "type": "Secret Keyword",
+      "context": "setUp"
+    }
+  ]
+}
