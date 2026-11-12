@@ -8,6 +8,13 @@ on:
       - release/justcall-handoff-only-20261017
     paths:
       - 'bot/bot_main.py'
+      - 'bot/kraken_identity_read_timing.py'
+      - 'bot/kraken_authenticated_identity_v480.py'
+      - 'bot/kraken_identity_request_recovery_v491.py'
+      - 'tests/test_kraken_identity_http_diagnostic.py'
+      - 'tests/test_kraken_identity_read_timing.py'
+      - 'tests/test_kraken_authenticated_identity_v480.py'
+      - 'tests/test_kraken_identity_request_recovery_v491.py'
       - 'bot/kraken_collector_connection.py'
       - 'tests/test_kraken_collector_connection_preflight_20261111.py'
       - 'bot/kraken_startup_evidence_binding.py'
@@ -63,6 +70,12 @@ jobs:
       - run: python -m pip install pytest==8.2.2 requests==2.32.5
       - name: Verify guarded startup and real atomic diagnostic registration offline
         run: python -m pytest -q tests/test_kraken_startup_evidence_binding.py
+      - name: Distinguish bounded HTTP identity fields from parsed reply without secrets
+        run: >-
+          python -m pytest -q tests/test_kraken_identity_http_diagnostic.py
+          tests/test_kraken_identity_read_timing.py
+          tests/test_kraken_authenticated_identity_v480.py
+          tests/test_kraken_identity_request_recovery_v491.py
       - name: Verify registry validation before provider construction
         run: python -m pytest -q tests/test_kraken_collector_connection_preflight_20261111.py tests/test_kraken_collector_connection.py tests/test_kraken_reviewed_collector_bridge.py
       - name: Verify fail-closed non-authorizing observations
