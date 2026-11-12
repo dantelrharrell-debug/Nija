@@ -3,6 +3,10 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot.py'
+      - 'bot/redis_env.py'
+      - 'start.sh'
+      - 'tests/test_redis_configuration_error_privacy.py'
       - 'bot/bot_main.py'
       - 'bot/kraken_protected_startup_root.py'
       - 'bot/kraken_startup_receipts.py'
@@ -45,6 +49,7 @@ jobs:
           python-version: '3.11'
       - name: Exercise offline fail-closed deployment, checkout, digest and authority boundaries
         run: |
+          python -B -S -m unittest discover -s tests -p test_redis_configuration_error_privacy.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_instance_diagnostic.py -v
           python -B -S -m unittest discover -s tests -p test_render_recovery_verification.py -v
           python -B -S -m unittest discover -s tests -p test_render_runtime_build_sources.py -v
