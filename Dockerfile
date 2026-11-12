@@ -42,10 +42,6 @@ RUN NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -m py_compile \
         /app/bot.py \
         /app/bot/bot.py \
         /app/bot/bot_main.py \
-        /app/bot/kraken_protected_startup_root.py \
-        /app/bot/kraken_startup_evidence_binding.py \
-        /app/bot/kraken_startup_receipts.py \
-        /app/bot/kraken_canonical_startup_factory.py \
         /app/bot/canonical_broker_bootstrap_handoff_patch.py \
         /app/bot/canonical_broker_main_entry_guard_v20.py \
         /app/bot/canonical_broker_prebootstrap_v22.py \

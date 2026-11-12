@@ -12,6 +12,7 @@ on:
       - 'bot/kraken_canonical_startup_factory.py'
       - 'bot/kraken_protected_startup_root.py'
       - 'tests/test_kraken_protected_startup_root.py'
+      - 'tests/test_kraken_protected_root_container_context.py'
       - 'tests/test_kraken_canonical_startup_factory.py'
       - 'tests/test_kraken_startup_receipts.py'
       - 'bot/kraken_identity_read_timing.py'
@@ -110,6 +111,8 @@ jobs:
           python-version: '3.11'
       - name: Verify Docker-filtered production shell startup without broker access
         run: python -S -B -m unittest discover -s tests -p test_render_container_startup.py -v
+      - name: Verify protected-root modules and final caller survive the Docker shell boundary
+        run: python -S -B -m unittest discover -s tests -p test_kraken_protected_root_container_context.py -v
   offline-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 10

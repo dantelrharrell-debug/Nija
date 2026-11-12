@@ -17,11 +17,14 @@ from scripts import apply_startup_handoff_fix as startup
 from scripts import apply_kraken_recovery_coordinator_single_owner_v400 as coordinator
 from scripts.nija_kraken_instance_diagnostic import SOURCE_PATHS
 
-# Both Dockerfiles have the same rewrite sequence. The second only adds
-# --no-install-recommends to apt-get. Any other recipe requires code review.
+# These public Dockerfile variants have the same source-rewrite sequence.
+# Variants add --no-install-recommends or the exact Debian upgrade command.
+# Package/image security is not attested here. Other bytes require code review.
 DOCKER_SHA256 = frozenset({
     "dba35727604358caa0bfd5df1ed2262e331fd34103e526d85d6c02d273ef5827",  # pragma: allowlist secret
     "087f5985aaa5a31f98b9f68422370d93241204a9eb49171b8d63ae0c62df5fb4",  # pragma: allowlist secret
+    # Exact public Dockerfile at commit 6e34c616 (one-line Debian upgrade only).
+    "3c2f87fcbcae555e3c834e3ba5ca997e4033fe3927bd518f73ae46d6e9348653",  # pragma: allowlist secret
 })
 RECIPE_SHA256 = {
     "scripts/install_sitecustomize_defer_guard.py":

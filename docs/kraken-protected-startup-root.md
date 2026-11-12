@@ -108,6 +108,24 @@ registration, real thirteen-provider construction without broker reads, and a
 separate synthetic-observation path through the real atomic installer with
 orders unauthorized. CI explicitly runs these tests on Python 3.11.
 
+The isolated Docker test uses the existing production recipe and network-off
+shell fixture to inspect the packaged modules and caller order after real shell
+patchers run. The Dockerfile and production approval/source pins are not
+changed by this startup handoff. An initial optional Dockerfile compilation
+addition was removed. The recovered base Dockerfile already differs from the
+two previously recognized recipes: public commit
+[6e34c616](https://github.com/dantelrharrell-debug/Nija/commit/6e34c616861aa3f81fc91e54bacf6f7ee62ee18f)
+adds only `apt-get upgrade -y` to the existing package-install line. A byte-for-
+byte comparison with the prior recognized recipe at
+[25ae1de6](https://github.com/dantelrharrell-debug/Nija/commit/25ae1de671e037d458eece243dac393e7f8d7e0e)
+verified that exact one-line difference. This proposal adds that exact public
+recipe checksum to the derivation verifier, preserving the two existing
+checksums, every patcher pin and the default denial of all other bytes. Existing
+tests reproduce the real script rewrites; a new negative test rejects altered
+upgrade flags. This recognition is subject to human review and does not certify
+package/image security, update production approval/source pins or approve a
+deployment. The checksum is public code metadata, not a credential.
+
 The production risk snapshot source, complete durable duplicate inventory,
 independent ledger provenance/readers, actual source review, current account
 reconciliation/protection, genuine signed certifications and approved trust
