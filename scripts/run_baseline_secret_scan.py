@@ -7,11 +7,21 @@ from contextlib import redirect_stderr, redirect_stdout
 from importlib.metadata import version
 import io
 import json
+import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 
 
+def _checkout_revision() -> list[str]:
+    subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], check=True, capture_output=True)
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD", "HEAD^{tree}"], check=True, capture_output=True,
+    ).stdout.decode().splitlines()
+    if len(revision) != 2 or any(not re.fullmatch(r"[0-9a-f]{40}", item) for item in revision):
+        raise ValueError("checkout_identity_invalid")
+    return revision
 PRIORITY_TYPES = ("Private Key", "Basic Auth Credentials")
 
 
@@ -38,6 +48,15 @@ def scan(report_path: Path) -> int:
         baseline = Path(".secrets.baseline").read_bytes()
         if json.loads(baseline)["version"] != report["required_version"]:
             raise ValueError("baseline_version_mismatch")
+        revision = _checkout_revision()
+        report["checked_out_commit"], report["checked_out_tree"] = revision
+        event = os.environ.get("GITHUB_EVENT_NAME")
+        report["ci_event"] = event if event in {
+            "push", "pull_request", "schedule", "workflow_dispatch", "workflow_call",
+        } else None
+        expected = os.environ.get("GITHUB_SHA")
+        if expected is not None and expected != revision[0]:
+            raise ValueError("checkout_differs_from_ci_revision")
         paths = subprocess.run(
             ["git", "ls-files", "-z"], check=True, capture_output=True,
         ).stdout.decode().split("\0")
@@ -59,6 +78,8 @@ def scan(report_path: Path) -> int:
             with redirect_stdout(captured), redirect_stderr(io.StringIO()):
                 status = hook_main(["--json", "--baseline", str(temporary), *paths])
             report["baseline_would_change"] = temporary.read_bytes() != baseline
+        if _checkout_revision() != revision:
+            raise ValueError("checkout_changed_during_scan")
         if status == 1:
             findings = json.loads(captured.getvalue())["results"]
             # Deliberately omit hashes, candidate values and raw scanner output.
