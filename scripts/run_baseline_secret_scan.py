@@ -14,7 +14,7 @@ import tempfile
 
 def scan(report_path: Path) -> int:
     """Run the pinned hook without changing or automatically approving the baseline."""
-    report = {"scanner": "detect-secrets", "required_version": "1.5.0", "findings": []}
+    report = {"scanner": "detect-secrets", "required_version": "1.5.0", "findings": [], "category_counts": {}}
     status = 2
     try:
         report["version"] = version("detect-secrets")
@@ -51,6 +51,12 @@ def scan(report_path: Path) -> int:
                 {"path": path, "line": item["line_number"], "type": item["type"]}
                 for path, items in sorted(findings.items()) for item in items
             ]
+        # Summarize only detector names and counts, never secret values or hashes.
+        counts = {}
+        for finding in report["findings"]:
+            category = finding["type"]
+            counts[category] = counts.get(category, 0) + 1
+        report["category_counts"] = dict(sorted(counts.items()))
         report["outcome"] = (
             "clean" if status == 0 else "unbaselined_candidates" if status == 1
             else "baseline_refresh_required" if status == 3 else "scanner_error"
