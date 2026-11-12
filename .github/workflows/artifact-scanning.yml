@@ -146,7 +146,9 @@ jobs:
     - name: Run pip-audit for vulnerability scanning
       run: |
         pip install pip-audit==2.10.1
-        pip-audit --desc --output pip-audit-report.json --format json
+        # Audit the exact production manifest, not the mutable runner environment.
+        # The latter includes scanner tooling and may miss declared pins.
+        pip-audit -r "${{ matrix.requirements }}" --desc --output pip-audit-report.json --format json
 
     - name: Upload pip-audit report
       uses: actions/upload-artifact@v4
