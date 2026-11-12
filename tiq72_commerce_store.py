@@ -80,12 +80,12 @@ class Tiq72Store:
             return rid
 
     def attach_session(self, reservation_id, session_id):
-        if not isinstance(session_id,str) or not session_id.startswith(("cs_test_","cs_live_")):
+        if not isinstance(session_id,str) or not session_id.startswith("cs_test_"):
             raise CommerceDenied("invalid_session")
         with self.db:
-            row=self.db.execute("SELECT stripe_session FROM tiq72_reservations WHERE id=?",
+            row=self.db.execute("SELECT stripe_session,status FROM tiq72_reservations WHERE id=?",
                                 (reservation_id,)).fetchone()
-            if not row or (row[0] and row[0]!=session_id):
+            if not row or (row[0] and row[0]!=session_id) or row[1] not in ("reserved","checkout_created"):
                 raise CommerceDenied("reservation_conflict")
             self.db.execute("UPDATE tiq72_reservations SET stripe_session=?,status='checkout_created' WHERE id=? AND status IN ('reserved','checkout_created')",
                             (session_id,reservation_id))
