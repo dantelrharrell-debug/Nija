@@ -91,6 +91,7 @@ def make_kraken_account_identity_provider(
     monitoring_category: Any,
     clock: Callable[[], float] = time.time,
     parsed_field_observer: Callable[[Mapping[str, bool]], None] | None = None,
+    http_field_observer: Callable[[Mapping[str, bool]], None] | None = None,
 ) -> Callable[[], Mapping[str, Any]]:
     """Return a single-field v452 producer using an existing authenticated client.
 
@@ -129,7 +130,7 @@ def make_kraken_account_identity_provider(
             raise KrakenIdentityDenied("observation_clock_invalid")
         try:
             api = getattr(broker, "api", None)
-            with capture_identity_read(api, clock) as timing:
+            with capture_identity_read(api, clock, inspect_http_fields=callable(http_field_observer)) as timing:
                 response = read("GetApiKeyInfo", {}, category=monitoring_category)
         except Exception:
             raise KrakenIdentityDenied("authenticated_identity_read_failed") from None
@@ -157,6 +158,11 @@ def make_kraken_account_identity_provider(
                 or not isinstance(response.get("result"), Mapping)):
             raise KrakenIdentityDenied("authenticated_identity_read_unverified")
         row = response["result"]
+        if http_field_observer is not None and timing.http_field_presence is not None:
+            try:
+                http_field_observer(dict(timing.http_field_presence))
+            except Exception:
+                pass  # Diagnostic delivery cannot change identity verification.
         # Field-presence-only observation of the PARSED reply. This does not
         # establish what the raw HTTP body contained and must never log values.
         if parsed_field_observer is not None:
