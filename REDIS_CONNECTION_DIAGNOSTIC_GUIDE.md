@@ -1,5 +1,7 @@
 # Redis Connection Timeout Fix - Complete Diagnostic Guide
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 **Last Updated**: 2026-05-09  
 **Current Status**: Bot crashing with Redis timeout at `viaduct.proxy.rlwy.net:20874`  
 **Fix Deployed**: PR #1615 (graceful standby) - awaiting Railway redeploy
@@ -84,7 +86,7 @@ Port:   20874
 
 **Example**:
 ```
-REDIS_PASSWORD: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
+REDIS_PASSWORD: <provider-issued-password>
 ```
 
 ---
@@ -100,17 +102,17 @@ NIJA_REDIS_URL=rediss://***@viaduct.proxy.rlwy.net:20874/0
 
 **Correct Format**:
 ```
-rediss://default:PASTE_PASSWORD_HERE@viaduct.proxy.rlwy.net:20874/0
+rediss://<credentials>@viaduct.proxy.rlwy.net:20874/0
 ```
 
 **Replace**:
-- `PASTE_PASSWORD_HERE` → copy from Redis REDIS_PASSWORD
+- `<provider-issued-password>` → copy from Redis REDIS_PASSWORD
 - `viaduct.proxy.rlwy.net` → from Redis Networking Domain
 - `20874` → from Redis Networking Port
 
 **Example of correct URL**:
 ```
-rediss://default:a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0@viaduct.proxy.rlwy.net:20874/0
+rediss://<credentials>@viaduct.proxy.rlwy.net:20874/0
 ```
 
 **CRITICAL**:
@@ -203,9 +205,9 @@ STEP 2: loading bot.py...
 2. Delete broken legacy variables and keep the production Railway set:
    - `REDIS_URL =`
    - `REDIS_TLS_URL =`
-   - `REDIS_PRIVATE_URL=redis://default:${REDIS_PASSWORD}@redis.railway.internal:6379/0`
-   - `REDIS_PUBLIC_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
-3. Keep `NIJA_REDIS_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
+   - `REDIS_PRIVATE_URL=redis://<credentials>@redis.railway.internal:6379/0`
+   - `REDIS_PUBLIC_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0`
+3. Keep `NIJA_REDIS_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0`
 
 ### "Still crashing even after PR deployment"
 1. Force full redeploy: Delete old deployment → redeploy

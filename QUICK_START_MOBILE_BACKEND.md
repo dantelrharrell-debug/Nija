@@ -1,5 +1,7 @@
 # NIJA Mobile Backend - Quick Start Guide
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 Get your NIJA mobile backend running in production in under 10 minutes.
 
 ## Option 1: Railway (Easiest - Recommended)
@@ -90,7 +92,7 @@ pip install -r requirements.txt
 
 ### Step 2: Set Environment Variables
 ```bash
-export DATABASE_URL=postgresql://user:pass@localhost:5432/nija
+export DATABASE_URL=postgresql://<credentials>@localhost:5432/nija
 export JWT_SECRET_KEY=your-secret-key
 export STRIPE_SECRET_KEY=sk_test_xxx
 ```
@@ -256,7 +258,7 @@ pip install -r requirements.txt
 
 **Solution:** Check `DATABASE_URL` format:
 ```
-postgresql://username:password@host:port/database
+postgresql://<credentials>@host:port/database
 ```
 
 ### Issue: WebSocket not connecting
