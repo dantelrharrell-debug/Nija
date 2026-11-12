@@ -110,6 +110,25 @@ def show_optimization_features():
         print()
 
 
+def template_has_populated_credentials(path):
+    """Reject tracked templates containing credential values without exposing them."""
+    credential_names = (
+        "API_KEY", "API_SECRET", "PRIVATE_KEY", "SECRET_KEY", "ACCESS_TOKEN",
+        "AUTH_TOKEN", "PASSWORD", "PASSPHRASE", "WEBHOOK_SECRET",
+    )
+    with open(path, "r", encoding="utf-8") as source:
+        for raw in source:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            name = name.removeprefix("export ").strip().upper()
+            if any(name == item or name.endswith("_" + item) for item in credential_names):
+                if value.strip():
+                    return True
+    return False
+
+
 def setup_env_file():
     """Set up optimized .env file."""
     print("📝 Setting up .env file...")
@@ -123,6 +142,13 @@ def setup_env_file():
     if not os.path.exists(env_template):
         print(f"❌ Template file not found: {env_template}")
         print("   Please ensure .env.profit_optimized exists in the repository root.")
+        return False
+
+    # Fail before overwriting or backing up anything. Tracked templates must
+    # never supply credential values, including plausible placeholder tokens.
+    if template_has_populated_credentials(env_template):
+        print("❌ Template contains populated credential fields; copy refused.")
+        print("   Security owner must sanitize the tracked template separately.")
         return False
 
     # Backup existing .env if it exists
