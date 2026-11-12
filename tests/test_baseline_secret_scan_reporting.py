@@ -48,6 +48,7 @@ def test_clean_scan_passes_without_rewriting_baseline(tmp_path, baseline):
     result, report = run_scan(tmp_path, baseline, "count = 12\n")
     assert result.returncode == 0
     assert report["outcome"] == "clean"
+    assert report["category_counts"] == {}
     assert report["tracked_file_count"] == 2
 
 
@@ -57,6 +58,7 @@ def test_new_candidate_blocks_without_disclosing_value_or_digest(tmp_path, basel
     assert result.returncode == 1
     assert report["outcome"] == "unbaselined_candidates"
     assert report["findings"] == [{"path": "probe.py", "line": 1, "type": "Secret Keyword"}]
+    assert report["category_counts"] == {"Secret Keyword": 1}
     evidence = json.dumps(report) + result.stdout + result.stderr
     assert candidate not in evidence
     assert hashlib.sha1(candidate.encode(), usedforsecurity=False).hexdigest() not in evidence
