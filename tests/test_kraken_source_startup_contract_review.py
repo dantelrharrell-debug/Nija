@@ -36,7 +36,7 @@ class SourceStartupContractReview(unittest.TestCase):
         self.assertIn("compose_kraken_evidence", functions)
         classes = {n.name for n in module.body if isinstance(n, ast.ClassDef)}
         self.assertIn("KrakenEvidenceBinding", classes)
-        self.assertIn("KrakenEvidenceComposition", classes)
+        self.assertIn("RiskEvidenceDependencies", classes)
 
     def test_signed_registration_remains_explicit(self):
         module = tree("bot/kraken_startup_receipts.py")
