@@ -61,6 +61,14 @@ The protected source must define:
 manifest, not pins learned from a first exchange response. Its provider IDs and
 account/key pins are available to both callbacks without rereading configuration.
 
+The resolver may retain six external callbacks, or supply four external callbacks
+with explicit `kill_switch_binding` and `review_kill_switch_binding` fields in
+ReviewedCanonicalKrakenSources. The canonical factory then uses the existing
+reviewed native kill-switch and position-sync constructors. It still requires
+the full six-role owner map and validates all thirteen observations before
+installation. No clearance, holding, adoption state or approval is inferred
+from selecting this mode; see the canonical-factory contract for exact inputs.
+
 The complete implementation must be reviewed, including imported modules and
 transitive source dependencies in the exact release image. A blanket True
 reviewer, synthetic providers, guessed identity pins, global risk booleans, or

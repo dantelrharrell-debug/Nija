@@ -13,7 +13,9 @@ from types import MappingProxyType
 from typing import Any
 
 from bot.kraken_reviewed_collector_bridge import compose_authenticated_kraken_collector_sources
-from bot.kraken_six_source_binding_contract_v490 import validate_six_source_bindings
+from bot.kraken_collector_composition_v487 import compose_reviewed_kraken_runtime_sources
+from bot.kraken_kill_switch_evidence import ReviewedKillSwitchBinding
+from bot.kraken_six_source_binding_contract_v490 import EXPECTED_OWNERS, validate_six_source_bindings
 from bot.kraken_startup_evidence_binding import RECEIPTS, ReviewedStartupBinding
 from bot.kraken_startup_receipts import StartupReceiptTrust, register_signed_kraken_startup
 
@@ -40,6 +42,8 @@ class ReviewedCanonicalKrakenSources:
     reviewed_source_owners: Mapping[str, str] = field(repr=False)
     monitoring_category: Any = field(repr=False)
     receipts: Mapping[str, str] = field(repr=False)
+    kill_switch_binding: ReviewedKillSwitchBinding | None = field(default=None, repr=False)
+    review_kill_switch_binding: Callable | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for name in ("independent_remaining", "reviewed_source_owners", "receipts"):
@@ -98,8 +102,25 @@ def make_canonical_kraken_startup_factory(
                     or sources.manager is not manager or sources.strategy is not strategy
                     or sources.broker is not broker or review_sources(sources) is not True):
                 raise CanonicalKrakenStartupDenied("reviewed_runtime_source_binding_required")
+            remaining = sources.independent_remaining
+            if sources.kill_switch_binding is not None or sources.review_kill_switch_binding is not None:
+                # Review still covers all six actual owners. Construct the
+                # existing native pair only from explicit reviewed bindings.
+                if dict(sources.reviewed_source_owners) != EXPECTED_OWNERS:
+                    raise CanonicalKrakenStartupDenied("complete_reviewed_source_owners_required")
+                remaining = compose_reviewed_kraken_runtime_sources(
+                    broker=broker, approved_api_key_sha256=trust.api_key_sha256,
+                    approved_iban_sha256=trust.account_iiban_sha256,
+                    reviewed_provider_ids=trust.reviewed_provider_ids,
+                    independent_positions=sources.independent_positions,
+                    independent_remaining=remaining,
+                    monitoring_category=sources.monitoring_category,
+                    kill_switch_binding=sources.kill_switch_binding,
+                    review_kill_switch_binding=sources.review_kill_switch_binding,
+                    independently_reviewed=True,
+                )
             remaining = validate_six_source_bindings(
-                sources.independent_remaining,
+                remaining,
                 reviewed_source_owners=sources.reviewed_source_owners,
                 independently_reviewed=True,
             )
