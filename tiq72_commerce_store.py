@@ -110,8 +110,10 @@ class Tiq72Store:
                                 (reservation_id,)).fetchone()
             if not row or row[1]!=session_id:
                 raise CommerceDenied("session_mismatch")
-            seen=self.db.execute("SELECT 1 FROM tiq72_events WHERE event_id=?",(event_id,)).fetchone()
+            seen=self.db.execute("SELECT event_type,reservation_id FROM tiq72_events WHERE event_id=?",(event_id,)).fetchone()
             if seen:
+                if seen != (event_type,reservation_id):
+                    raise CommerceDenied("event_identity_conflict")
                 return False
             self.db.execute("INSERT INTO tiq72_events VALUES (?,?,?,?)",
                             (event_id,event_type,reservation_id,int(time.time())))

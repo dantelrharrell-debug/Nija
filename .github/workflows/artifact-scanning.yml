@@ -147,6 +147,7 @@ jobs:
       run: |
         pip install pip-audit==2.10.1
         # Audit the exact production manifest, not the mutable runner environment.
+        # The latter includes scanner tooling and may miss declared pins.
         pip-audit -r "${{ matrix.requirements }}" --desc --output pip-audit-report.json --format json
 
     - name: Upload pip-audit report

@@ -1,0 +1,35 @@
+name: Synthetic instructor debrief tests
+
+on:
+  pull_request:
+    paths:
+      - 'tools/synthetic_instructor_debrief.py'
+      - 'tests/test_synthetic_instructor_debrief.py'
+      - '.github/workflows/synthetic-instructor-debrief.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/synthetic_instructor_debrief.py'
+      - 'tests/test_synthetic_instructor_debrief.py'
+      - '.github/workflows/synthetic-instructor-debrief.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-instructor-debrief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run isolated synthetic-only unit tests
+        run: python -S -m unittest discover -s tests -p 'test_synthetic_instructor_debrief.py' -v
+      - name: Render fictional instructor debrief
+        run: python -S tools/synthetic_instructor_debrief.py
