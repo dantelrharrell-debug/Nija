@@ -57,6 +57,19 @@ class Tiq72CommerceStoreTests(unittest.TestCase):
         with self.assertRaises(CommerceDenied):
             self.store.attach_session(self.rid,session)
 
+    def test_event_id_cannot_be_reused_for_different_reservation(self):
+        session="cs_test_sample_12345678"
+        self.assertTrue(self.store.record_verified_event("evt_unique","checkout.session.completed",
+            self.rid,session,verified_paid=True))
+        second_run=self.store.save_run("adult-1","v515-72-decisions",
+            {"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]},
+            {"score":51})
+        second=self.store.reserve(second_run,"adult-1",True)
+        self.store.attach_session(second,"cs_test_other_12345678")
+        with self.assertRaisesRegex(CommerceDenied,"event_identity_conflict"):
+            self.store.record_verified_event("evt_unique","checkout.session.completed",
+                second,"cs_test_other_12345678",verified_paid=True)
+
     def test_invalid_run_shape(self):
         with self.assertRaises(CommerceDenied):
             self.store.save_run("adult-1","v515-72-decisions",{"challenges":[[]]},{})
