@@ -37,6 +37,7 @@ def verify_test_checkout(stripe_client, session_id: str, reservation_id: str):
         session.get("mode")!="payment" or session.get("payment_status")!="paid" or
         session.get("status")!="complete" or session.get("currency")!="usd" or
         session.get("amount_total")!=100 or
+        session.get("client_reference_id")!=reservation_id or
         session.get("metadata",{}).get("tiq72_reservation_id")!=reservation_id or
         session.get("metadata",{}).get("tiq72_version")!="v515-72-decisions"):
         raise StripeVerificationError("checkout_identity_mismatch")
@@ -65,7 +66,7 @@ def assert_test_mode_configuration():
 def create_test_checkout(stripe_client, reservation_id: str, success_url: str, cancel_url: str):
     """Test-mode only. Reservation must already be authenticated and persisted."""
     assert_test_mode_configuration()
-    if not reservation_id or not all(isinstance(url,str) and url.startswith("https://") for url in (success_url,cancel_url)):
+    if not isinstance(reservation_id,str) or not reservation_id or len(reservation_id)>128 or not all(isinstance(url,str) and url.startswith("https://") for url in (success_url,cancel_url)):
         raise StripeVerificationError("invalid_checkout_parameters")
     price_id, _ = test_price_identity()
     return stripe_client.checkout.Session.create(
