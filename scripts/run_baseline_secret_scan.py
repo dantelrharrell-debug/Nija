@@ -12,9 +12,24 @@ import subprocess
 import tempfile
 
 
+PRIORITY_TYPES = ("Private Key", "Basic Auth Credentials")
+
+
+def priority_review_locations(findings: list[dict]) -> list[dict]:
+    """Return review coordinates only, with private-key markers first."""
+    rank = {name: index for index, name in enumerate(PRIORITY_TYPES)}
+    return [
+        {"path": item["path"], "line": item["line"], "type": item["type"]}
+        for item in sorted(
+            (item for item in findings if item["type"] in rank),
+            key=lambda item: (rank[item["type"]], item["path"], item["line"]),
+        )
+    ]
+
+
 def scan(report_path: Path) -> int:
     """Run the pinned hook without changing or automatically approving the baseline."""
-    report = {"scanner": "detect-secrets", "required_version": "1.5.0", "findings": [], "category_counts": {}}
+    report = {"scanner": "detect-secrets", "required_version": "1.5.0", "findings": [], "category_counts": {}, "priority_review_locations": []}
     status = 2
     try:
         report["version"] = version("detect-secrets")
@@ -57,6 +72,7 @@ def scan(report_path: Path) -> int:
             category = finding["type"]
             counts[category] = counts.get(category, 0) + 1
         report["category_counts"] = dict(sorted(counts.items()))
+        report["priority_review_locations"] = priority_review_locations(report["findings"])
         report["outcome"] = (
             "clean" if status == 0 else "unbaselined_candidates" if status == 1
             else "baseline_refresh_required" if status == 3 else "scanner_error"
