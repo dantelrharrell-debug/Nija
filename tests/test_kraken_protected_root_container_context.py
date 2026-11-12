@@ -13,7 +13,9 @@ _CHECKS = '''
     import ast
     from pathlib import Path
     for name in ("kraken_protected_startup_root", "kraken_startup_receipts",
-                 "kraken_startup_evidence_binding", "kraken_canonical_startup_factory"):
+                 "kraken_startup_evidence_binding", "kraken_canonical_startup_factory",
+                 "kraken_native_four_source_binding", "kraken_ledger_evidence",
+                 "kraken_redis_evidence", "kraken_operator_authorization", "kraken_risk_evidence"):
         path = Path("/app/bot") / (name + ".py")
         compile(path.read_bytes(), str(path), "exec")
     tree = ast.parse(Path("/app/bot/bot_main.py").read_text())
