@@ -47,6 +47,16 @@ class Tiq72CommerceStoreTests(unittest.TestCase):
         with self.assertRaises(CommerceDenied):
             self.store.get_report(self.rid,"adult-1")
 
+    def test_live_session_rejected(self):
+        with self.assertRaises(CommerceDenied):
+            self.store.attach_session(self.rid,"cs_live_123456789")
+
+    def test_terminal_reservation_cannot_be_reattached(self):
+        session="cs_test_sample_12345678"
+        self.store.record_verified_event("evt1","checkout.session.completed",self.rid,session,verified_paid=True)
+        with self.assertRaises(CommerceDenied):
+            self.store.attach_session(self.rid,session)
+
     def test_invalid_run_shape(self):
         with self.assertRaises(CommerceDenied):
             self.store.save_run("adult-1","v515-72-decisions",{"challenges":[[]]},{})
