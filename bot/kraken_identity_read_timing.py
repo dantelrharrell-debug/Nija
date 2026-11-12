@@ -83,7 +83,11 @@ def _http_field_presence(api: Any, previous: Any) -> dict[str, bool] | None:
                 or response.history or type(response.request) is not PreparedRequest
                 or response.request.method != "POST" or response.request.url != endpoint):
             return None
-        body = response.content
+        # Do not consume a streaming body: only inspect bytes already buffered
+        # by the existing native request and decoder.
+        if response._content_consumed is not True:
+            return None
+        body = response._content
         if type(body) is not bytes or not 0 < len(body) <= 65536:
             return None
 

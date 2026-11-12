@@ -27,13 +27,14 @@ def http_response(body=None):
     response._content = json.dumps(body if body is not None else {
         "error": [], "result": {"apiKey": KEY, "iban": ACCOUNT, "validUntil": "0"},
     }).encode()
+    response._content_consumed = True
     return response
 
 
 @pytest.mark.parametrize("failure", [
     "stale", "foreign_type", "wrong_host", "wrong_path", "redirect", "status",
     "get", "wrong_request_url", "missing_request", "oversized", "invalid_json",
-    "duplicate_root", "duplicate_field", "api_error", "wrong_result",
+    "duplicate_root", "duplicate_field", "api_error", "wrong_result", "streaming",
 ])
 def test_unbound_or_ambiguous_http_has_no_diagnostic(failure):
     response = http_response()
@@ -68,6 +69,9 @@ def test_unbound_or_ambiguous_http_has_no_diagnostic(failure):
         response._content = b'{"error":["private fixture error"],"result":{}}'
     elif failure == "wrong_result":
         response._content = b'{"error":[],"result":[]}'
+    elif failure == "streaming":
+        response._content = False
+        response._content_consumed = False
     assert timing._http_field_presence(SimpleNamespace(response=response), previous) is None
 
 
