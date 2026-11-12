@@ -6,8 +6,10 @@ providers and an authenticated receipt verifier. This module creates neither.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
+import threading
 from types import MappingProxyType
 from typing import Any
 
@@ -33,6 +35,37 @@ class ReviewedStartupBinding:
 
 _factory: Callable | None = None
 _verify_receipts: Callable | None = None
+_registration_lock = threading.RLock()
+_source_import_active = False
+
+
+def startup_binding_registration_state() -> str:
+    """Report registration presence only, never certification or order readiness."""
+    with _registration_lock:
+        if _factory is None and _verify_receipts is None:
+            return "missing"
+        if callable(_factory) and callable(_verify_receipts):
+            return "registered"
+        return "incomplete"
+
+
+@contextmanager
+def protected_source_import_guard() -> Iterator[None]:
+    """Prevent accidental registration side effects while approved code loads.
+
+    This is not a sandbox for approved Python code. Its complete implementation
+    still requires independent review before its signature or provisioning.
+    """
+    global _source_import_active
+    with _registration_lock:
+        if _source_import_active or startup_binding_registration_state() != "missing":
+            raise ValueError("protected_source_import_conflict")
+        _source_import_active = True
+    try:
+        yield
+    finally:
+        with _registration_lock:
+            _source_import_active = False
 
 
 def register_reviewed_startup_binding(
@@ -45,11 +78,14 @@ def register_reviewed_startup_binding(
     There is intentionally no default verifier or permissive fallback.
     """
     global _factory, _verify_receipts
-    if _factory is not None or _verify_receipts is not None:
-        raise ValueError("startup_binding_already_registered")
-    if not callable(factory) or not callable(verify_receipts):
-        raise TypeError("reviewed_factory_and_receipt_verifier_required")
-    _factory, _verify_receipts = factory, verify_receipts
+    with _registration_lock:
+        if _source_import_active:
+            raise ValueError("registration_during_protected_source_import_denied")
+        if _factory is not None or _verify_receipts is not None:
+            raise ValueError("startup_binding_already_registered")
+        if not callable(factory) or not callable(verify_receipts):
+            raise TypeError("reviewed_factory_and_receipt_verifier_required")
+        _factory, _verify_receipts = factory, verify_receipts
 
 
 def install_from_canonical_startup(manager: Any, strategy: Any) -> str:

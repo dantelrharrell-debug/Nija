@@ -10,6 +10,8 @@ on:
       - 'bot/bot_main.py'
       - 'bot/kraken_startup_receipts.py'
       - 'bot/kraken_canonical_startup_factory.py'
+      - 'bot/kraken_protected_startup_root.py'
+      - 'tests/test_kraken_protected_startup_root.py'
       - 'tests/test_kraken_canonical_startup_factory.py'
       - 'tests/test_kraken_startup_receipts.py'
       - 'bot/kraken_identity_read_timing.py'
@@ -72,6 +74,8 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install pytest==8.2.2 requests==2.32.5 cryptography==50.0.0
+      - name: Verify signed protected root after final process handoff without broker access
+        run: python -m pytest -q tests/test_kraken_protected_startup_root.py
       - name: Verify canonical source factory and authenticated registration without broker access
         run: python -m pytest -q tests/test_kraken_canonical_startup_factory.py
       - name: Verify signed startup receipts with synthetic signers and the real atomic installer
