@@ -90,6 +90,16 @@ jobs:
         env:
           NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
         run: python -m unittest tests.test_kraken_source_startup_contract_review -v
+      - name: Verify Kraken four-source and fresh-interpreter review contracts offline
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+          GH_TOKEN: ''
+          SSH_PRIVATE_KEY: ''
+          KRAKEN_API_KEY: ''
+          KRAKEN_API_SECRET: ''
+          REDIS_URL: ''
+        run: |
+          python -m unittest tests.test_kraken_source_startup_contract_review -v
 
       - name: Verify isolated unittest runner invariants
         env:
