@@ -96,6 +96,29 @@ def test_invalid_baseline_fails_closed_with_evidence(tmp_path, baseline):
     assert report["outcome"] == "scanner_error"
 
 
+def test_priority_review_queue_is_value_free_and_private_keys_first():
+    from scripts.run_baseline_secret_scan import priority_review_locations
+
+    findings = [
+        {"path": "z.py", "line": 8, "type": "Secret Keyword"},
+        {"path": "z.py", "line": 6, "type": "Basic Auth Credentials"},
+        {"path": "b.py", "line": 4, "type": "Private Key"},
+        {"path": "a.py", "line": 2, "type": "Private Key"},
+    ]
+    assert priority_review_locations(findings) == [
+        {"path": "a.py", "line": 2, "type": "Private Key"},
+        {"path": "b.py", "line": 4, "type": "Private Key"},
+        {"path": "z.py", "line": 6, "type": "Basic Auth Credentials"},
+    ]
+
+
+def test_scan_keeps_priority_queue_empty_for_keyword_only(tmp_path, baseline):
+    result, report = run_scan(tmp_path, baseline, 'password = "synthetic-marker"\\n')
+    assert result.returncode == 1
+    assert report["priority_review_locations"] == []
+    assert report["category_counts"] == {"Secret Keyword": 1}
+
+
 def test_security_workflow_keeps_secret_findings_blocking():
     """Baseline candidates still cause a hard failure and retain redacted evidence."""
     import yaml
