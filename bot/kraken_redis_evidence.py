@@ -148,7 +148,69 @@ class RedisEvidenceReader:
     ) -> None:
         self._redis = redis_client
         self._binding = binding
-      …973 tokens truncated…mbership is not completeness. The signed boundary below supplies that.
+        self._clock = clock
+        _require(isinstance(binding, ReviewedBinding), "reviewed_binding_required")
+        scope = binding.expected_scope
+        _require(isinstance(scope, ScopeObservation), "scope_binding_required")
+        _require(
+            _text(binding.review_reference) and _HEX.fullmatch(binding.coverage_sha256 or "") is not None
+            and _HEX.fullmatch(binding.deployment_sha256 or "") is not None
+            and _HEX.fullmatch(binding.source_binding_sha256 or "") is not None
+            and type(binding.provider_ids) is tuple
+            and len(binding.provider_ids) == 3 and len(set(binding.provider_ids)) == 3
+            and all(_text(item) for item in binding.provider_ids)
+            and type(binding.submission_routes) is tuple and bool(binding.submission_routes)
+            and len(set(binding.submission_routes)) == len(binding.submission_routes)
+            and all(_text(item) for item in binding.submission_routes)
+            and callable(binding.observe_scope) and callable(binding.verify_coverage)
+            and callable(clock),
+            "independent_review_binding_required",
+        )
+        _require(
+            _text(scope.account) and _HEX.fullmatch(scope.api_key_sha256 or "") is not None
+            and _text(scope.process_lock_value) and ":" in scope.process_lock_value
+            and bool(scope.process_lock_value.partition(":")[0])
+            and bool(scope.process_lock_value.partition(":")[2])
+            and _positive(scope.process_generation) and _positive(scope.nonce_lease_version)
+            and _text(scope.nonce_owner) and _text(scope.nonce_fingerprint)
+            and _text(binding.process_lock_key) and _text(binding.process_generation_key),
+            "invalid_scope_binding",
+        )
+
+    def _transaction(self, operations: list[tuple[str, str]]) -> list[Any]:
+        # MULTI/EXEC groups only reads. Never WATCH, EVAL, SET, renew or issue nonce.
+        with self._redis.pipeline(transaction=True) as pipe:
+            for command, key in operations:
+                getattr(pipe, command)(key)
+            result = pipe.execute()
+        _require(isinstance(result, (list, tuple)) and len(result) == len(operations), "redis_read_failed")
+        _require(not any(isinstance(item, Exception) for item in result), "redis_read_failed")
+        return list(result)
+
+    def _controls(self) -> list[tuple[str, str]]:
+        scope = self._binding.expected_scope
+        key_id = scope.api_key_sha256[:16]
+        # These are the actual _PerKeyRedisBackend names, not an invented lock.
+        return [
+            ("get", self._binding.process_lock_key),
+            ("get", self._binding.process_generation_key),
+            ("get", "nija:kraken:writer:owner:" + key_id),
+            ("get", "nija:kraken:writer:lease_version:" + key_id),
+            ("get", "nija:kraken:writer:version_counter:" + key_id),
+            ("get", "nija:kraken:writer:fingerprint:" + key_id),
+            ("get", "nija:kraken:nonce:" + key_id),
+        ]
+
+    def _snapshot(self) -> tuple[
+        list[Any], dict[str, Any], list[dict[str, Any]], list[str], list[int], list[int],
+    ]:
+        manifest_key, members_key, record_prefix = inventory_keys(self._binding.expected_scope.account)
+        first_manifest, first_members = self._transaction([("get", manifest_key), ("smembers", members_key)])
+        _require(first_manifest is not None and isinstance(first_members, (set, list, tuple)), "inventory_absent")
+        members = sorted(_decode(member) for member in first_members)
+        _require(len(members) <= _MAX_RECORDS and len(set(members)) == len(members), "inventory_invalid")
+        _require(all(_HEX.fullmatch(member) is not None for member in members), "inventory_invalid")
+        # Membership is not completeness. The signed boundary below supplies that.
         # Re-read it with every record so additions/deletions cannot be missed.
         control_ops = self._controls()
         ttl_ops = [("pttl", control_ops[i][1]) for i in (0, 2, 3, 5, 4, 6)]
