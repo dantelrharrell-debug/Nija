@@ -50,6 +50,53 @@ class Tiq72TestCommerce:
             event["id"], event["type"], reservation_id, session_id,
             verified_paid=True)
 
+    def accept_signed_reversal(self, *, raw_body, signature):
+        """Revoke only after matching signed event to a Stripe-retrieved charge.
+
+        This is an isolated test-only method, not an HTTP webhook route.
+        """
+        assert_test_mode_configuration()
+        event = verify_test_webhook(raw_body, signature, self.webhook_secret)
+        event_type = event.get("type")
+        if event_type not in ("charge.refunded", "charge.dispute.created"):
+            raise StripeVerificationError("unsupported_reversal_event")
+        obj = event["data"]["object"]
+        charge_id = obj.get("id") if event_type == "charge.refunded" else obj.get("charge")
+        if not isinstance(charge_id, str) or not charge_id.startswith("ch_"):
+            raise StripeVerificationError("charge_identity_required")
+        charge = self.stripe.Charge.retrieve(charge_id)
+        if charge.get("id") != charge_id or charge.get("livemode") is not False:
+            raise StripeVerificationError("test_charge_required")
+        if event_type == "charge.refunded":
+            if charge.get("refunded") is not True or charge.get("amount_refunded", 0) < 100:
+                raise StripeVerificationError("full_refund_not_verified")
+        else:
+            dispute = self.stripe.Dispute.retrieve(obj.get("id"))
+            if (dispute.get("id") != obj.get("id") or
+                dispute.get("charge") != charge_id or dispute.get("livemode") is not False):
+                raise StripeVerificationError("dispute_not_verified")
+        payment_intent = charge.get("payment_intent")
+        if not isinstance(payment_intent, str) or not payment_intent.startswith("pi_"):
+            raise StripeVerificationError("payment_intent_required")
+        rows = self.store.db.execute(
+            "SELECT id,stripe_session FROM tiq72_reservations WHERE stripe_session IS NOT NULL"
+        ).fetchall()
+        matches = []
+        for reservation_id, session_id in rows:
+            session = self.stripe.checkout.Session.retrieve(session_id, expand=["payment_intent"])
+            intent = session.get("payment_intent") or {}
+            intent_id = intent if isinstance(intent, str) else intent.get("id")
+            if intent_id == payment_intent and session.get("livemode") is False:
+                if session.get("client_reference_id") != reservation_id:
+                    raise StripeVerificationError("reservation_identity_mismatch")
+                matches.append((reservation_id, session_id))
+        if len(matches) != 1:
+            raise StripeVerificationError("unique_payment_reservation_required")
+        reservation_id, session_id = matches[0]
+        return self.store.record_verified_event(
+            event["id"], event_type, reservation_id, session_id,
+            verified_reversal=True)
+
     def fulfill_report(self, *, owner_id, reservation_id, report):
         """Report must be generated server-side; never accept a browser-authored report."""
         if not isinstance(owner_id, str) or not owner_id:
