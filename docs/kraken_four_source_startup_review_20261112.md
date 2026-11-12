@@ -50,3 +50,23 @@ kill-switch clearance, order submissions or activation. Preserve
 `allow_new_orders=false`, `fail_closed=true`, and all existing admission
 checks. Obtain independent human review and explicit owner approval for any
 subsequent consequential change.
+
+
+## Hosted CI evidence on PR #3827
+
+Head `41a8d27f41918b02fa9ee5d618c4d3aa1461c95e`.
+- Main CI: success, run 43294540529. This does **not** prove the newly added unittest was invoked; inspect job steps for exact test selection.
+- Zero-Trust CI: success, run 43294540224.
+- CodeQL: success, run 43294540151.
+- Preflight/lint: success, run 43294540465.
+- Import smoke: success, run 43294540493.
+- Manual release hold: success, run 43294540211.
+- Security scanning: failure, run 43294540269. Secret scan reports 154 unbaselined candidates; pre-commit reports failed hooks: bandit, check-docstring-first, detect-private-key, detect-secrets, end-of-file-fixer, gitleaks, name-tests-test, trailing-whitespace.
+- Artifact scanning: failure, run 43294540587. Member-broker GuardDog reports 39 findings across eight packages; package and Docker jobs also fail. Findings need artifact-specific classification, not broad suppression.
+- Branch policy: corrected `test/*` branch passed run 43294540140; failing run 43294558802 is attributable to superseded `review/*` PR #3826.
+
+**Unresolved**: No authoritative proof of the four real source dependencies, approved signer custody, same-interpreter registration in protected production composition root, or 13 fresh authenticated collector observations. No independent receipt issuance. No trading authority.
+
+### Remediation boundaries
+
+Security findings should be triaged in a separately scoped security review, preserving scanner enforcement. No global ignore patterns, baseline resets, fabricated attestations, or changes to production safety state. Obtain approval for any consequential production modification.
