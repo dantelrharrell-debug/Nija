@@ -17,6 +17,8 @@ export function verifyStripeWebhook(rawBody, signatureHeader, secret, nowSeconds
   if (!valid) throw new Error('invalid_stripe_signature');
   const event = JSON.parse(rawBody.toString('utf8'));
   if (!event || typeof event !== 'object' || typeof event.id !== 'string' ||
-      !/^evt_[A-Za-z0-9]+$/.test(event.id) || typeof event.type !== 'string') throw new Error('invalid_stripe_event');
+      !/^evt_[A-Za-z0-9]+$/.test(event.id) || typeof event.type !== 'string' || event.livemode !== false ||
+      !event.data || typeof event.data !== 'object' || !event.data.object ||
+      typeof event.data.object !== 'object' || Array.isArray(event.data.object)) throw new Error('invalid_stripe_event');
   return event;
 }
