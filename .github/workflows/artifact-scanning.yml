@@ -165,7 +165,7 @@ jobs:
         else
           guarddog_status=$?
         fi
-        python -S scripts/check_guarddog_report.py guarddog-report.json "$guarddog_status"
+        python -S scripts/check_guarddog_report.py guarddog-report.json "$guarddog_status" "${{ matrix.requirements }}"
 
     - name: Upload GuardDog report
       uses: actions/upload-artifact@v4
