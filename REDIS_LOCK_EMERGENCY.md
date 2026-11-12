@@ -1,5 +1,7 @@
 # 🚨 NIJA Redis Lock Recovery - START HERE
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 ```
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                                                                      ║
@@ -56,13 +58,13 @@ Your NIJA bot is trying to acquire a distributed Redis lock but **can't reach Re
 3. Enable "Public Networking" or "TCP Proxy"
 4. Copy Domain and Port shown
 5. NIJA service → Variables tab
-6. Create: NIJA_REDIS_URL=rediss://default:PASSWORD@DOMAIN:PORT/0
+6. Create: NIJA_REDIS_URL=rediss://<credentials>@DOMAIN:PORT/0
 7. Restart NIJA service
 ```
 
 **Example:**
 ```
-NIJA_REDIS_URL=rediss://default:2eF9xK_3mL#pQ@maglev.proxy.rlwy.net:31245/0
+NIJA_REDIS_URL=rediss://<credentials>@maglev.proxy.rlwy.net:31245/0
 ```
 
 ---

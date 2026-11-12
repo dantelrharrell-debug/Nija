@@ -1,5 +1,7 @@
 # NIJA Redis Lock Recovery Verification Checklist
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 **Goal:** Verify that you've correctly resolved the Redis connectivity issue
 
 **Start Time:** _________  
@@ -41,7 +43,7 @@
 - [ ] Went to NIJA service → Variables
 - [ ] Created/updated `NIJA_REDIS_URL` with format:
   ```
-  rediss://default:PASSWORD@DOMAIN:PORT/0
+  rediss://<credentials>@DOMAIN:PORT/0
   ```
 - [ ] Used correct Redis password (from Redis service → Variables)
 - [ ] Verified URL uses `rediss://` (not `redis://`)
