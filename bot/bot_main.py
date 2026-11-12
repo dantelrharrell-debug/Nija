@@ -1454,7 +1454,17 @@ def main() -> int:
         # authenticated release receipts explicitly. Missing bindings do not
         # synthesize evidence or authorize orders; monitoring can still start.
         from bot.kraken_startup_evidence_binding import install_from_canonical_startup
+        try:
+            from bot.kraken_protected_startup_root import register_from_protected_root
 
+            protected_root_status = register_from_protected_root()
+        except Exception:
+            # Keep monitoring/protective controls running, with admission denied.
+            protected_root_status = "protected_startup_handoff_unavailable"
+        logger.warning(
+            "KRAKEN_PROTECTED_STARTUP_ROOT status=%s authorizes_orders=false",
+            protected_root_status,
+        )
         collector_status = install_from_canonical_startup(manager, strategy)
         logger.warning(
             "KRAKEN_STARTUP_EVIDENCE status=%s authorizes_orders=false",

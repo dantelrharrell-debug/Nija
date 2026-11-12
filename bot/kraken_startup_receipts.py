@@ -102,6 +102,58 @@ def _receipt(raw: Any) -> dict[str, Any]:
     return envelope
 
 
+def verify_startup_receipt_set(
+    receipts: Mapping[str, str], trust: StartupReceiptTrust,
+    *, clock: Callable[[], float] = time.time,
+) -> bool:
+    """Authenticate three receipt envelopes without creating providers or proof.
+
+    For protected-root preflight only and the existing binding verifier. This
+    authenticates external signatures, not underlying source truth or orders.
+    """
+    if type(trust) is not StartupReceiptTrust or not callable(clock):
+        return False
+    expected = {
+        "contract": CONTRACT, "status": "certified", "service_id": trust.service_id,
+        "release_id": trust.release_id, "image_sha256": trust.image_sha256,
+        "account": "platform:kraken", "account_iiban_sha256": trust.account_iiban_sha256,
+        "api_key_sha256": trust.api_key_sha256,
+        "provider_registry_sha256": hashlib.sha256(_canonical(dict(trust.reviewed_provider_ids))).hexdigest(),
+    }
+    try:
+        if (not _runtime_matches(trust) or not isinstance(receipts, Mapping)
+                or set(receipts) != RECEIPTS):
+            return False
+        receipts = MappingProxyType(dict(receipts))
+        now = clock()
+        if not _positive_number(now):
+            return False
+        evidence_ids = set()
+        expiries = []
+        issued = []
+        for kind in sorted(RECEIPTS):
+            payload = _verified_payload(_receipt(receipts[kind]), trust.public_keys[kind], FIELDS)
+            if (any(payload.get(key) != value for key, value in expected.items())
+                    or payload["kind"] != kind or not _identifier(payload["evidence_id"])
+                    or not _digest(payload["artifact_sha256"])
+                    or payload["evidence_id"] in evidence_ids
+                    or not _positive_number(payload["approved_at_epoch"])
+                    or not _positive_number(payload["expires_at_epoch"])
+                    or not payload["approved_at_epoch"] <= now < payload["expires_at_epoch"]
+                    or now - payload["approved_at_epoch"] > trust.maximum_receipt_age_s):
+                return False
+            evidence_ids.add(payload["evidence_id"])
+            expiries.append(payload["expires_at_epoch"])
+            issued.append(payload["approved_at_epoch"])
+        # Expiry must still hold after all three signature checks. Clock
+        # rollback, nonfinite clocks and validation-time expiry deny.
+        finished = clock()
+        return bool(_runtime_matches(trust) and _positive_number(finished) and now <= finished < min(expiries)
+                    and finished - min(issued) <= trust.maximum_receipt_age_s)
+    except Exception:
+        return False
+
+
 def make_startup_receipt_verifier(
     trust: StartupReceiptTrust, *, clock: Callable[[], float] = time.time,
 ) -> Callable[[ReviewedStartupBinding], bool]:
@@ -113,51 +165,17 @@ def make_startup_receipt_verifier(
     """
     if type(trust) is not StartupReceiptTrust or not callable(clock):
         raise ValueError("reviewed_startup_trust_required")
-    expected = {
-        "contract": CONTRACT, "status": "certified", "service_id": trust.service_id,
-        "release_id": trust.release_id, "image_sha256": trust.image_sha256,
-        "account": "platform:kraken", "account_iiban_sha256": trust.account_iiban_sha256,
-        "api_key_sha256": trust.api_key_sha256,
-        "provider_registry_sha256": hashlib.sha256(_canonical(dict(trust.reviewed_provider_ids))).hexdigest(),
-    }
 
     def verify(binding: ReviewedStartupBinding) -> bool:
         try:
             if (type(binding) is not ReviewedStartupBinding
-                    or not _runtime_matches(trust)
                     or dict(binding.reviewed_provider_ids) != dict(trust.reviewed_provider_ids)
                     or set(binding.providers) != set(REQUIRED)
                     or any(not callable(value) for value in binding.providers.values())
-                    or len({id(value) for value in binding.providers.values()}) != len(REQUIRED)
-                    or set(binding.receipts) != RECEIPTS):
+                    or len({id(value) for value in binding.providers.values()}) != len(REQUIRED)):
                 return False
-            now = clock()
-            if not _positive_number(now):
-                return False
-            evidence_ids = set()
-            expiries = []
-            issued = []
-            for kind in sorted(RECEIPTS):
-                payload = _verified_payload(_receipt(binding.receipts[kind]), trust.public_keys[kind], FIELDS)
-                if (any(payload.get(key) != value for key, value in expected.items())
-                        or payload["kind"] != kind or not _identifier(payload["evidence_id"])
-                        or not _digest(payload["artifact_sha256"])
-                        or payload["evidence_id"] in evidence_ids
-                        or not _positive_number(payload["approved_at_epoch"])
-                        or not _positive_number(payload["expires_at_epoch"])
-                        or not payload["approved_at_epoch"] <= now < payload["expires_at_epoch"]
-                        or now - payload["approved_at_epoch"] > trust.maximum_receipt_age_s):
-                    return False
-                evidence_ids.add(payload["evidence_id"])
-                expiries.append(payload["expires_at_epoch"])
-                issued.append(payload["approved_at_epoch"])
-            # Expiry must still hold after all three signature checks. Clock
-            # rollback, nonfinite clocks and validation-time expiry deny.
-            finished = clock()
-            return bool(_runtime_matches(trust) and _positive_number(finished) and now <= finished < min(expiries)
-                        and finished - min(issued) <= trust.maximum_receipt_age_s)
+            return verify_startup_receipt_set(binding.receipts, trust, clock=clock)
         except Exception:
-            # Receipt errors may contain private material. Export no exception.
             return False
 
     return verify

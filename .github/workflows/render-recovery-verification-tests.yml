@@ -3,6 +3,11 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot/bot_main.py'
+      - 'bot/kraken_protected_startup_root.py'
+      - 'bot/kraken_startup_receipts.py'
+      - 'bot/kraken_startup_evidence_binding.py'
+      - 'tests/test_kraken_protected_startup_root.py'
       - 'scripts/nija_kraken_instance_diagnostic.py'
       - 'scripts/nija_render_recovery_verification.py'
       - 'scripts/render_runtime_build_sources.py'
