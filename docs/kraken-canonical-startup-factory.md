@@ -28,9 +28,11 @@ signed receipts. No environment factory loader or approval fallback is added.
 
 ## Implemented connection path
 
-The protected root explicitly calls
+The signed protected-root hook now calls the existing
 `register_canonical_kraken_collector_startup(trust=..., resolve_sources=..., review_sources=...)`
-in the same interpreter that will run canonical main. The function registers
+in the same canonical interpreter, after strategy publication and before the
+existing installer. Explicit reviewed in-process registration remains supported.
+The function registers
 both the factory and the existing authenticated receipt verifier. It does not
 resolve sources or install at registration time.
 
@@ -44,7 +46,11 @@ When bot_main's existing step 2.5 startup hook invokes that factory:
 3. Require the separate source-object review callback to return literal True.
    This callback must authenticate real external review; it must not approve
    merely because the structural checks pass.
-4. Validate all six independent sources and their reviewed owners. Compose the
+4. Either accept six external source callbacks, or accept four external callbacks
+   plus an explicit reviewed kill-switch binding and its authenticated reviewer.
+   The shared v487 runtime-source constructor builds the existing kill-switch
+   and spot position-sync readers against the same canonical broker and ledger
+   reader. Validate all six completed sources and their reviewed owners. Compose the
    existing seven broker/protection/writer/nonce providers using the immutable
    account/key pins and thirteen provider IDs from StartupReceiptTrust.
 5. Recheck source review and the canonical broker after construction; return an
@@ -57,6 +63,30 @@ The built-in provider constructors perform no broker reads. External resolver
 and review implementations are trusted code requiring separate audit, including
 object ownership, no side effects, source freshness and review legitimacy.
 The wrapper cannot establish these facts simply by inspecting a callable.
+
+## Reviewed native two-source mode
+
+`ReviewedCanonicalKrakenSources` optionally carries `kill_switch_binding` and
+`review_kill_switch_binding`. Both are required together. With them, supply
+exactly four `independent_remaining` callbacks: ledger reconciliation, duplicate
+fence, operator authorization and risk limits. Keep the complete six-role
+`reviewed_source_owners` map; the two native roles are not exempt from review.
+Do not also supply replacement kill-switch/position-sync callbacks in this mode.
+
+The binding must be the existing exact ReviewedKillSwitchBinding type, match
+the approved platform account, credential fingerprint and kill-switch provider
+ID, and hold the independently reviewed existing Redis and kill-switch objects
+plus an approved durable clearance reference. The binding reviewer must return
+literal True, not truthy values; its provenance and implementation still require
+independent review. A runtime-observed clearance hash is not approval.
+
+The shared constructor is used by both v487 and canonical startup, avoiding
+separate implementations of those readers. It does not create a client, clear a
+stop, adopt positions or sample data during built-in construction. The existing
+observers still enforce authenticated holdings, ledger/adoption consistency,
+durable Redis clearance, source freshness and account scope when actually read.
+All thirteen valid observations and three genuine receipts remain mandatory
+for atomic installation. The original six-external-source API is preserved.
 
 ## Required live inputs — not created by this change
 

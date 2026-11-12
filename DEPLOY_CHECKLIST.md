@@ -1,5 +1,7 @@
 # 🚀 NIJA Deploy Checklist - Infrastructure & Monitoring
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 **Last Updated:** February 4, 2026  
 **Version:** 2.0 (Comprehensive)  
 **Purpose:** Production deployment validation with infrastructure and monitoring focus
@@ -84,7 +86,7 @@ git status --ignored
 
 **For Production (PostgreSQL recommended):**
 ```bash
-export DATABASE_URL="postgresql://user:password@host:5432/nija_production"
+export DATABASE_URL="postgresql://<credentials>@host:5432/nija_production"
 ```
 
 **For Development/Testing (SQLite acceptable):**

@@ -1,7 +1,7 @@
 """Fail-closed composition of real Kraken providers; no automatic installation.
 
 The caller must hold the existing nonce-owning broker and independently approved
-account/key pins, ledger/intent readers and nine trusted producer identities.
+account/key pins, ledger/intent readers and thirteen trusted producer identities.
 This module cannot create broker evidence, authorize orders or register at import.
 """
 from __future__ import annotations
@@ -35,6 +35,72 @@ class KrakenCollectorBindingDenied(ValueError):
     """Fixed non-sensitive denial messages only."""
 
 
+def _validate_provider_registry(reviewed_provider_ids: Mapping[str, str]) -> None:
+    if (not isinstance(reviewed_provider_ids, Mapping)
+            or set(reviewed_provider_ids) != set(REQUIRED)
+            or any(not isinstance(value, str) or not value or value != value.strip()
+                   for value in reviewed_provider_ids.values())
+            or len(set(reviewed_provider_ids.values())) != len(REQUIRED)):
+        raise KrakenCollectorBindingDenied("unique_complete_provider_registry_required")
+
+
+def compose_reviewed_kraken_runtime_sources(
+    *, broker: Any, approved_api_key_sha256: str,
+    approved_iban_sha256: str, reviewed_provider_ids: Mapping[str, str],
+    independent_positions: Callable[[], Mapping[str, Any]],
+    independent_remaining: Mapping[str, Callable[[], Mapping[str, Any]]],
+    monitoring_category: Any, kill_switch_binding: ReviewedKillSwitchBinding,
+    review_kill_switch_binding: Callable[[ReviewedKillSwitchBinding], bool],
+    independently_reviewed: bool = False,
+    clock: Callable[[], float] | None = None,
+) -> Mapping[str, Callable[[], Mapping[str, Any]]]:
+    """Construct the two existing runtime readers and retain four external owners.
+
+    This is the same read-only construction path used by v487 and canonical
+    startup. Built-in construction performs no Redis/broker/ledger observations,
+    stop clearance, position adoption, installation or order authorization.
+    The supplied binding reviewer remains separately audited trusted code.
+    """
+    if independently_reviewed is not True:
+        raise KrakenCollectorBindingDenied("independent_review_required")
+    _validate_provider_registry(reviewed_provider_ids)
+    runtime_fields = {"kill_switch_clear", "position_sync"}
+    if (type(kill_switch_binding) is not ReviewedKillSwitchBinding
+            or not callable(review_kill_switch_binding)
+            or kill_switch_binding.account != ACCOUNT
+            or kill_switch_binding.api_key_sha256 != approved_api_key_sha256
+            or kill_switch_binding.provider_id != reviewed_provider_ids["kill_switch_clear"]
+            or not isinstance(independent_remaining, Mapping)
+            or set(independent_remaining) != OTHER_FIELDS - runtime_fields
+            or not callable(independent_positions)):
+        raise KrakenCollectorBindingDenied("runtime_source_binding_mismatch")
+    sources = dict(independent_remaining)
+    if any(not callable(provider) for provider in sources.values()):
+        raise KrakenCollectorBindingDenied("independent_sources_incomplete")
+    if len({id(provider) for provider in sources.values()}) != len(sources):
+        raise KrakenCollectorBindingDenied("independent_sources_reused")
+    options = {} if clock is None else {"clock": clock}
+    try:
+        sources["kill_switch_clear"] = make_kraken_kill_switch_provider(
+            kill_switch_binding, review_binding=review_kill_switch_binding, **options,
+        )
+        sources["position_sync"] = make_kraken_position_sync_provider(
+            broker, account_scope=ACCOUNT,
+            approved_api_key_sha256=approved_api_key_sha256,
+            approved_iban_sha256=approved_iban_sha256,
+            reviewed_provider_id=reviewed_provider_ids["position_sync"],
+            reviewed_ledger_provider_id=reviewed_provider_ids["position_ledger_reconciliation"],
+            independent_positions=independent_positions,
+            monitoring_category=monitoring_category, independently_reviewed=True, **options,
+        )
+    except Exception:
+        raise KrakenCollectorBindingDenied("reviewed_runtime_source_construction_failed") from None
+    if (set(sources) != OTHER_FIELDS or any(not callable(p) for p in sources.values())
+            or len({id(p) for p in sources.values()}) != len(OTHER_FIELDS)):
+        raise KrakenCollectorBindingDenied("independent_sources_incomplete")
+    return MappingProxyType(sources)
+
+
 def compose_reviewed_kraken_providers(
     *, broker: Any, approved_api_key_sha256: str,
     approved_iban_sha256: str, reviewed_provider_ids: Mapping[str, str],
@@ -56,40 +122,20 @@ def compose_reviewed_kraken_providers(
     """
     if independently_reviewed is not True:
         raise KrakenCollectorBindingDenied("independent_review_required")
-    if (not isinstance(reviewed_provider_ids, Mapping)
-            or set(reviewed_provider_ids) != set(REQUIRED)
-            or any(not isinstance(value, str) or not value or value != value.strip()
-                   for value in reviewed_provider_ids.values())
-            or len(set(reviewed_provider_ids.values())) != len(REQUIRED)):
-        raise KrakenCollectorBindingDenied("unique_complete_provider_registry_required")
+    _validate_provider_registry(reviewed_provider_ids)
     options = {} if clock is None else {"clock": clock}
     if kill_switch_binding is not None or review_kill_switch_binding is not None:
-        runtime_fields = {"kill_switch_clear", "position_sync"}
-        if (type(kill_switch_binding) is not ReviewedKillSwitchBinding
-                or not callable(review_kill_switch_binding)
-                or kill_switch_binding.account != ACCOUNT
-                or kill_switch_binding.api_key_sha256 != approved_api_key_sha256
-                or kill_switch_binding.provider_id != reviewed_provider_ids["kill_switch_clear"]
-                or not isinstance(independent_remaining, Mapping)
-                or set(independent_remaining) != OTHER_FIELDS - runtime_fields
-                or not callable(independent_positions)):
-            raise KrakenCollectorBindingDenied("runtime_source_binding_mismatch")
-        independent_remaining = dict(independent_remaining)
-        try:
-            independent_remaining["kill_switch_clear"] = make_kraken_kill_switch_provider(
-                kill_switch_binding, review_binding=review_kill_switch_binding, **options,
-            )
-            independent_remaining["position_sync"] = make_kraken_position_sync_provider(
-                broker, account_scope=ACCOUNT,
-                approved_api_key_sha256=approved_api_key_sha256,
-                approved_iban_sha256=approved_iban_sha256,
-                reviewed_provider_id=reviewed_provider_ids["position_sync"],
-                reviewed_ledger_provider_id=reviewed_provider_ids["position_ledger_reconciliation"],
-                independent_positions=independent_positions,
-                monitoring_category=monitoring_category, independently_reviewed=True, **options,
-            )
-        except Exception:
-            raise KrakenCollectorBindingDenied("reviewed_runtime_source_construction_failed") from None
+        independent_remaining = compose_reviewed_kraken_runtime_sources(
+            broker=broker, approved_api_key_sha256=approved_api_key_sha256,
+            approved_iban_sha256=approved_iban_sha256,
+            reviewed_provider_ids=reviewed_provider_ids,
+            independent_positions=independent_positions,
+            independent_remaining=independent_remaining,
+            monitoring_category=monitoring_category,
+            kill_switch_binding=kill_switch_binding,
+            review_kill_switch_binding=review_kill_switch_binding,
+            independently_reviewed=True, clock=clock,
+        )
     if (not isinstance(independent_remaining, Mapping)
             or set(independent_remaining) != OTHER_FIELDS
             or any(not callable(p) for p in independent_remaining.values())
@@ -171,5 +217,6 @@ def install_reviewed_kraken_collector(
 
 __all__ = [
     "ACCOUNT", "OTHER_FIELDS", "KrakenCollectorBindingDenied",
-    "compose_reviewed_kraken_providers", "install_reviewed_kraken_collector",
+    "compose_reviewed_kraken_runtime_sources", "compose_reviewed_kraken_providers",
+    "install_reviewed_kraken_collector",
 ]

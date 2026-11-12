@@ -1,5 +1,7 @@
 # NIJA Redis Lock Recovery Guide
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 ## Current Status
 
 Your NIJA bot is stuck in **fail-closed standby mode** waiting to acquire a distributed Redis lock. The container cannot connect to Redis at `maglev.proxy.rlwy.net:31245`.
@@ -39,7 +41,7 @@ Your NIJA bot is stuck in **fail-closed standby mode** waiting to acquire a dist
 1. Click on the **NIJA** service
 2. Go to **Variables** tab
 3. Look for `NIJA_REDIS_URL`:
-   - Should look like: `rediss://default:PASSWORD@maglev.proxy.rlwy.net:PORT/0`
+   - Should look like: `rediss://<credentials>@maglev.proxy.rlwy.net:PORT/0`
    - Must use **`rediss://`** (with "ss"), NOT `redis://`
    - Must include the **correct TCP proxy port** from Redis service
 
@@ -72,9 +74,9 @@ Your NIJA bot is stuck in **fail-closed standby mode** waiting to acquire a dist
 7. Go to **NIJA** service → **Variables**
 8. Update or create `NIJA_REDIS_URL`:
    ```
-   rediss://default:YOUR_REDIS_PASSWORD@maglev.proxy.rlwy.net:PORT/0
+   rediss://<credentials>@maglev.proxy.rlwy.net:PORT/0
    ```
-   (Replace `YOUR_REDIS_PASSWORD` and `PORT` with actual values)
+   (Replace `<provider-issued-password>` and `PORT` with actual values)
 9. Restart **NIJA** service
 
 **Why:** TCP proxy allows NIJA to connect to Redis from outside Railway's internal network.
@@ -92,12 +94,12 @@ Your NIJA bot is stuck in **fail-closed standby mode** waiting to acquire a dist
 3. In Railway → **NIJA** service → **Variables** tab
 4. Find or create `NIJA_REDIS_URL`:
    ```
-   rediss://default:YOUR_PASSWORD_HERE@maglev.proxy.rlwy.net:YOUR_PORT/0
+   rediss://<credentials>@maglev.proxy.rlwy.net:YOUR_PORT/0
    ```
 
 **Example:**
 ```
-NIJA_REDIS_URL=rediss://default:2eF9xK_3mL#pQ@maglev.proxy.rlwy.net:31245/0
+NIJA_REDIS_URL=rediss://<credentials>@maglev.proxy.rlwy.net:31245/0
 ```
 
 5. Restart **NIJA** service
@@ -176,7 +178,7 @@ After applying a fix, verify with this checklist:
 - [ ] Redis service shows 🟢 Green status in Railway
 - [ ] Redis service **Networking** shows TCP Proxy enabled
 - [ ] NIJA service has `NIJA_REDIS_URL` set (or similar)
-- [ ] URL format is `rediss://default:PASSWORD@HOST:PORT/0`
+- [ ] URL format is `rediss://<credentials>@HOST:PORT/0`
 - [ ] NIJA service is restarted
 - [ ] Check NIJA logs for: `✅ Distributed writer lock ready` or similar
 
@@ -237,8 +239,8 @@ After applying a fix, verify with this checklist:
 
 | Variable | Purpose | Example |
 |----------|---------|---------|
-| `NIJA_REDIS_URL` | Full Redis connection URL | `rediss://default:PWD@host:port/0` |
-| `REDIS_PASSWORD` | Password for Redis auth | `2eF9xK_3mL#pQ` |
+| `NIJA_REDIS_URL` | Full Redis connection URL | `rediss://<credentials>@host:port/0` |
+| `REDIS_PASSWORD` | Password for Redis auth | `<provider-issued-password>` |
 | `NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK` | Emergency bypass (UNSAFE) | `true` / `false` |
 | `NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE` | Keep retrying on lock error | `true` (default) |
 | `NIJA_FAIL_CLOSED_RETRY_INTERVAL_S` | Seconds between lock retries | `5` (default) |
