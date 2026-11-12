@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {join, resolve} from 'node:path';
+import {join} from 'node:path';
 import {ROUNDS, CHALLENGES} from '../offline_tiq_premium/tiq_engine.mjs';
 import {releaseStatus} from '../server/release-status.mjs';
 
@@ -21,7 +21,6 @@ test('the Vercel project must use the isolated v515 Vite root, not the trading P
   assert.ok(existsSync(join(root, 'index.html')));
   assert.ok(existsSync(join(root, 'package-lock.json')));
   assert.ok(existsSync(join(root, 'vite.config.js')));
-  assert.equal(resolve(root, '../../../'), resolve(root, '../../../'), 'root remains isolated');
 });
 
 test('the approved v515 source retains 6 x 12 decisions and payment-disabled release status', () => {
