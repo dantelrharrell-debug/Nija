@@ -25,8 +25,12 @@ TABLE_SPECS = {
 def configured_paths(environ: dict[str, str] | None = None) -> tuple[Path, Path]:
     """Mirror current render_lead_intake.py defaults without importing app code."""
     env = os.environ if environ is None else environ
-    lead = Path(env.get("NIJA_LEAD_DB_PATH") or env.get("NIJA_OUTREACH_DB_PATH") or "/app/data/nija_outreach.sqlite3")
-    override = env.get("NIJA_LEAD_FORWARD_DB_PATH")
+    # Mirror runtime precedence: select first truthy value, then trim.
+    # Whitespace-only primary overrides must fail closed, not fall through.
+    raw_lead = str(env.get("NIJA_LEAD_DB_PATH") or env.get("NIJA_OUTREACH_DB_PATH")
+                   or "/app/data/nija_outreach.sqlite3").strip()
+    lead = Path(raw_lead) if raw_lead else Path(".")
+    override = str(env.get("NIJA_LEAD_FORWARD_DB_PATH") or "").strip()
     forward = Path(override) if override else (Path("/data/nija_lead_forwarding.sqlite3") if Path("/data").is_dir() else lead)
     return lead, forward
 
@@ -41,6 +45,24 @@ def _has_symlink(path: Path) -> bool:
         probe = probe.parent
 
 
+def _unsafe_live_sqlite_state(path: Path) -> str | None:
+    """Refuse WAL and rollback sidecars before opening SQLite."""
+    for suffix in ("-wal", "-shm", "-journal"):
+        if Path(str(path) + suffix).exists():
+            return "active_sqlite_sidecar_requires_consistent_snapshot"
+    try:
+        with path.open("rb") as source:
+            header = source.read(100)
+    except OSError:
+        return "sqlite_header_unavailable"
+    if len(header) < 100 or header[:16] != b"SQLite format 3\x00":
+        return "sqlite_header_invalid"
+    # mode=ro may create -shm when SQLite opens a WAL-mode database.
+    if header[18] == 2 or header[19] == 2:
+        return "wal_database_requires_consistent_snapshot"
+    return None
+
+
 def inspect_database(path: Path, expected_root: Path, kind: str) -> dict[str, Any]:
     """Inspect aggregate counts only. Do not fetch customer email or payload."""
     table, required = TABLE_SPECS[kind]
@@ -49,6 +71,9 @@ def inspect_database(path: Path, expected_root: Path, kind: str) -> dict[str, An
         "sqlite_integrity": "unverified", "schema": "unverified", "row_count": None,
         "status": "UNVERIFIED",
     }
+    if kind == "forward":
+        result["alias_schema"] = "unverified"
+        result["alias_row_count"] = None
     if not path.is_absolute() or not expected_root.is_absolute():
         result["reason"] = "relative_path_rejected"
         return result
@@ -70,9 +95,19 @@ def inspect_database(path: Path, expected_root: Path, kind: str) -> dict[str, An
     if path.name.lower() in {"trade_ledger.db", "users.db", "positions.db"}:
         result["reason"] = "restricted_non_lead_database"
         return result
+    unsafe_state = _unsafe_live_sqlite_state(path)
+    if unsafe_state:
+        result["reason"] = unsafe_state
+        return result
     try:
-        # mode=ro never creates missing DBs. PRAGMA query_only avoids write SQL.
-        with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2)) as conn:
+        before = path.stat()
+    except OSError:
+        result["reason"] = "sqlite_stat_unavailable"
+        return result
+    try:
+        # immutable=1 prevents SQLite from creating sidecars. WAL databases
+        # are refused above. This is a diagnostic, never a live snapshot.
+        with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=ro&immutable=1", uri=True, timeout=2)) as conn:
             conn.execute("PRAGMA query_only = ON")
             quick = conn.execute("PRAGMA quick_check").fetchall()
             result["sqlite_integrity"] = "ok" if quick == [("ok",)] else "failed"
@@ -94,8 +129,37 @@ def inspect_database(path: Path, expected_root: Path, kind: str) -> dict[str, An
                 return result
             result["schema"] = "expected_columns_present"
             result["row_count"] = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            if kind == "forward":
+                alias = "website_lead_forward_aliases"
+                exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (alias,)
+                ).fetchone()
+                if not exists:
+                    result["alias_schema"] = "missing_required_table"
+                    result["reason"] = "missing_forward_alias_table"
+                    return result
+                alias_columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{alias}")')}
+                if not {"source_key", "legacy_key", "created_at"}.issubset(alias_columns):
+                    result["alias_schema"] = "missing_required_columns"
+                    result["reason"] = "missing_forward_alias_columns"
+                    return result
+                result["alias_schema"] = "expected_columns_present"
+                result["alias_row_count"] = conn.execute(f'SELECT COUNT(*) FROM "{alias}"').fetchone()[0]
     except (sqlite3.Error, OSError, ValueError) as exc:
         result["reason"] = "sqlite_read_failed:" + type(exc).__name__
+        return result
+    post_state = _unsafe_live_sqlite_state(path)
+    try:
+        after = path.stat()
+    except OSError:
+        result["reason"] = "sqlite_stat_unavailable_after_read"
+        return result
+    if post_state or (before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_ino, after.st_size, after.st_mtime_ns):
+        result["reason"] = post_state or "concurrent_database_change_requires_snapshot"
+        result["row_count"] = None
+        if kind == "forward":
+            result["alias_row_count"] = None
         return result
     if not result["under_expected_root"]:
         result["reason"] = "outside_expected_persistent_root"

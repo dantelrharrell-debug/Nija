@@ -21,7 +21,10 @@ def create_db(path, table):
         else:
             conn.executescript("""CREATE TABLE website_lead_forwarding (
                 event_key TEXT PRIMARY KEY, state TEXT, lease_until REAL, lease_token TEXT);
-            INSERT INTO website_lead_forwarding VALUES ('synthetic-a','uncertain',0,'');""")
+            INSERT INTO website_lead_forwarding VALUES ('synthetic-a','uncertain',0,'');
+            CREATE TABLE website_lead_forward_aliases (
+                source_key TEXT PRIMARY KEY, legacy_key TEXT NOT NULL,
+                created_at TEXT NOT NULL);""")
 
 
 class ReadonlyLeadStorageTests(unittest.TestCase):
@@ -76,7 +79,7 @@ class ReadonlyLeadStorageTests(unittest.TestCase):
         r = inspect_database(self.intake, self.root, 'intake')
         self.assertIsNone(r['row_count'])
         self.assertEqual(r['status'], 'UNVERIFIED')
-        self.assertTrue(r['reason'].startswith('sqlite_read_failed:'))
+        self.assertEqual(r['reason'], 'sqlite_header_invalid')
 
     def test_trade_ledger_name_cannot_be_read_as_lead_storage(self):
         restricted = self.root / 'trade_ledger.db'
@@ -108,6 +111,54 @@ class ReadonlyLeadStorageTests(unittest.TestCase):
         self.populated()
         r = audit(self.intake, self.forward, self.root / 'missing')
         self.assertEqual(r['intake']['reason'], 'expected_persistent_root_not_available')
+
+    def test_wal_mode_requires_snapshot_without_sidecar_creation(self):
+        self.populated()
+        with contextlib.closing(sqlite3.connect(self.intake)) as conn:
+            self.assertEqual(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+        sidecars = [Path(str(self.intake) + suffix) for suffix in ("-wal", "-shm")]
+        before = [item.exists() for item in sidecars]
+        r = inspect_database(self.intake, self.root, "intake")
+        self.assertEqual(r["reason"], "wal_database_requires_consistent_snapshot")
+        self.assertIsNone(r["row_count"])
+        self.assertEqual([item.exists() for item in sidecars], before)
+
+    def test_journal_sidecar_refuses_inspection(self):
+        self.populated()
+        Path(str(self.forward) + "-journal").write_bytes(b"synthetic-journal")
+        r = inspect_database(self.forward, self.root, "forward")
+        self.assertEqual(r["reason"], "active_sqlite_sidecar_requires_consistent_snapshot")
+        self.assertIsNone(r["row_count"])
+
+    def test_forward_alias_table_is_required(self):
+        self.populated()
+        with contextlib.closing(sqlite3.connect(self.forward)) as conn:
+            conn.execute("DROP TABLE website_lead_forward_aliases")
+            conn.commit()
+        r = inspect_database(self.forward, self.root, "forward")
+        self.assertEqual(r["alias_schema"], "missing_required_table")
+        self.assertEqual(r["status"], "UNVERIFIED")
+
+    def test_whitespace_override_preserves_live_precedence(self):
+        intake, forward = configured_paths({
+            "NIJA_LEAD_DB_PATH": "   ",
+            "NIJA_OUTREACH_DB_PATH": "/data/secondary.sqlite3",
+            "NIJA_LEAD_FORWARD_DB_PATH": "   ",
+        })
+        self.assertFalse(intake.is_absolute())
+        self.assertEqual(forward, Path("/data/nija_lead_forwarding.sqlite3")
+                         if Path("/data").is_dir() else intake)
+
+    def test_immutable_read_does_not_create_sqlite_sidecars(self):
+        self.populated()
+        before = {str(p): p.read_bytes() for p in (self.intake, self.forward)}
+        r = audit(self.intake, self.forward, self.root)
+        self.assertEqual(r["local_placement_and_integrity"], "checked")
+        self.assertEqual(r["forwarding"]["alias_row_count"], 0)
+        for p in (self.intake, self.forward):
+            for suffix in ("-wal", "-shm", "-journal"):
+                self.assertFalse(Path(str(p) + suffix).exists())
+        self.assertEqual(before, {str(p): p.read_bytes() for p in (self.intake, self.forward)})
 
     def test_readonly_execution_does_not_mutate_database(self):
         self.populated()
