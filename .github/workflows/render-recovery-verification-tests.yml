@@ -8,6 +8,8 @@ on:
       - 'bot/kraken_startup_receipts.py'
       - 'bot/kraken_startup_evidence_binding.py'
       - 'bot/kraken_canonical_startup_factory.py'
+      - 'bot/kraken_native_four_source_binding.py'
+      - 'tests/test_kraken_native_four_source_binding.py'
       - 'bot/kraken_collector_composition_v487.py'
       - 'tests/test_kraken_canonical_native_source_bindings.py'
       - 'tests/test_kraken_protected_startup_root.py'

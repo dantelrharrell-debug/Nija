@@ -10,6 +10,16 @@ on:
       - 'bot/bot_main.py'
       - 'bot/kraken_startup_receipts.py'
       - 'bot/kraken_canonical_startup_factory.py'
+      - 'bot/kraken_native_four_source_binding.py'
+      - 'tests/test_kraken_native_four_source_binding.py'
+      - 'bot/kraken_ledger_evidence.py'
+      - 'bot/kraken_redis_evidence.py'
+      - 'bot/kraken_operator_authorization.py'
+      - 'bot/kraken_risk_evidence.py'
+      - 'bot/tests/test_kraken_ledger_evidence.py'
+      - 'bot/tests/test_kraken_redis_evidence.py'
+      - 'bot/tests/test_kraken_operator_authorization.py'
+      - 'bot/tests/test_kraken_risk_evidence.py'
       - 'bot/kraken_protected_startup_root.py'
       - 'tests/test_kraken_protected_startup_root.py'
       - 'tests/test_kraken_protected_root_container_context.py'
@@ -79,11 +89,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install pytest==8.2.2 requests==2.32.5 cryptography==50.0.0
+      - run: python -m pip install pytest==8.2.2 requests==2.32.5 cryptography==50.0.0 redis==5.0.1
+      - name: Require isolated Redis tooling for native source regression
+        run: |
+          if ! command -v redis-server >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends redis-server
+          fi
+          command -v redis-server
       - name: Verify signed protected root after final process handoff without broker access
         run: python -m pytest -q tests/test_kraken_protected_startup_root.py
       - name: Verify canonical source factory and authenticated registration without broker access
         run: python -m pytest -q tests/test_kraken_canonical_startup_factory.py
+      - name: Verify actual four native source constructors and unavailable-evidence denial
+        run: >-
+          python -m pytest -q tests/test_kraken_native_four_source_binding.py
+          bot/tests/test_kraken_ledger_evidence.py bot/tests/test_kraken_redis_evidence.py
+          bot/tests/test_kraken_operator_authorization.py bot/tests/test_kraken_risk_evidence.py
       - name: Verify canonical construction of reviewed native kill-switch and position-sync readers
         run: >-
           python -m pytest -q tests/test_kraken_canonical_native_source_bindings.py

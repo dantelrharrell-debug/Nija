@@ -15,6 +15,9 @@ from typing import Any
 from bot.kraken_reviewed_collector_bridge import compose_authenticated_kraken_collector_sources
 from bot.kraken_collector_composition_v487 import compose_reviewed_kraken_runtime_sources
 from bot.kraken_kill_switch_evidence import ReviewedKillSwitchBinding
+from bot.kraken_native_four_source_binding import (
+    ReviewedNativeFourSources, compose_reviewed_native_four_sources,
+)
 from bot.kraken_six_source_binding_contract_v490 import EXPECTED_OWNERS, validate_six_source_bindings
 from bot.kraken_startup_evidence_binding import RECEIPTS, ReviewedStartupBinding
 from bot.kraken_startup_receipts import StartupReceiptTrust, register_signed_kraken_startup
@@ -44,6 +47,8 @@ class ReviewedCanonicalKrakenSources:
     receipts: Mapping[str, str] = field(repr=False)
     kill_switch_binding: ReviewedKillSwitchBinding | None = field(default=None, repr=False)
     review_kill_switch_binding: Callable | None = field(default=None, repr=False)
+    native_four_sources: ReviewedNativeFourSources | None = field(default=None, repr=False)
+    review_native_four_sources: Callable | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for name in ("independent_remaining", "reviewed_source_owners", "receipts"):
@@ -103,6 +108,21 @@ def make_canonical_kraken_startup_factory(
                     or sources.broker is not broker or review_sources(sources) is not True):
                 raise CanonicalKrakenStartupDenied("reviewed_runtime_source_binding_required")
             remaining = sources.independent_remaining
+            if sources.native_four_sources is not None or sources.review_native_four_sources is not None:
+                if dict(sources.reviewed_source_owners) != EXPECTED_OWNERS:
+                    raise CanonicalKrakenStartupDenied("complete_reviewed_source_owners_required")
+                native_pair = (sources.kill_switch_binding is not None
+                               or sources.review_kill_switch_binding is not None)
+                residual = set() if native_pair else {"kill_switch_clear", "position_sync"}
+                if (set(remaining) != residual or any(not callable(p) for p in remaining.values())
+                        or len({id(p) for p in remaining.values()}) != len(residual)):
+                    raise CanonicalKrakenStartupDenied("mixed_native_and_external_sources_denied")
+                native = compose_reviewed_native_four_sources(
+                    sources=sources.native_four_sources, review_binding=sources.review_native_four_sources,
+                    manager=manager, strategy=strategy, broker=broker, trust=trust,
+                    monitoring_category=sources.monitoring_category,
+                )
+                remaining = {**remaining, **native}
             if sources.kill_switch_binding is not None or sources.review_kill_switch_binding is not None:
                 # Review still covers all six actual owners. Construct the
                 # existing native pair only from explicit reviewed bindings.
