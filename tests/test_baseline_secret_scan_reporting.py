@@ -14,7 +14,9 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/run_baseline_secret_scan.py"
 
 
-def run_scan(root: Path, baseline: dict, source: str) -> tuple[subprocess.CompletedProcess, dict]:
+def run_scan(
+    root: Path, baseline: dict, source: str, extra_env: dict | None = None, *, dirty: bool = False,
+) -> tuple[subprocess.CompletedProcess, dict]:
     """Build a throwaway tracked repository and invoke the actual scan wrapper."""
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     baseline_path = root / ".secrets.baseline"
@@ -22,11 +24,20 @@ def run_scan(root: Path, baseline: dict, source: str) -> tuple[subprocess.Comple
     baseline_path.write_bytes(original)
     (root / "probe.py").write_text(source)
     subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Synthetic test", "-c", "user.email=fixture@example.invalid",
+         "commit", "-qm", "Synthetic scanner fixture"], cwd=root, check=True,
+    )
+    if dirty:
+        (root / "probe.py").write_text(source + "\ncount = 13\n")
     report = root / "report.json"
+    env = {key: value for key, value in os.environ.items() if key not in {"GITHUB_SHA", "GITHUB_EVENT_NAME"}}
+    env.update(NIJA_DEFER_RUNTIME_SITE_HOOKS="1")
+    env.update(extra_env or {})
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--report", str(report)], cwd=root,
         capture_output=True, text=True, timeout=30,
-        env=dict(os.environ, NIJA_DEFER_RUNTIME_SITE_HOOKS="1"),
+        env=env,
     )
     assert baseline_path.read_bytes() == original
     return result, json.loads(report.read_text())
@@ -49,6 +60,37 @@ def test_clean_scan_passes_without_rewriting_baseline(tmp_path, baseline):
     assert result.returncode == 0
     assert report["outcome"] == "clean"
     assert report["tracked_file_count"] == 2
+
+
+def test_report_identifies_the_actual_checked_out_commit_and_tree(tmp_path, baseline):
+    result, report = run_scan(tmp_path, baseline, "count = 12\n", {"GITHUB_EVENT_NAME": "pull_request"})
+    actual = subprocess.run(
+        ["git", "rev-parse", "HEAD", "HEAD^{tree}"], cwd=tmp_path, check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    assert result.returncode == 0
+    assert report["checked_out_commit"] == actual[0]
+    assert report["checked_out_tree"] == actual[1]
+    assert report["ci_event"] == "pull_request"
+
+
+def test_ci_revision_mismatch_denies_even_a_clean_report(tmp_path, baseline):
+    result, report = run_scan(tmp_path, baseline, "count = 12\n", {"GITHUB_SHA": "0" * 40})
+    assert result.returncode == 2
+    assert report["outcome"] == "scanner_error"
+
+
+def test_dirty_tracked_files_cannot_claim_commit_identity(tmp_path, baseline):
+    result, report = run_scan(tmp_path, baseline, "count = 12\n", dirty=True)
+    assert result.returncode == 2
+    assert report["outcome"] == "scanner_error"
+
+
+def test_unknown_event_payload_is_not_exported(tmp_path, baseline):
+    canary = "synthetic-private-event-payload"
+    result, report = run_scan(tmp_path, baseline, "count = 12\n", {"GITHUB_EVENT_NAME": canary})
+    assert result.returncode == 0
+    assert report["ci_event"] is None
+    assert canary not in json.dumps(report) + result.stdout + result.stderr
 
 
 def test_new_candidate_blocks_without_disclosing_value_or_digest(tmp_path, baseline):

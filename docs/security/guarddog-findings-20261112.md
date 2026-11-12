@@ -1,11 +1,11 @@
 # GuardDog recovery investigation — 2026-11-12
 
 Release: `170828fa630f6e08a640065318989850d13ca325` (merged PR #3788).
-Evidence: [artifact workflow 43194970238](https://github.com/dantelrharrell-debug/Nija/actions/runs/43194970238).
-Member-broker artifact ID `13932676631`, ZIP SHA-256
-`ded7b364f07151f395d0e63b21171cbf834bc5b8baff7ad419dd08a826089699`.
-Billing artifact ID `13931684546`, ZIP SHA-256
-`78bd53d7ba71a2ca771a181e4e14d5fa611fda2e90a20535d2f30204973df43e`.
+Evidence: [artifact workflow 43194749212](https://github.com/dantelrharrell-debug/Nija/actions/runs/43194749212).
+Member-broker artifact ID `13932741638`, ZIP SHA-256
+`0d28183c78f7cdfae598b33966c4f1c11b0d2cf5f2ff60c451141e591d68a7ec`.
+Billing artifact ID `13933001007`, ZIP SHA-256
+`15740c66b64d7f10ee1891fe2ab288d20f57d512052847bb63f7df472a828501`.
 
 ## Verified investigation
 
@@ -91,16 +91,42 @@ reconciliation, protective controls, credential rotation and review pass.
 Full CI, CodeQL, Kraken collector regression and image build succeeded on the
 merged release. They do not supersede the following failed gates:
 
-- Secret-scanning job `131103456637`: 201 unbaselined candidates, exit 1.
-  These are unreviewed candidates, not a determination of 201 exposed secrets.
-- Main requirements job `131103456782`: pip-audit reported no known
+- Secret-scanning job `131102695552`: 213 unbaselined candidates, exit 1.
+  These are unreviewed candidates, not a determination of 213 exposed secrets.
+- Main requirements job `131102695045`: pip-audit reported no known
   vulnerabilities; GuardDog scanned 149 packages with 577 issue counts, exit 1.
   That broader report has not received the seven-package source review above.
-- Main Docker image job `131103456507`: Trivy reported Debian 13.7 and
+- Main Docker image job `131102695035`: Trivy reported Debian 13.7 and
   119 HIGH findings, zero CRITICAL, in the scanned image. The report includes
   system packages such as util-linux, Git, curl and redis-tools; the shown
   affected rows have no fixed version. These are scanner results requiring
   distro/advisory review, not a blanket risk acceptance.
-- Pre-commit job `131103456452` and all four container scan jobs also failed.
+- Pre-commit job `131102695550` and all four container scan jobs also failed.
 
 These remaining failures are neither suppressed nor certified by this patch.
+
+## Checked-out revision provenance
+
+Use the release's **push** workflows for exact release conclusions. The earlier
+references to pull-request workflows `43194970290` and `43194970238` correspond
+to PR #3789's integration merge `69019925b15c5cfde239e93c9123dba07424e247`,
+which merged release `170828fa` into main `cb0e8aeb`. The workflow `head_sha`
+filter alone did not identify the checked-out tree. Its 201-candidate scan was
+not the release-only report and must not replace that report's 213 candidates.
+
+The release push secret report (artifact `13932552305`) and PR #3790's report
+(artifact `13933379138`, integration commit
+`20d7e9699477046f93f92dd499640ef6ee368e8f`) contain exactly the same 213
+path/line/type entries. No candidate was introduced or removed by this patch.
+The release-push GuardDog report findings, versions, risks and distribution
+paths match the previously reviewed integration reports; the two release ZIPs
+above were downloaded and their checksums verified separately.
+
+Future baseline secret reports now record `checked_out_commit`,
+`checked_out_tree`, and an allowlisted `ci_event`. The scanner denies a
+`GITHUB_SHA` mismatch, dirty tracked files, or a revision change during scanning.
+These fields identify the checked-out source, not production state or
+independent certification. An integration merge remains integration evidence
+unless its actual commit/tree is the approved release. Scanner tests use
+committed isolated synthetic repositories, with separate mismatch, dirty-tree
+and event-payload privacy tests. No production credential or evidence is used.
