@@ -112,7 +112,7 @@ def show_optimization_features():
         print()
 
 
-_ASSIGNMENT = re.compile(r"^\\s*(?:export\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(.*)$")
+_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
 _SENSITIVE_NAMES = {
     "DATABASE_URL", "DSN", "TOKEN", "PASSWORD", "PASSPHRASE",
     "CREDENTIAL", "CREDENTIALS", "API_KEY", "API_SECRET",

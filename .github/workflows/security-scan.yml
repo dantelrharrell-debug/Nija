@@ -136,7 +136,8 @@ jobs:
           tests/test_precommit_trufflehog_enforcement.py \
           tests/test_guarddog_report_enforcement.py \
           tests/test_precommit_validation_report.py \
-          tests/test_analysis_report_integrity.py
+          tests/test_analysis_report_integrity.py \
+          tests/test_profit_optimization_env_template_guard.py
 
     - name: Enforce baseline-aware scanning
       run: |

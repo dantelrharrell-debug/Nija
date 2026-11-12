@@ -2,6 +2,8 @@
 from pathlib import Path
 import importlib.util
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/enable_profit_optimization.py"
 spec = importlib.util.spec_from_file_location("nija_profit_setup_guard", SCRIPT)
 module = importlib.util.module_from_spec(spec)
@@ -44,7 +46,7 @@ def test_non_credential_settings_allowed(tmp_path):
 def test_alternate_secret_names_rejected(tmp_path):
     for name in ("STRIPE_WEBHOOK_TOKEN", "SERVICE_CLIENT_SECRET", "DATABASE_URL", "CUSTOM_CREDENTIAL"):
         template = tmp_path / "template"
-        template.write_text(name + "=synthetic-test-placeholder\\n", encoding="utf-8")
+        template.write_text(name + "=synthetic-test-placeholder\n", encoding="utf-8")
         assert module.template_has_populated_credentials(template)
 
 
@@ -52,40 +54,40 @@ def test_multiline_private_key_is_rejected_without_disclosure(tmp_path, capsys, 
     monkeypatch.chdir(tmp_path)
     marker = "synthetic-key-payload-only"
     (tmp_path / ".env.profit_optimized").write_text(
-        "COINBASE_API_SECRET='-----BEGIN EC PRIVATE KEY-----\\n"
-        + marker + "\\n-----END EC PRIVATE KEY-----'\\n",
+        "COINBASE_API_SECRET='-----BEGIN EC PRIVATE KEY-----\n"
+        + marker + "\n-----END EC PRIVATE KEY-----'\n",
         encoding="utf-8",
     )
-    (tmp_path / ".env").write_text("PRESERVE=original\\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("PRESERVE=original\n", encoding="utf-8")
     assert module.setup_env_file() is False
-    assert (tmp_path / ".env").read_text() == "PRESERVE=original\\n"
+    assert (tmp_path / ".env").read_text() == "PRESERVE=original\n"
     assert marker not in capsys.readouterr().out
 
 
 def test_malformed_template_preserves_existing_env(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env.profit_optimized").write_text(
-        "SAFE_MODE=1\\nunexpected-continuation-line\\n", encoding="utf-8"
+        "SAFE_MODE=1\nunexpected-continuation-line\n", encoding="utf-8"
     )
-    (tmp_path / ".env").write_text("PRESERVE=existing\\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("PRESERVE=existing\n", encoding="utf-8")
     assert module.setup_env_file() is False
-    assert (tmp_path / ".env").read_text() == "PRESERVE=existing\\n"
+    assert (tmp_path / ".env").read_text() == "PRESERVE=existing\n"
     assert not (tmp_path / ".env.backup").exists()
 
 
 def test_validated_snapshot_written_when_template_changes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     template = tmp_path / ".env.profit_optimized"
-    template.write_text("SAFE_MODE=paper\\nCOINBASE_API_KEY=\\n", encoding="utf-8")
+    template.write_text("SAFE_MODE=paper\nCOINBASE_API_KEY=\n", encoding="utf-8")
     original_replace = module.os.replace
 
     def change_template_then_replace(src, dst):
-        template.write_text("COINBASE_API_KEY=synthetic-not-real\\n", encoding="utf-8")
+        template.write_text("COINBASE_API_KEY=synthetic-not-real\n", encoding="utf-8")
         original_replace(src, dst)
 
     monkeypatch.setattr(module.os, "replace", change_template_then_replace)
     assert module.setup_env_file() is True
-    assert (tmp_path / ".env").read_text() == "SAFE_MODE=paper\\nCOINBASE_API_KEY=\\n"
+    assert (tmp_path / ".env").read_text() == "SAFE_MODE=paper\nCOINBASE_API_KEY=\n"
 
 
 def test_main_exits_nonzero_when_setup_rejected(monkeypatch):
@@ -100,5 +102,45 @@ def test_main_exits_nonzero_when_setup_rejected(monkeypatch):
 
 def test_unreadable_encoding_rejected(tmp_path):
     template = tmp_path / "template"
-    template.write_bytes(b"SAFE_MODE=\\xff\\n")
+    template.write_bytes(b"SAFE_MODE=\xff\n")
     assert module.template_has_populated_credentials(template)
+
+
+@pytest.mark.parametrize("source", [
+    b"SAFE_MODE=paper\nRISK_PERCENT=2\n",
+    b"  export SAFE_MODE = paper\n\tRISK_PERCENT = 2\n",
+    b"# comment\r\nSAFE_MODE=paper\r\n\r\n",
+])
+def test_real_env_assignment_syntax_is_accepted(source):
+    assert module.validate_template_bytes(source) is True
+
+
+@pytest.mark.parametrize("source", [
+    b"SAFE_MODE=paper\nunexpected-continuation-line\n",
+    b"SAFE_MODE=paper\nBAD-NAME=value\n",
+    b"SAFE_MODE=\xff\n",
+    b"\\sSAFE_MODE=paper\n",
+])
+def test_rejected_real_templates_preserve_environment_before_prompt(
+    source, tmp_path, monkeypatch, capsys,
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.profit_optimized").write_bytes(source)
+    original = b"PRESERVE=existing\n"
+    (tmp_path / ".env").write_bytes(original)
+
+    def unexpected_prompt(*args):
+        pytest.fail("rejected template prompted before validation")
+
+    monkeypatch.setattr("builtins.input", unexpected_prompt)
+    assert module.setup_env_file() is False
+    assert (tmp_path / ".env").read_bytes() == original
+    assert not (tmp_path / ".env.backup").exists()
+    assert not list(tmp_path.glob(".env.review-*"))
+    assert "synthetic-not-real" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", [".env.profit_optimized", ".env.micro_capital"])
+def test_tracked_credential_free_templates_validate(name):
+    source = (SCRIPT.parents[1] / name).read_bytes()
+    assert module.validate_template_bytes(source) is True
