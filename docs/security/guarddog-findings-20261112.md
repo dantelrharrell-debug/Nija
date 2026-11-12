@@ -65,7 +65,8 @@ review still needs the actual image SBOM and container scan evidence.
 The previous checker said it rejected partial scans but only required a
 nonempty list. A clean one-package report could pass for an eight-package
 requirements file. The updated CLI requires that requirements file and checks
-exact normalized package names and versions, with no missing, duplicate,
+exact normalized package names and versions (including the inner scanned package
+version), with no missing, duplicate,
 substituted or unexpected rows. Unsupported requirement syntax denies rather
 than silently dropping a dependency. Duplicate JSON keys, malformed finding
 summaries, and zero counts hiding rule/risk entries also deny.
@@ -84,3 +85,22 @@ checks. This change does not install the Kraken collector or provide the
 reviewed startup factory, production public keys or signed certification
 receipts. Production orders must stay disabled until the real observations,
 reconciliation, protective controls, credential rotation and review pass.
+
+## Other verified checks on this release
+
+Full CI, CodeQL, Kraken collector regression and image build succeeded on the
+merged release. They do not supersede the following failed gates:
+
+- Secret-scanning job `131103456637`: 201 unbaselined candidates, exit 1.
+  These are unreviewed candidates, not a determination of 201 exposed secrets.
+- Main requirements job `131103456782`: pip-audit reported no known
+  vulnerabilities; GuardDog scanned 149 packages with 577 issue counts, exit 1.
+  That broader report has not received the seven-package source review above.
+- Main Docker image job `131103456507`: Trivy reported Debian 13.7 and
+  119 HIGH findings, zero CRITICAL, in the scanned image. The report includes
+  system packages such as util-linux, Git, curl and redis-tools; the shown
+  affected rows have no fixed version. These are scanner results requiring
+  distro/advisory review, not a blanket risk acceptance.
+- Pre-commit job `131103456452` and all four container scan jobs also failed.
+
+These remaining failures are neither suppressed nor certified by this patch.

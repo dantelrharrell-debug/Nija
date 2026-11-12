@@ -20,7 +20,7 @@ def requirements(tmp_path):
 
 
 def row(name="example-package", version="1.2.3", **updates):
-    result = {"issues": 0, "errors": {}, "results": {}, "risks": []}
+    result = {"issues": 0, "errors": {}, "results": {}, "risks": [], "package_version": version}
     result.update(updates)
     return {"dependency": name, "version": version, "result": result}
 
@@ -61,7 +61,7 @@ def test_findings_stay_blocked_and_summary_has_no_code(tmp_path, requirements, c
 
 @pytest.mark.parametrize("data", [[], {}, [None], [{"result": {}}],
     [row(issues=True)], [row(issues=-1)], [row(errors=[])],
-    [row(results=[])], [row(risks={})], [row(results={"bundled_binary": False})], [row(results={"invalid rule": []})]])
+    [row(results=[])], [row(risks={})], [row(package_version="substituted")], [row(results={"bundled_binary": False})], [row(results={"invalid rule": []})]])
 def test_empty_or_invalid_reports_deny(tmp_path, requirements, data):
     assert checker.check_report(report(tmp_path, data), 0, requirements) == 2
 

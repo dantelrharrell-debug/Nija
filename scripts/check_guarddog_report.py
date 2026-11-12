@@ -69,7 +69,8 @@ def check_report(path: Path, scanner_status: int, requirements: Path) -> int:
                 raise ValueError("unexpected_package_or_version")
             observed.add(name)
             result = row.get("result")
-            if not isinstance(result, dict):
+            if (not isinstance(result, dict)
+                    or result.get("package_version") != expected[name]):
                 raise ValueError("invalid_package_result")
             count, failures = result.get("issues"), result.get("errors")
             rules, risks = result.get("results"), result.get("risks", [])
