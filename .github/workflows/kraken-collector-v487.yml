@@ -34,6 +34,7 @@ on:
       - 'bot/tests/test_kraken_kill_switch_evidence.py'
       - 'bot/tests/test_kraken_position_sync_evidence.py'
       - 'tests/test_kraken_startup_receipts.py'
+      - 'tests/test_kraken_source_startup_contract_review.py'
       - 'bot/kraken_identity_read_timing.py'
       - 'bot/kraken_authenticated_identity_v480.py'
       - 'bot/kraken_identity_request_recovery_v491.py'
@@ -103,6 +104,8 @@ jobs:
           command -v redis-server
       - name: Verify signed protected root after final process handoff without broker access
         run: python -m pytest -q tests/test_kraken_protected_startup_root.py
+      - name: Verify four-source contract in the protected release interpreter path
+        run: python -m unittest tests.test_kraken_source_startup_contract_review -v
       - name: Verify canonical source factory and authenticated registration without broker access
         run: python -m pytest -q tests/test_kraken_canonical_startup_factory.py
       - name: Verify actual four native source constructors and unavailable-evidence denial
