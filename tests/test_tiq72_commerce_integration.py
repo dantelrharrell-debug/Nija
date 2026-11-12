@@ -71,6 +71,31 @@ class CommerceIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(CommerceDenied,"report_unavailable"):
                 self.store.get_report(rid,"adult-1")
 
+    def test_report_denied_before_verified_payment(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
+            canonical_run=run,authoritative_score={"score":70},
+            success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        with self.assertRaisesRegex(CommerceDenied,"active_entitlement_required"):
+            self.service.fulfill_report(owner_id="adult-1",
+                reservation_id=result["reservation_id"],report={"score":70})
+
+    def test_unpaid_checkout_cannot_grant_entitlement(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
+            canonical_run=run,authoritative_score={"score":70},
+            success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        self.stripe.session["payment_status"]="unpaid"
+        with patch("tiq72_test_commerce_orchestrator.verify_test_webhook") as verify:
+            verify.return_value={"id":"evt_unpaid","livemode":False,
+                "type":"checkout.session.completed",
+                "data":{"object":{"id":"cs_test_abc","metadata":{
+                    "tiq72_reservation_id":result["reservation_id"]}}}}
+            with self.assertRaisesRegex(Exception,"checkout_identity_mismatch"):
+                self.service.accept_signed_checkout(raw_body=b"signed",signature="sig")
+        with self.assertRaisesRegex(CommerceDenied,"report_unavailable"):
+            self.store.get_report(result["reservation_id"],"adult-1")
+
     def test_requires_adult_attestation(self):
         run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
         with self.assertRaisesRegex(CommerceDenied,"adult_identity_required"):
