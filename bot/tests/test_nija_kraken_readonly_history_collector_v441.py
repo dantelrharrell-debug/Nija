@@ -27,8 +27,10 @@ def test_all_pages_retrieved_without_writes():
     assert len(report["history"]["closed"]) == 51
     assert len(report["history"]["ledger"]) == 51
     assert len(calls) == 12
-    assert all(set(p) == ({"ofs", "consolidate_taker"} if endpoint == "TradesHistory" else {"ofs"})
-               for endpoint, p in calls)
+    assert all(set(p) == {
+        "TradesHistory": {"ofs", "consolidate_taker"},
+        "ClosedOrders": {"ofs", "trades", "consolidate_taker"}, "Ledgers": {"ofs"},
+    }[endpoint] for endpoint, p in calls)
     assert report["trading_authorized"] is False
     assert report["entry_exit_reconciliation_verified"] is False
 
@@ -105,7 +107,10 @@ def test_existing_broker_wrapper_restricts_endpoints_and_category():
 
         def _kraken_private_call(self, endpoint, params, *, category):
             assert category == "monitoring"
-            assert set(params) == ({"ofs", "consolidate_taker"} if endpoint == "TradesHistory" else {"ofs"})
+            assert set(params) == {
+                "TradesHistory": {"ofs", "consolidate_taker"},
+                "ClosedOrders": {"ofs", "trades", "consolidate_taker"}, "Ledgers": {"ofs"},
+            }[endpoint]
             assert endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
             field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
             return {"error": [], "result": {"count": 0, field: {}}}
