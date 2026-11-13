@@ -115,7 +115,10 @@ def test_private_request_selects_cursor_explicitly_without_replay(tmp_path, curs
             return {"error": [], "result": {"open": {}}}
         if cursor is True:
             return page(endpoint, params)
-        assert set(params) == ({"ofs", "consolidate_taker"} if endpoint == "TradesHistory" else {"ofs"})
+        assert set(params) == {
+            "TradesHistory": {"ofs", "consolidate_taker"},
+            "ClosedOrders": {"ofs", "trades", "consolidate_taker"}, "Ledgers": {"ofs"},
+        }[endpoint]
         return {"error": [], "result": {FIELDS[endpoint]: {}, "count": 0}}
 
     broker = SimpleNamespace(broker_type="kraken", account_type="platform", user_id=None,

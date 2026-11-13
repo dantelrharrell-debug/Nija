@@ -250,7 +250,10 @@ def test_explicit_eleven_page_history_request_retains_fail_closed_authority(root
         if endpoint == "Balance":
             assert params == {}
             return {"error": [], "result": {"ZUSD": "100"}}
-        assert set(params) == ({"ofs", "consolidate_taker"} if endpoint == "TradesHistory" else {"ofs"})
+        assert set(params) == {
+            "TradesHistory": {"ofs", "consolidate_taker"},
+            "ClosedOrders": {"ofs", "trades", "consolidate_taker"}, "Ledgers": {"ofs"},
+        }[endpoint]
         field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
         count = 501 if endpoint == "TradesHistory" else 0
         offset = params["ofs"]
@@ -318,7 +321,7 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
         field = {"TradesHistory": "trades", "ClosedOrders": "closed"}[endpoint]
         if endpoint == "TradesHistory":
             return {"error": [], "result": {"count": 0, field: {}}}
-        assert endpoint == "ClosedOrders" and params == {"ofs": 0}
+        assert endpoint == "ClosedOrders" and params == {"ofs": 0, "trades": True, "consolidate_taker": False}
         return {"error": [], "result": {"count": 552, field: {"order-id": {"vol": "1"}}}}
 
     broker._kraken_private_call = read
@@ -336,7 +339,7 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
     assert "order-id" not in caplog.text
     assert calls == [
         ("Balance", {}), ("TradesHistory", {"ofs": 0, "consolidate_taker": False}),
-        ("ClosedOrders", {"ofs": 0}),
+        ("ClosedOrders", {"ofs": 0, "trades": True, "consolidate_taker": False}),
     ]
     assert (root / (ID + ".claimed.json")).exists()
     assert not run(root, [broker])
