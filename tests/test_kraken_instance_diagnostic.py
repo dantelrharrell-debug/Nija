@@ -226,14 +226,14 @@ class InstanceDiagnosticTests(unittest.TestCase):
 
     def test_recovery_workflows_pin_the_checked_out_history_source(self) -> None:
         repository = Path(__file__).resolve().parents[1]
-        source = repository / "bot/kraken_live_history_recovery.py"
-        digest = hashlib.sha256(source.read_bytes()).hexdigest()
-        for path in (
-            ".github/workflows/render-recovery-access.yml",
-            ".github/workflows/kraken-recovery-gate-diagnostics.yml",
-        ):
-            with self.subTest(workflow=path):
-                self.assertIn(digest, (repository / path).read_text())
+        for source_path in ("bot/kraken_live_history_recovery.py", "bot/kraken_history_response_journal.py"):
+            digest = hashlib.sha256((repository / source_path).read_bytes()).hexdigest()
+            for path in (
+                ".github/workflows/render-recovery-access.yml",
+                ".github/workflows/kraken-recovery-gate-diagnostics.yml",
+            ):
+                with self.subTest(workflow=path, source=source_path):
+                    self.assertIn(digest, (repository / path).read_text())
 
     def test_api_logs_must_match_the_current_instance(self) -> None:
         for observed_instance, accepted in (
