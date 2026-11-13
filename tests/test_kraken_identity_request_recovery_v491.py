@@ -78,6 +78,29 @@ class IdentityRequestTests(unittest.TestCase):
     def receipt(self):
         return json.loads((self.root / (("a" * 32) + ".identity.evidence.json")).read_text())
 
+    def test_explicit_native_mode_is_forwarded_but_missing_native_proof_still_denies(self):
+        self.binding["identity_method"] = "native_signed_request_v1"
+        self.write(recovery.BINDING_NAME, self.binding)
+        self.request()
+        original = recovery.make_kraken_account_identity_provider
+        with patch.object(recovery, "make_kraken_account_identity_provider", wraps=original) as factory:
+            self.assertTrue(self.run_request())
+        factory.assert_called_once()
+        self.assertEqual(factory.call_args.kwargs["identity_method"], "native_signed_request_v1")
+        row = self.receipt()
+        self.assertFalse(row["collection_succeeded"])
+        self.assertFalse(row["trading_authorized"])
+        self.assertFalse(row["collector_installed"])
+
+    def test_invalid_saved_identity_modes_deny_before_broker_read(self):
+        for value in (None, True, "fallback", "native_signed_request_v1 ", 1):
+            with self.subTest(value=value):
+                self.binding["identity_method"] = value
+                self.write(recovery.BINDING_NAME, self.binding)
+                with self.assertRaises(ValueError):
+                    recovery._binding(self.root, time.time())
+        self.assertEqual(self.calls, [])
+
     def test_no_request_never_reads_or_creates_a_request(self):
         self.assertFalse(self.run_request())
         self.assertFalse((self.root / "identity_request.json").exists())

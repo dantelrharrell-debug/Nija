@@ -62,8 +62,12 @@ def _binding(root: Path, now: float) -> tuple[dict[str, Any], str, tuple[int, ..
     finally:
         os.close(fd)
     row = json.loads(raw, object_pairs_hook=_unique_keys)
-    if not isinstance(row, dict) or set(row) != _BINDING_FIELDS:
+    if (not isinstance(row, dict)
+            or set(row) not in (_BINDING_FIELDS, _BINDING_FIELDS | {"identity_method"})):
         raise ValueError("binding_invalid")
+    method = row.get("identity_method", "response_echo")
+    if type(method) is not str or method not in {"response_echo", "native_signed_request_v1"}:
+        raise ValueError("binding_identity_method_invalid")
     if row["account_scope"] != "platform:kraken" or row["trading_authorized"] is not False:
         raise ValueError("binding_invalid")
     for field in ("approved_account_iiban_sha256", "approved_api_key_sha256"):
@@ -166,7 +170,9 @@ def collect_requested_identity(
                 reviewed_provider_id=PROVIDER_ID, monitoring_category=monitoring_category,
                 parsed_field_observer=record_parsed_presence,
                 http_field_observer=record_http_presence,
+                identity_method=binding.get("identity_method", "response_echo"),
             )
+            receipt["identity_method"] = binding.get("identity_method", "response_echo")
             observation = provider()
             # Detect replacement of approved inputs during the authenticated read.
             after = _binding(root, time.time())

@@ -41,7 +41,7 @@ RECOVERY_ROOT = Path("/data/kraken-history-recovery")
 APP_ROOT = Path("/app")
 IDENTITY_CONSUMER_PINS = (
     ("bot/kraken_identity_request_recovery_v491.py",
-     "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2"),
+     "69e4617711013cad18546edb9ee21832441d88b6b84e26a176bd7cff6bc248ce"),
     ("bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py",
      "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4"),
 )
