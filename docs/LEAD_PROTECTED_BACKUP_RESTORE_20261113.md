@@ -266,3 +266,13 @@ access. A consistent provider-supported lead-only export and schema/consent
 reconciliation are required. The reviewable support request is prepared in
 IONOS_LEAD_ONLY_EXPORT_REQUEST_20261113.md and is NOT sent. No website publishing,
 access rules, webhook/config, customer state or dispatch settings were changed.
+
+## Concurrent external merges
+
+During the continued IONOS inspection, GitHub independently reported PR3847
+merged at its earlier head09088bcea6dc1a71f9c486f47926c3385570d820 as
+654cd8505973fff07101660415c1d41f82de6409, and PR3848 merged as
+ccef0af36b358af506659727ccee26e2b922d400. This verifier did not merge either PR.
+The later IONOS ownership finding and support request are follow-up evidence,
+not files included in the earlier3847merge. A merge does not authorize or prove
+production deployment, IONOS data recovery, live QA, dispatch or trading.
