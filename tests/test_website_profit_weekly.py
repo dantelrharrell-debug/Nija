@@ -16,12 +16,12 @@ def fixtures(end, count=14):
     ]
 
 
-class WeeklyEvidenceTests(unittest.TestCase):
+def weekly_counts(end):\n    return {"period_start": (end - timedelta(days=6)).isoformat(), "period_end": end.isoformat(),\n            "certified": True, "source_reconciled": True,\n            "unique_visitors": 70, "qualified_leads": 14, "waitlist_signups": 7}\n\n\nclass WeeklyEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.end = date(2026, 11, 12)
 
     def test_two_complete_weeks(self):
-        result = compare_weeks(fixtures(self.end), self.end)
+        result = compare_weeks(fixtures(self.end), self.end, [weekly_counts(self.end), weekly_counts(self.end - timedelta(days=7))])
         for week in result.values():
             self.assertEqual(week["verification_status"], "VERIFIED")
             self.assertEqual(week["unique_visitors"], 70)
@@ -59,7 +59,7 @@ class WeeklyEvidenceTests(unittest.TestCase):
         self.assertIsNone(result["net_profit_per_visitor_usd"])
         self.assertIsNone(result["target_met"])
 
-    def test_negative_or_fractional_counts_rejected(self):
+    def test_daily_unique_counts_are_not_summed(self):\n        result = summarize_week(fixtures(self.end, 7), self.end)\n        self.assertIsNone(result["unique_visitors"])\n        self.assertIsNone(result["net_profit_per_visitor_usd"])\n\n    def test_negative_or_fractional_counts_rejected(self):
         rows = fixtures(self.end, 7)
         rows[0]["qualified_leads"] = "-1"
         self.assertEqual(summarize_week(rows, self.end)["verification_status"], "PARTIAL")
