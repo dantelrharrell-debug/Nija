@@ -38,6 +38,8 @@ on:
       - 'tests/test_kraken_startup_receipts.py'
       - 'tests/test_kraken_source_startup_contract_review.py'
       - 'bot/kraken_identity_read_timing.py'
+      - 'bot/kraken_native_identity_proof.py'
+      - 'tests/test_kraken_native_identity_proof.py'
       - 'bot/kraken_authenticated_identity_v480.py'
       - 'bot/kraken_identity_request_recovery_v491.py'
       - 'tests/test_kraken_identity_http_diagnostic.py'
@@ -128,6 +130,7 @@ jobs:
         run: >-
           python -m pytest -q tests/test_kraken_identity_http_diagnostic.py
           tests/test_kraken_identity_read_timing.py
+          tests/test_kraken_native_identity_proof.py
           tests/test_kraken_authenticated_identity_v480.py
           tests/test_kraken_identity_request_recovery_v491.py
       - name: Verify registry validation before provider construction
