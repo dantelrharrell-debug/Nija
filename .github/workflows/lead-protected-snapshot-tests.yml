@@ -1,0 +1,27 @@
+name: Lead protected snapshot and isolated restore
+on:
+  pull_request:
+    paths:
+      - 'scripts/nija_lead_protected_snapshot.py'
+      - 'scripts/nija_lead_isolated_restore_verify.py'
+      - 'tests/test_nija_lead_protected_snapshot.py'
+      - 'tests/test_nija_lead_isolated_restore_verify.py'
+      - '.github/workflows/lead-protected-snapshot-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-snapshot-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify source write denial and full isolated restoration
+        run: |
+          python -B -S -m unittest discover -s tests -p 'test_nija_lead_protected_snapshot.py' -v
+          python -B -S -m unittest discover -s tests -p 'test_nija_lead_isolated_restore_verify.py' -v
