@@ -36,7 +36,8 @@ class CommerceIntegrationTests(unittest.TestCase):
         self.store = Tiq72Store(self.db)
         self.stripe = FakeStripe()
         self.service = Tiq72TestCommerce(self.store, self.stripe, "whsec_test")
-        self.env = patch.dict(os.environ, {"STRIPE_SECRET_KEY":"sk_test_fake",
+        self.env = patch.dict(os.environ, {"STRIPE_TEST_SECRET_KEY":"sk_test_fake",
+            "TIQ72_TEST_RETURN_ORIGIN":"https://example.org",
             "TIQ72_STRIPE_TEST_PRICE_ID":"price_test_1",
             "TIQ72_STRIPE_TEST_PRODUCT_ID":"prod_test_1",
             "NIJA_GAME_REPORTS_ENABLED":"false",
