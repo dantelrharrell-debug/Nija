@@ -407,6 +407,39 @@ def test_distinct_upstream_ids_same_email_and_timestamp_remain_separate(monkeypa
     assert len(set(sent)) == 2
 
 
+def test_same_upstream_id_changed_consent_fails_closed_without_extra_forward(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    forwarded = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: forwarded.append(dict(lead)) or True)
+    original = dict(_lead(), submission_id="intent-one", consent_marketing_email=False)
+    accepted_status, accepted = _request(original)
+    altered = dict(original, consent_marketing_email=True)
+    changed_status, changed = _request(altered)
+
+    assert accepted_status == 201 and accepted["accepted"]
+    assert changed_status == 422 and "Conflicting data" in changed["error"]
+    assert len(forwarded) == 1
+    with sqlite3.connect(intake._db_path()) as conn:
+        rows = conn.execute("SELECT source_payload_json FROM website_leads").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0][0])["consent_marketing_email"] is False
+
+
+def test_same_upstream_id_changed_contact_fails_closed_without_extra_forward(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    forwarded = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: forwarded.append(dict(lead)) or True)
+    original = dict(_lead(), source_event_id="intent-two")
+    accepted_status, accepted = _request(original)
+    changed_status, changed = _request(dict(original, name="Different Synthetic Name"))
+
+    assert accepted_status == 201 and accepted["accepted"]
+    assert changed_status == 422 and "Conflicting data" in changed["error"]
+    assert len(forwarded) == 1
+    with sqlite3.connect(intake._db_path()) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM website_leads").fetchone()[0] == 1
+
+
 def test_same_upstream_id_with_different_source_timestamps_is_a_replay(monkeypatch, tmp_path):
     _config(monkeypatch, tmp_path)
     sent = []
