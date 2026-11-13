@@ -509,6 +509,66 @@ class KrakenLedgerEvidenceTests(unittest.TestCase):
         self.broker.hook = hook
         self.assertTrue(self.provider()()["verified"])
 
+    def test_split_fills_keep_individual_ids_across_pages_and_verification_passes(self):
+        """Default taker consolidation cannot replace persisted exchange fills."""
+        second_tid = "TEEEEE-EEEEE-EEEEEE"
+        self.update("trade_ledger", "quantity", "1")
+        self.update("trade_ledger", "size_usd", "100")
+        self.update("trade_ledger", "fee", "1")
+        self.insert("trade_ledger", {
+            "user_id": "alice", "symbol": "BTC-USD", "side": "BUY", "action": "OPEN",
+            "quantity": "1", "size_usd": "100", "fee": "1", "position_id": "internal-lot-1",
+            "exchange_trade_id": second_tid, "exchange_order_id": BUY, "order_id": "internal-order-1",
+        })
+        first_fill = self.broker.data["TradesHistory"][TID]
+        first_fill.update(vol="1", cost="100", fee="1")
+        self.broker.data["TradesHistory"][second_tid] = copy.deepcopy(first_fill)
+        self.broker.data["ClosedOrders"][BUY]["trades"] = [TID, second_tid]
+        for suffix, asset, amount, fee in (("base", "XXBT", "1", "0"),
+                                           ("quote", "ZUSD", "-100", "1")):
+            self.broker.data["Ledgers"]["buy-" + suffix].update(amount=amount, fee=fee)
+            self.broker.data["Ledgers"]["second-buy-" + suffix] = {
+                "asset": asset, "amount": amount, "fee": fee, "type": "trade", "refid": second_tid,
+            }
+        self.partial_close(terminal=True)
+        self.broker.page_size = 1
+
+        for direct in (False, True):
+            for target in ("TradesHistory", "ClosedOrders"):
+                with self.subTest(direct=direct, target=target):
+                    self.broker._gateway_url = "" if direct else "https://offline.invalid"
+                    self.broker.calls.clear()
+
+                    def consolidate_by_default(endpoint, params):
+                        if endpoint != target or params.get("consolidate_taker") in (False, "false"):
+                            return None
+                        if endpoint == "TradesHistory":
+                            consolidated = copy.deepcopy(first_fill)
+                            consolidated.update(vol="2", cost="200", fee="2")
+                            return {"error": [], "result": {
+                                "trades": {TID: consolidated}, "cursor": {"next": None},
+                            }}
+                        consolidated = copy.deepcopy(self.broker.data["ClosedOrders"])
+                        consolidated[BUY]["trades"] = [TID]
+                        return {"error": [], "result": {
+                            "closed": consolidated, "cursor": {"next": None},
+                        }}
+
+                    self.broker.hook = consolidate_by_default
+                    self.assertTrue(self.provider()()["verified"])
+                    for endpoint in ("TradesHistory", "ClosedOrders"):
+                        calls = [params for ep, params, _ in self.broker.calls if ep == endpoint]
+                        self.assertGreaterEqual(sum("cursor" not in params for params in calls), 2)
+                        self.assertTrue(any("cursor" in params for params in calls))
+                        for params in calls:
+                            if direct:
+                                self.assertEqual(params["consolidate_taker"], "false")
+                            else:
+                                self.assertIs(params["consolidate_taker"], False)
+                    for endpoint, params, _ in self.broker.calls:
+                        if endpoint not in {"TradesHistory", "ClosedOrders"}:
+                            self.assertNotIn("consolidate_taker", params)
+
     def test_direct_form_wire_flags_match_existing_kraken_transport(self):
         self.broker._gateway_url = ""
         self.assertTrue(self.provider()()["verified"])
