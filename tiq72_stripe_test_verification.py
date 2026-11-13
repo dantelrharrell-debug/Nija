@@ -100,7 +100,17 @@ def create_test_checkout(stripe_client, reservation_id: str, success_url: str, c
         raise StripeVerificationError("invalid_checkout_parameters")
     safe_success = _approved_return_url(success_url)
     safe_cancel = _approved_return_url(cancel_url)
-    price_id, _ = test_price_identity()
+    price_id, product_id = test_price_identity()
+    # Verify the actual Stripe catalog object; configuration alone is not payment proof.
+    try:
+        price = stripe_client.Price.retrieve(price_id)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise StripeVerificationError("test_price_retrieval_required") from exc
+    if (price.get("id") != price_id or price.get("livemode") is not False or
+        price.get("active") is not True or price.get("type") != "one_time" or
+        price.get("currency") != "usd" or price.get("unit_amount") != 100 or
+        price.get("product") != product_id):
+        raise StripeVerificationError("test_price_identity_mismatch")
     return stripe_client.checkout.Session.create(
         mode="payment", line_items=[{"price":price_id,"quantity":1}],
         success_url=safe_success, cancel_url=safe_cancel,
