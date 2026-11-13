@@ -94,5 +94,102 @@ class LeadIntakeReviewRegressions(unittest.TestCase):
                          {"error": "Lead store unavailable"})
         self.assertNotIn(b"private database diagnostic", handler.wfile.getvalue())
 
+
+    def test_source_event_id_alias_is_preserved_without_fabrication(self):
+        payload = {
+            "form_name": "free_assessment", "email": "test@example.invalid",
+            "source_event_id": "website-stable-1",
+            "internal_id": "",
+            "submitted_at": "2026-11-13T12:00:00Z",
+        }
+        self.assertEqual(intake._source_event_id(payload), "website-stable-1")
+        self.assertEqual(
+            normalize_lead_payload(payload)["source_event_id"], "website-stable-1"
+        )
+
+    def test_matching_upstream_aliases_across_wrappers(self):
+        payload = {
+            "event_id": "evt-identical",
+            "submission": {"data": {"submission_id": "evt-identical"}},
+            "email": "test@example.invalid",
+        }
+        self.assertEqual(intake._source_event_id(payload), "evt-identical")
+
+    def test_conflicting_upstream_ids_fail_closed(self):
+        payload = {
+            "email": "test@example.invalid",
+            "event_id": "event-first",
+            "submission_id": "event-second",
+        }
+        with self.assertRaisesRegex(ValueError, "Conflicting upstream submission IDs"):
+            normalize_lead_payload(payload)
+
+    def test_conflicting_wrapped_source_ids_fail_closed(self):
+        payload = {
+            "email": "test@example.invalid",
+            "submission_id": "source-A",
+            "data": {"source_event_id": "source-B"},
+        }
+        with self.assertRaisesRegex(ValueError, "Conflicting upstream submission IDs"):
+            normalize_lead_payload(payload)
+
+    def test_upstream_id_bool_and_dict_rejected(self):
+        for bad in (True, {"id": "not-scalar"}, ["not-scalar"]):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(ValueError, "must be scalar"):
+                    intake._source_event_id({
+                        "email": "test@example.invalid", "submission_id": bad
+                    })
+
+    def test_oversized_upstream_id_is_rejected_not_truncated(self):
+        with self.assertRaisesRegex(ValueError, "too long"):
+            intake._source_event_id({
+                "email": "test@example.invalid",
+                "source_event_id": "x" * 161,
+            })
+
+    def test_canonical_forwarding_marker_is_not_the_original_submission_id(self):
+        import hashlib
+
+        source = "upstream-verified-1"
+        email = "qa@example.com"
+        forwarded = hashlib.sha256(
+            f"submission-id|{email}|{source}".encode("utf-8")
+        ).hexdigest()
+        payload = {
+            "email": email,
+            "source_event_id": source,
+            "event_id": forwarded,
+            "send_acknowledgment": False,
+        }
+        self.assertEqual(intake._source_event_id(payload), source)
+        self.assertEqual(
+            intake.normalize_lead_payload(payload)["source_event_id"], source
+        )
+
+    def test_missing_source_provenance_in_forwarded_payload_stays_missing(self):
+        payload = {
+            "email": "qa@example.com",
+            "source_event_id": "",
+            "event_id": "f" * 64,
+            "send_acknowledgment": False,
+        }
+        self.assertEqual(intake._source_event_id(payload), "")
+
+    def test_unrecognized_forwarding_marker_is_not_accepted(self):
+        payload = {
+            "email": "qa@example.com",
+            "source_event_id": "origin-1",
+            "event_id": "different-unverified-event",
+            "send_acknowledgment": False,
+        }
+        with self.assertRaisesRegex(ValueError, "Conflicting upstream submission IDs"):
+            intake._source_event_id(payload)
+
+    def test_legacy_internal_id_is_not_treated_as_authoritative(self):
+        self.assertEqual(intake._source_event_id({
+            "email": "test@example.invalid", "internal_id": "different-system-id",
+        }), "")
+
 if __name__ == "__main__":
     unittest.main()
