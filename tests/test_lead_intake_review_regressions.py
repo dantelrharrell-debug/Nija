@@ -148,6 +148,44 @@ class LeadIntakeReviewRegressions(unittest.TestCase):
                 "source_event_id": "x" * 161,
             })
 
+    def test_canonical_forwarding_marker_is_not_the_original_submission_id(self):
+        import hashlib
+
+        source = "upstream-verified-1"
+        email = "qa@example.com"
+        forwarded = hashlib.sha256(
+            f"submission-id|{email}|{source}".encode("utf-8")
+        ).hexdigest()
+        payload = {
+            "email": email,
+            "source_event_id": source,
+            "event_id": forwarded,
+            "send_acknowledgment": False,
+        }
+        self.assertEqual(intake._source_event_id(payload), source)
+        self.assertEqual(
+            intake.normalize_lead_payload(payload)["source_event_id"], source
+        )
+
+    def test_missing_source_provenance_in_forwarded_payload_stays_missing(self):
+        payload = {
+            "email": "qa@example.com",
+            "source_event_id": "",
+            "event_id": "f" * 64,
+            "send_acknowledgment": False,
+        }
+        self.assertEqual(intake._source_event_id(payload), "")
+
+    def test_unrecognized_forwarding_marker_is_not_accepted(self):
+        payload = {
+            "email": "qa@example.com",
+            "source_event_id": "origin-1",
+            "event_id": "different-unverified-event",
+            "send_acknowledgment": False,
+        }
+        with self.assertRaisesRegex(ValueError, "Conflicting upstream submission IDs"):
+            intake._source_event_id(payload)
+
     def test_legacy_internal_id_is_not_treated_as_authoritative(self):
         self.assertEqual(intake._source_event_id({
             "email": "test@example.invalid", "internal_id": "different-system-id",
