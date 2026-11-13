@@ -217,6 +217,9 @@ jobs:
     - name: Test pre-commit enforcement diagnostics
       run: python -S -m unittest discover -s tests -p 'test_precommit_validation_report.py' -v
 
+    - name: Verify balance diagnostic credential redaction without broker access
+      run: python -S -m unittest discover -s tests -p 'test_balance_diagnostic_redaction.py' -v
+
     - name: Run pre-commit on all files
       id: precommit
       run: python -S scripts/run_precommit_validation.py --report pre-commit-report.json

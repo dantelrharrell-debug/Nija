@@ -1,16 +1,13 @@
 """Offline Kraken v482 readback tests, no broker credentials or network."""
 import copy
 import hashlib
+import importlib.util
 import json
 import sys
 import types
 import unittest
 from pathlib import Path
-
-if "bot" not in sys.modules:
-    pkg = types.ModuleType("bot")
-    pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "bot")]
-    sys.modules["bot"] = pkg
+from unittest.mock import patch
 
 # v480 identity has its own regressions. Stub only that already-reviewed boundary.
 stub = types.ModuleType("bot.kraken_authenticated_identity_v480")
@@ -31,11 +28,23 @@ def identity(broker, *, account_scope, approved_iban_sha256,
         return {"account": account_scope, "verified": True}
     return observe
 stub.make_kraken_account_identity_provider = identity
-sys.modules[stub.__name__] = stub
-
-from bot.kraken_authenticated_open_order_reconciliation_v482 import (  # noqa: E402
-    KrakenOpenOrderDenied, make_kraken_open_order_reconciliation_provider,
+# Bind the test double only while loading a private copy of the module. Never
+# replace another suite's identity module or reuse an already-cached provider
+# whose identity function was bound before this fixture existed.
+overrides = {stub.__name__: stub}
+if "bot" not in sys.modules:
+    pkg = types.ModuleType("bot")
+    pkg.__path__ = [str(Path(__file__).resolve().parents[1] / "bot")]
+    overrides["bot"] = pkg
+spec = importlib.util.spec_from_file_location(
+    "_isolated_kraken_open_order_readback",
+    Path(__file__).resolve().parents[1] / "bot/kraken_authenticated_open_order_reconciliation_v482.py",
 )
+readback = importlib.util.module_from_spec(spec)
+with patch.dict(sys.modules, overrides):
+    spec.loader.exec_module(readback)
+KrakenOpenOrderDenied = readback.KrakenOpenOrderDenied
+make_kraken_open_order_reconciliation_provider = readback.make_kraken_open_order_reconciliation_provider
 
 def orders_row(vol="0.020", pair="ETHUSD", status="open"):
     return {"status": status, "descr": {"pair": pair, "type": "sell", "ordertype": "stop-loss", "price": "123.0"},
