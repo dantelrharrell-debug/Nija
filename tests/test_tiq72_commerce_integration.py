@@ -113,4 +113,43 @@ class CommerceIntegrationTests(unittest.TestCase):
                 self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_reservations").fetchone()[0], 0)
         self.assertIsNone(self.stripe.session)
 
+
+    def test_rejected_attestations_leave_no_side_effects_extended(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        for attestation in (False, None, 0, 1, "true", "True", [], {}):
+            with self.subTest(attestation=repr(attestation)):
+                with self.assertRaisesRegex(CommerceDenied, "adult_identity_required"):
+                    self.service.start_checkout(owner_id="adult-1", adult_attested=attestation,
+                        canonical_run=run, authoritative_score={"score":70},
+                        success_url="https://example.org/success",
+                        cancel_url="https://example.org/cancel")
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_runs").fetchone()[0], 0)
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_reservations").fetchone()[0], 0)
+                self.assertIsNone(self.stripe.session)
+
+    def test_missing_owner_rejected_before_persistence(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        for owner in (None, "", " ", 1, False, {}, []):
+            with self.subTest(owner=repr(owner)):
+                with self.assertRaisesRegex(CommerceDenied, "authenticated_owner_required"):
+                    self.service.start_checkout(owner_id=owner, adult_attested=True,
+                        canonical_run=run, authoritative_score={"score":70},
+                        success_url="https://example.org/success",
+                        cancel_url="https://example.org/cancel")
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_runs").fetchone()[0], 0)
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_reservations").fetchone()[0], 0)
+                self.assertIsNone(self.stripe.session)
+
+    def test_other_owner_cannot_read_or_fulfill_paid_report(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1", adult_attested=True,
+            canonical_run=run, authoritative_score={"score":70},
+            success_url="https://example.org/success",
+            cancel_url="https://example.org/cancel")
+        rid=result["reservation_id"]
+        with self.assertRaisesRegex(CommerceDenied, "reservation_not_owned"):
+            self.service.fulfill_report(owner_id="adult-2", reservation_id=rid, report={"score":70})
+        with self.assertRaises(CommerceDenied):
+            self.store.get_report(rid, "adult-2")
+
 if __name__=="__main__": unittest.main()
