@@ -1,6 +1,8 @@
 # NIJA lead-only protected backup and isolated restore
 
-Status: PARTIALLY COMPLETE. A consistent encrypted point-in-time backup and
+Status: PARTIALLY COMPLETE. **This backup covers the two Render databases only.
+The published website saves to a separate IONOS store, which is NOT backed up
+or restore-certified by this evidence.** A consistent encrypted point-in-time backup and
 isolated restore succeeded, including retrieval of all recovery inputs from Drive. Ongoing retention,
 required release security gates, published routing and approved live delivery QA
 remain uncertified. Do not enable dispatch, marketing or trading from this report.
@@ -210,3 +212,57 @@ repairs the two identified Soup Sieve advisories. Direct-head parser tests3/3
 (run43342755115), full resolved dependency audit131614769398, general
 CI43342754519 and CodeQL43342754647 passed. Its precommit/secret checks still
 failed. No merge/deployment occurred. Preserve the safety hold.
+
+## Critical published-workflow ownership finding (later authenticated inspection)
+
+The published `/free`, `/founding-waitlist` and `/apply` routes loaded in the
+browser. Inspection only: no answers, contacts or submissions were sent.
+The waitlist email checkbox was optional/unchecked; `/apply` separately exposed
+an optional AI-voice checkbox. UI consent text alone does not prove preservation.
+
+Public production modules were retrieved without credentials and fingerprinted:
+
+| Asset under https://nijaaitrading.com/assets/ | SHA-256 |
+|---|---|
+| index-BXGvkJBF.js | 4bf9b268dce186b5dfb871c93514ee092011f545f53626fdd1f0ae82dbe5bb9f |
+| leadIntake-fPU_Bapw.js | e3bb6d66d7ed0a07f356f8169f42995adf924c7a59e07da4faae737d6239bb70 |
+| Apply-BaOXvkpN.js | 61f4700e4e00d74e7ae87ebb9ef05ff9518aaa4f427def2ed8c2b76db279effe |
+| FoundingWaitlist-BPo0iVtg.js | d4635b215d1df0f065976e1d5a6b0631f90113211415f24fd2452ba63cf5ae9b |
+| FreeAssessment-DEgmSc5u.js | d074c5e5827c99873361c63cb0129962a25122e9f67410dbbd4db651f269c8d3 |
+| AdminSettings-DFJPEpxZ.js | 381acee8e860a9ee8c20e46c0961c7085f8e894f3be7f66a6fd4ef752fb70a00 |
+
+The shared published intake creates `nija_lead_events` records through an IONOS
+PocketBase client rooted at the website origin's `/.sfs-be/`. It preserves
+client event IDs/submission identity and channel flags, records marketing/SMS
+consent separately and writes `nija_lead_delivery` receipts. For the three forms,
+the client returns server_pending / server_not_active rather than directly
+posting to Zapier. No claim is made that this published source matches an
+approved editable project export; that comparison remains blocked.
+
+Authenticated website `/admin/settings` independently showed:
+- 2 saved submission records in total, 2 waiting for Zapier.
+- Private Zapier address not saved; sending switched off.
+- Read-only diagnostics: 0 claims checked, 0 stuck/uncertain claims,
+  0 failures needing decisions and 0 automatic retries scheduled.
+- Missed-enquiry diagnostic explicitly FAILED because activation date is absent;
+  it counted nothing. Do not call that result zero missing enquiries.
+- No complete data export or restore control in that page.
+
+The separate old admin dashboard showed 10 applicant rows and Leads0. These
+are different data scopes, not evidence that the website ledger is empty, that
+there are 10 genuine unique applicants, or that the Render87rows represent all
+website customers. No row values, identifiers or customer PII are published.
+
+Secure sign-in to the IONOS account succeeded. Normal Web Projects navigation
+opened the correct editor `https://ai-builder.ionos.com/site/aibuilder-4dfdf`,
+but only its shell/feedback banner rendered, even after one reload. The editor
+was not usable for schema/export inspection. No bot block was inferred and no
+bypass attempted. Public website and its admin remained available.
+
+IONOS support's November11 existing response (sender momentum-support@ionos.com,
+message1a1cc64264fe1aa4, existing thread1a1a9fbf5ee2cf97) was read directly and
+confirms the builder does not provide restorable backups or underlying-runtime
+access. A consistent provider-supported lead-only export and schema/consent
+reconciliation are required. The reviewable support request is prepared in
+IONOS_LEAD_ONLY_EXPORT_REQUEST_20261113.md and is NOT sent. No website publishing,
+access rules, webhook/config, customer state or dispatch settings were changed.
