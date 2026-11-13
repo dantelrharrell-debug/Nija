@@ -262,6 +262,8 @@ def _private_reader(binding: ReviewedLedgerBinding) -> Callable:
         valid_keys = {"with_cursor", "cursor"}
         if endpoint in {"OpenOrders", "ClosedOrders"}:
             valid_keys.add("trades")
+        if endpoint in {"TradesHistory", "ClosedOrders"}:
+            valid_keys.add("consolidate_taker")
         if endpoint == "OpenOrders":
             valid_keys.add("limit")
         _require((history and set(params) <= valid_keys and params.get("with_cursor") is True)
@@ -277,6 +279,8 @@ def _private_reader(binding: ReviewedLedgerBinding) -> Callable:
             wire["with_cursor"] = "true"
             if type(wire.get("trades")) is bool:
                 wire["trades"] = "true" if wire["trades"] else "false"
+            if type(wire.get("consolidate_taker")) is bool:
+                wire["consolidate_taker"] = "true" if wire["consolidate_taker"] else "false"
         response = transport(endpoint, wire, category=binding.monitoring_category)
         _require(_routing_scope(binding.broker) == binding.account
                  and getattr(binding.broker, "_kraken_private_call", None) == transport,
@@ -317,6 +321,10 @@ def _collect(read: Callable, max_pages: int) -> dict:
     def pages(endpoint: str, field: str) -> dict:
         rows, seen = {}, set()
         params = {"with_cursor": True}
+        if endpoint in {"TradesHistory", "ClosedOrders"}:
+            # Persisted fills and order links use individual execution IDs.
+            # Kraken's default taker consolidation can replace those IDs.
+            params["consolidate_taker"] = False
         if endpoint in {"ClosedOrders", "OpenOrders"}:
             params["trades"] = True
         if endpoint == "OpenOrders":
