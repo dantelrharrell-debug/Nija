@@ -6,7 +6,7 @@ Status: SOURCE PREPARATION ONLY. NOT RUN ON IONOS LIVE, NOT A RESTORED BACKUP, N
 
 IONOS Support confirmed November 13 that AI App & Site Builder's Code > Export all exports website files, **not the separate PocketBase database**. A public website health response is not an authenticated data-read capability. The published `/free`, `/founding-waitlist`, and `/apply` forms store into `/.sfs-be/` PocketBase, not Render's independently restorable lead databases.
 
-This source provides a proposed self-service, owner-controlled, **read-only** encrypted record export when (and only when) NIJA has a legitimate PocketBase API bearer token with LIST and collection-schema permissions. It uses only GET requests against `https://nijaaitrading.com/.sfs-be`. It does not ask for passwords, change rules, configure Zapier, call Resend or Apollo, invoke the trading bot, or post form submissions.
+This source provides a proposed self-service, owner-controlled, **read-only** encrypted record export when (and only when) NIJA has a legitimate PocketBase API bearer token with LIST and collection-schema permissions. **Official PocketBase documentation states collection schema reads require a superuser-level token.** A normal authenticated NIJA site-admin or visitor session may not have this capability and must not be treated as equivalent; use only an already authorized, approved credential, never elevate permissions simply for this tool. It uses only GET requests against `https://nijaaitrading.com/.sfs-be`. It does not ask for passwords, change rules, configure Zapier, call Resend or Apollo, invoke the trading bot, or post form submissions.
 
 ## How to run on a separately controlled computer, not production
 
