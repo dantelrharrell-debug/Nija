@@ -131,6 +131,15 @@ def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
     return {"error_code": "history_incomplete_unknown"}
 
 
+def _history_read_options(endpoint: str) -> dict[str, bool]:
+    """Keep closed-order fill links consistent with unconsolidated history."""
+    if endpoint == "ClosedOrders":
+        return {"trades": True, "consolidate_taker": False}
+    if endpoint == "TradesHistory":
+        return {"consolidate_taker": False}
+    return {}
+
+
 def collect_history(
     private_read: Callable[[str, dict[str, Any]], Mapping[str, Any]],
     *,
@@ -165,7 +174,7 @@ def collect_history(
         # Reconciliation needs individual fill IDs, not Kraken's default
         # consolidation of executions for a taker order. Keep this choice fixed
         # across every page and both verification passes.
-        trade_options = {"consolidate_taker": False} if endpoint == "TradesHistory" else {}
+        trade_options = _history_read_options(endpoint)
         params: dict[str, Any] = {**trade_options, "with_cursor": True}
         for _ in range(max_pages):
             payload = private_read(endpoint, dict(params))
@@ -287,9 +296,7 @@ def collect_history(
             records: dict[str, Any] = {}
             expected: int | None = None
             for index in range(max_pages):
-                params = {"ofs": index * PAGE_SIZE}
-                if endpoint == "TradesHistory":
-                    params["consolidate_taker"] = False
+                params = {"ofs": index * PAGE_SIZE, **_history_read_options(endpoint)}
                 payload = private_read(endpoint, params)
                 if not isinstance(payload, Mapping) or payload.get("error") != []:
                     raise _api_failure(endpoint, payload)
@@ -420,8 +427,9 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         raise ValueError("Authenticated private call and monitoring category required")
 
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
-        trade_keys = {"consolidate_taker"} if endpoint == "TradesHistory" else set()
-        valid_trade_mode = endpoint != "TradesHistory" or params.get("consolidate_taker") is False
+        trade_options = _history_read_options(endpoint)
+        trade_keys = set(trade_options)
+        valid_trade_mode = all(params.get(key) is value for key, value in trade_options.items())
         history_read = (
             endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
             and set(params) == ({"ofs"} | trade_keys) and valid_trade_mode
