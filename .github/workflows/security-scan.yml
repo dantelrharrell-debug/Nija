@@ -36,6 +36,11 @@ jobs:
         pip install -r requirements.txt
         pip-audit --desc --format json --output dependency-report.json
 
+    - name: Verify Tornado redirect security and compatibility offline
+      env:
+        NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+      run: python -m tornado.test.runtests tornado.test.web_test.RedirectHandlerTest
+
     - name: Upload dependency report
       uses: actions/upload-artifact@v4.4.3
       if: always()

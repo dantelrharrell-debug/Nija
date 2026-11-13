@@ -54,8 +54,13 @@ This change does not waive GuardDog findings. Exact-release package artifacts
 still require independent source/artifact review: the inspected billing and
 member-broker reports have 41 and 39 issue counts. These are heuristic findings,
 not 80 established vulnerabilities. The dependency vulnerability audit passed
-on this release, but that does not settle the capability findings or certify
-the final production image. The earlier source review in
+on the original release run. A new audit during this repair reported Tornado
+6.6 with CVE-2026-126347 (GHSA-5cjw-f85j-cv6r), identifying 6.6.1 as fixed.
+This patch updates the exact pin and adds the upstream RedirectHandler suite
+to CI. Official release notes confirm additional redirect fixes:
+https://www.tornadoweb.org/en/stable/releases/v6.6.1.html . A fresh full resolved
+audit remains required; a pin change alone is not a clean audit. It does not
+settle the capability findings or certify the production image. The earlier review in
 `guarddog-findings-20261112.md` also documents platform-wheel discrepancies.
 No all-findings exception or successful scan result is fabricated here.
 
