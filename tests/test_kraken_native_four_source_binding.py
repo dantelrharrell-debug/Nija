@@ -116,6 +116,52 @@ def test_actual_four_native_constructors_reach_the_canonical_registry_without_re
     assert attestation._COLLECTOR is None
 
 
+def test_real_risk_publisher_reaches_canonical_provider_and_revocation_denies(four):
+    """Exercise the actual publisher through the existing canonical constructor."""
+    import importlib.util
+    from pathlib import Path
+    import time
+    from bot.kraken_account_risk_publisher import ReviewedAccountRiskPublisher
+
+    spec = importlib.util.spec_from_file_location(
+        "native_risk_publication_fixture",
+        Path(__file__).resolve().parents[1] / "bot/tests/test_kraken_risk_evidence.py",
+    )
+    fixtures = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixtures)
+    trust = four.wiring.signed.trust
+    value = fixtures.snapshot(pin=trust.api_key_sha256)
+    now = time.time()
+    for row in (value, value["capital"], value["exposure"], value["policy"]):
+        row["observed_at_epoch"] = now - 1
+    owner = Mock(side_effect=lambda candidate: candidate == value)
+    publisher = ReviewedAccountRiskPublisher(
+        account_scope="platform:kraken", approved_api_key_sha256=trust.api_key_sha256,
+        reviewed_provider_id=trust.reviewed_provider_ids["risk_limits"],
+        reviewed_snapshot_source_id=value["source_id"],
+        reviewed_record_source_ids=fixtures.BINDINGS,
+        authenticate_current=owner, minimum_revision=0, independently_reviewed=True,
+    )
+    risk_source = four_root.ReviewedRiskSource(
+        source=publisher, source_id=value["source_id"], record_source_ids=fixtures.BINDINGS,
+    )
+    four.wiring.resolve.return_value = replace(
+        four.sources, native_four_sources=replace(four.bundle, risk=risk_source),
+    )
+    binding = invoke(four)
+    owner.assert_not_called()
+    publisher.publish(value)
+    observed = binding.providers["risk_limits"]()
+    assert observed["verified"] is True
+    assert observed["authorizes_orders"] is False
+    assert observed["observed_at_epoch"] == now - 1
+    owner.side_effect = None
+    owner.return_value = False
+    with pytest.raises(four_root.NativeFourSourceBindingDenied):
+        binding.providers["risk_limits"]()
+    assert attestation._COLLECTOR is None
+
+
 def test_combined_native_four_and_pair_construct_all_thirteen_without_external_six_callbacks(four, native):
     w = four.wiring
     w.resolve.return_value = replace(
