@@ -146,15 +146,31 @@ def _raw_submission_timestamp(payload: dict[str, Any]) -> object:
 
 
 def _source_event_id(payload: dict[str, Any]) -> str:
-    """Use an immutable upstream submission ID when supplied; never invent one."""
+    """Keep one consistent, explicit upstream ID across recognized wrappers.
+
+    Do not use legacy internal_id: it can be blank or refer to a different
+    resource. Never silently replace conflicting identifiers with a digest.
+    """
+    observed: set[str] = set()
+    keys = ("event_id", "eventId", "submission_id", "submissionId",
+            "source_event_id", "sourceEventId")
     for source in _lead_field_sources(payload):
-        for key in ("event_id", "eventId", "submission_id", "submissionId"):
-            value = source.get(key)
-            if isinstance(value, (str, int)) and not isinstance(value, bool):
-                cleaned = _clean_text(value, max_length=160)
-                if cleaned:
-                    return cleaned
-    return ""
+        for key in keys:
+            if key not in source:
+                continue
+            value = source[key]
+            if value is None or value == "":
+                continue
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                raise ValueError("Upstream submission ID must be scalar")
+            if len(str(value).strip()) > 160:
+                raise ValueError("Upstream submission ID is too long")
+            cleaned = _clean_text(value, max_length=160)
+            if cleaned:
+                observed.add(cleaned)
+                if len(observed) > 1:
+                    raise ValueError("Conflicting upstream submission IDs")
+    return next(iter(observed), "")
 
 
 def _stable_event_fallback(payload: dict[str, Any], serialized: str) -> str:
@@ -931,7 +947,7 @@ def handle_lead_intake_post(handler: Any) -> bool:
     if claim_token:
         uncertain = False
         try:
-            forwarded = _forward({**canonical, "event_id": forward_key})
+            forwarded = _forward({**canonical, "event_id": forward_key, "send_acknowledgment": False})
         except Exception as exc:
             # The canonical lead is already persisted; never expose webhook
             # URL, provider credentials, or payloads in error logs.
