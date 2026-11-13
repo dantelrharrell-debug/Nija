@@ -18,6 +18,7 @@ import time
 from typing import Any, Iterable
 
 from .durable_recovery_state import write_recovery_state
+from .kraken_history_response_journal import PrivateHistoryResponseJournal
 from scripts.nija_kraken_readonly_history_collector_v441 import (
     _broker_account_scope, collect_from_existing_broker, history_failure_diagnostic,
 )
@@ -201,6 +202,7 @@ def collect_requested_history(
             })
 
         try:
+            journal = PrivateHistoryResponseJournal(root, identity, request["account_scope"])
             evidence = collect_from_existing_broker(
                 selected[0], account_scope=request["account_scope"],
                 monitoring_category=monitoring_category,
@@ -208,6 +210,7 @@ def collect_requested_history(
                 include_open_orders=True,
                 use_cursor=request.get("use_cursor", False),
                 on_private_read=progress,
+                on_private_response=journal.append,
             )
         except Exception as exc:
             # Persist only fixed collector-owned diagnostic labels.
