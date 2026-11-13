@@ -17,9 +17,9 @@ class FakeStripe:
         self.price_override = {}
 
     def retrieve_price(self, price_id):
-        return dict({"id":price_id,"livemode":False,"active":True,"type":"one_time",
-                     "currency":"usd","unit_amount":100,"product":"prod_approved_test"},
-                    **self.price_override)
+        return {"id":price_id,"livemode":False,"active":True,"type":"one_time",
+                "currency":"usd","unit_amount":100,"product":"prod_approved_test",
+                **self.price_override}
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
