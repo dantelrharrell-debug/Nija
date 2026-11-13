@@ -402,7 +402,7 @@ SENTRY_DSN=https://xxx@sentry.io/xxx
 
 # Exchange API Keys (for master account - optional)
 COINBASE_API_KEY=organizations/xxx/apiKeys/xxx
-COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----
+# Set COINBASE_API_SECRET privately to the complete downloaded PEM value.
 KRAKEN_MASTER_API_KEY=xxx
 KRAKEN_MASTER_API_SECRET=xxx
 ```

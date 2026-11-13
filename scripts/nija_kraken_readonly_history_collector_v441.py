@@ -401,6 +401,9 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  include_open_orders: bool = False,
                                  use_cursor: bool = False,
                                  on_private_read: Callable[[str, str], None] | None = None,
+                                 on_private_response: Callable[
+                                     [str, Mapping[str, Any], float, float], None,
+                                 ] | None = None,
                                  ) -> dict[str, Any]:
     """Reuse Kraken read controls without relabeling another software account."""
     def require_matching_scope() -> None:
@@ -409,6 +412,8 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
 
     if on_private_read is not None and not callable(on_private_read):
         raise ValueError("Read progress callback must be callable")
+    if on_private_response is not None and not callable(on_private_response):
+        raise ValueError("Response archive callback must be callable")
     require_matching_scope()
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call) or monitoring_category is None:
@@ -443,11 +448,13 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         # the next cursor page. Call the existing client exactly once per read.
         if on_private_read is not None:
             on_private_read(endpoint, "started")
+        started = time.time() if on_private_response is not None else None
         try:
             payload = private_call(
                 endpoint, cursor_read_params(broker, endpoint, params),
                 category=monitoring_category,
             )
+            finished = time.time() if on_private_response is not None else None
         except Exception:
             if on_private_read is not None:
                 on_private_read(endpoint, "raised")
@@ -456,6 +463,14 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
             # Returned describes transport completion, never broker acceptance.
             on_private_read(endpoint, "returned")
         require_matching_scope()
+        if (on_private_response is not None and isinstance(payload, Mapping)
+                and payload.get("error") == [] and isinstance(payload.get("result"), Mapping)):
+            # Archive before the next read, even if later pagination or final
+            # consistency checks fail. Never archive free-text API errors.
+            # Detach twice: a callback cannot change what the collector sees.
+            frozen = json.loads(json.dumps(dict(payload), allow_nan=False))
+            on_private_response(endpoint, json.loads(json.dumps(frozen["result"])), started, finished)
+            return frozen
         return payload
 
     return collect_history(

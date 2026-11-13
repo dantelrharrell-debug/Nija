@@ -94,14 +94,12 @@ Coinbase uses the **Coinbase Developer Platform (CDP)** Cloud API Key format.
 
 ```
 COINBASE_API_KEY=organizations/{org_id}/apiKeys/{key_id}
-COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----
-MHQCAQEEIAbc...
------END EC PRIVATE KEY-----
 ```
 
-> **Railway tip:** When pasting a multi-line PEM key into Railway Variables,
-> paste it exactly as-is with real newlines. Do **not** replace newlines with
-> `\n` — that causes 401 Unauthorized errors.
+Set `COINBASE_API_SECRET` privately in Render to the complete PEM value
+downloaded from Coinbase, including its header, body, footer and real newlines.
+Do not copy a truncated documentation example into production or commit the
+credential to the repository.
 
 ### Optional variables
 

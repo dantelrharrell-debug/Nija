@@ -32,6 +32,7 @@ def compose_authenticated_kraken_collector_sources(
     reviewed_source_owners: Mapping[str, str],
     monitoring_category: Any,
     independently_reviewed: bool = False,
+    identity_method: str = "response_echo",
 ) -> Mapping[str, Callable[[], Mapping[str, Any]]]:
     """Compose, but never register, all thirteen account-scoped sources.
 
@@ -74,7 +75,7 @@ def compose_authenticated_kraken_collector_sources(
         independent_positions=independent_positions,
         independent_remaining=sources,
         monitoring_category=monitoring_category,
-        independently_reviewed=True,
+        independently_reviewed=True, identity_method=identity_method,
     )
     if (not isinstance(providers, Mapping)
             or set(providers) != set(REQUIRED)
