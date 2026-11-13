@@ -121,6 +121,22 @@ in memory, as did both restored SQLite databases. No plaintext files were writte
 must remain excluded from applicant totals. No historical record was replayed,
 relabelled, re-associated or marked delivered by this work.
 
+## Additional isolated reconciliation
+
+All 87 stored event keys are unique; intake/CRM joins have zero missing rows in
+both directions. All 87 payloads parse as JSON and contain a recognized source
+timestamp field. None contains a recognized upstream submission-ID field. The
+existing database identifiers were preserved; immutable upstream ownership is
+not certified by those identifiers alone.
+
+Recognized explicit consent-field presence in saved payloads: email 0, SMS 1,
+AI voice 0. Presence alone is not affirmative or legally sufficient consent;
+no field or history was synthesized. Missing explicit evidence keeps outreach
+uncertified. The 12 forwarding records are all pending, with zero sending/sent/
+uncertain records. CRM contains 86 synced states and one other state; a local
+synced label is not independent provider acknowledgment evidence. This analysis
+ran only against the off-host restored snapshots and changed no records.
+
 ## Reusable isolated verification
 
 On an isolated host with the approved recovery key and public certificate,
