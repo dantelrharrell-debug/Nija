@@ -18,8 +18,8 @@ const makeMock=(options={})=>{
     count++;
     if(options.drift && count>REQUIRED_COLLECTIONS.length) items[0].event_id='changed';
     const total=options.omitted?2:1;
-    const totalPages=options.omitted?1:1;
-    const result={items,page,totalPages,totalItems:total};
+    const totalPages=options.badPages?0:1;
+    const result={items,page,perPage:200,totalPages,totalItems:total};
     return {status:200,headers:{get:()=> 'application/json'},json:async()=>result};
   };
   return {fetchImpl,log};
@@ -42,6 +42,9 @@ test('fails closed on redirects',async()=>{
 });
 test('fails closed on missing rows',async()=>{
   await assert.rejects(collectSnapshot(params(makeMock({omitted:true}))),/omitted rows/);
+});
+test('rejects inconsistent page metadata rather than silently certifying data',async()=>{
+  await assert.rejects(collectSnapshot(params(makeMock({badPages:true}))),/Incomplete or malformed/);
 });
 test('fails closed if content drifts between passes',async()=>{
   await assert.rejects(collectSnapshot(params(makeMock({drift:true}))),/Collection drift/);
@@ -68,6 +71,10 @@ test('rejects archive ciphertext tampering',async()=>{
   const p=Buffer.from('secret');const enc=encryptSnapshot(p,publicKey.export({type:'spki',format:'pem'}));
   enc.ciphertext='AAAA';
   assert.throws(()=>verifyEncryptedExport(enc,privateKey.export({type:'pkcs8',format:'pem'})));
+});
+test('rejects private key in place of encryption recipient public key',()=>{
+  const {privateKey}=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
+  assert.throws(()=>encryptSnapshot(Buffer.from('x'),privateKey.export({type:'pkcs8',format:'pem'})),/not be a private key/);
 });
 test('rejects non-RSA cert',()=>{
   const {publicKey}=crypto.generateKeyPairSync('ec',{namedCurve:'prime256v1'});
