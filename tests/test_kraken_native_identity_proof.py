@@ -152,3 +152,96 @@ def test_uninstrumented_gateway_cannot_select_native_proof():
     broker._kraken_private_call = lambda *_, **__: {"error": [], "result": {"iban": ACCOUNT}}
     with pytest.raises(KrakenIdentityDenied, match="native_credential_binding_unverified"):
         provider(broker, identity_method="native_signed_request_v1")()
+
+
+def permission_provider(broker, **kwargs):
+    """Use independent account and credential pins for permission evidence."""
+    from bot.kraken_authenticated_key_info_v477 import make_kraken_key_permission_provider
+    return make_kraken_key_permission_provider(
+        broker, account_scope="platform:kraken", approved_iban_sha256=_fingerprint_iban(ACCOUNT),
+        approved_api_key_sha256=hashlib.sha256(PUBLIC.encode()).hexdigest(),
+        reviewed_provider_id="offline-native-permission", monitoring_category=object(),
+        identity_method="native_signed_request_v1", **kwargs,
+    )
+
+
+def permission_row():
+    """Return a complete unrestricted read permission response, without echoes."""
+    from bot.kraken_authenticated_key_info_v477 import REQUIRED_READ_PERMISSIONS
+    return {"iban": ACCOUNT, "permissions": sorted(REQUIRED_READ_PERMISSIONS),
+            "queryFrom": "0", "queryTo": "0"}
+
+
+def test_native_permissions_require_genuine_signature_and_unrestricted_history():
+    broker, calls = rig(row=permission_row())
+    result = permission_provider(broker)()
+    assert result["verified"] is True
+    assert calls == [("GetApiKeyInfo", {})]
+    assert all(value not in repr(result) for value in (PUBLIC, SECRET, ACCOUNT))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("iban", "OTHER ACCOUNT"), ("permissions", ["query-funds"]),
+    ("queryFrom", "1"), ("queryTo", "1"), ("queryFrom", None),
+    ("validUntil", None), ("validUntil", "1"),
+    ("apiKey", "wrong-identifier"),  # pragma: allowlist secret (offline negative fixture)
+])
+def test_native_permissions_keep_account_permissions_windows_and_present_fields_strict(field, value):
+    from bot.kraken_authenticated_key_info_v477 import KeyInfoEvidenceDenied
+    row = permission_row()
+    row[field] = value
+    broker, _ = rig(row=row)
+    with pytest.raises(KeyInfoEvidenceDenied):
+        permission_provider(broker)()
+
+
+def ledger_identity(broker, tmp_path, **kwargs):
+    """Exercise the ledger's real frozen transport wrapper without SQLite writes."""
+    from bot.kraken_ledger_evidence import ReviewedLedgerBinding, _identity, _private_reader
+    import time
+    binding = ReviewedLedgerBinding(
+        broker=broker, account="platform:kraken", provider_id="offline-native-ledger",
+        api_key_sha256=hashlib.sha256(PUBLIC.encode()).hexdigest(),
+        account_sha256=_fingerprint_iban(ACCOUNT), ledger_path=tmp_path / "absent.sqlite3",
+        persistent_root=tmp_path, monitoring_category=object(),
+        identity_method="native_signed_request_v1", **kwargs,
+    )
+    _identity(_private_reader(binding), binding, time.time())
+    assert not binding.ledger_path.exists()
+
+
+def test_native_ledger_identity_uses_the_same_actual_signature_proof(tmp_path):
+    broker, calls = rig()
+    ledger_identity(broker, tmp_path)
+    assert calls == [("GetApiKeyInfo", {})]
+
+
+@pytest.mark.parametrize("reader", ["permission", "ledger"])
+@pytest.mark.parametrize("failure", ["signature", "wrong_account", "expiry", "echo", "gateway", "slow"])
+def test_native_readers_cannot_accept_unproven_or_stale_identity(reader, failure, tmp_path, monkeypatch):
+    import bot.kraken_identity_read_timing as timing
+    from bot.kraken_authenticated_key_info_v477 import KeyInfoEvidenceDenied
+    from bot.kraken_ledger_evidence import KrakenLedgerDenied
+    row = permission_row()
+    if failure == "expiry":
+        row["validUntil"] = "1"
+    if failure == "echo":
+        row["apiKey"] = "wrong-identifier"  # pragma: allowlist secret (offline negative fixture)
+
+    def change(api, response, parsed):
+        if failure == "signature":
+            response.request.headers["API-Sign"] = "invalid"
+        if failure == "wrong_account":
+            parsed["result"]["iban"] = "OTHER ACCOUNT"
+            response._content = json.dumps(parsed).encode()
+    broker, _ = rig(change, row=row)
+    if failure == "gateway":
+        broker._kraken_private_call = lambda *_, **__: {"error": [], "result": row}
+    if failure == "slow":
+        ticks = iter([100.0, 162.0, 162.0])
+        monkeypatch.setattr(timing.time, "monotonic", lambda: next(ticks))
+    with pytest.raises((KeyInfoEvidenceDenied, KrakenLedgerDenied)):
+        if reader == "permission":
+            permission_provider(broker)()
+        else:
+            ledger_identity(broker, tmp_path)

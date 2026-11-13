@@ -188,3 +188,28 @@ def test_untrusted_receipts_do_not_sample_sources_or_replace_collector(wiring, m
     )
     sampled.assert_not_called()
     assert attestation._COLLECTOR is sentinel
+
+
+def test_explicit_native_method_reaches_all_broker_readers_without_io(wiring, monkeypatch):
+    """The reviewed source selects one mode throughout the actual factory chain."""
+    from bot import kraken_reviewed_producer_bundle_v483 as bundle
+    from bot import kraken_collector_composition_v487 as composition
+    wiring.resolve.return_value = replace(wiring.sources, identity_method="native_signed_request_v1")
+    spies = []
+    for module, name in (
+        (bundle, "make_kraken_key_permission_provider"),
+        (bundle, "make_kraken_account_identity_provider"),
+        (bundle, "make_kraken_balance_provider"),
+        (bundle, "make_kraken_open_order_reconciliation_provider"),
+        (composition, "make_kraken_protective_exit_provider"),
+    ):
+        spy = Mock(wraps=getattr(module, name))
+        monkeypatch.setattr(module, name, spy)
+        spies.append(spy)
+    result = invoke(wiring)
+    assert len(result.providers) == 13
+    for spy in spies:
+        assert spy.call_args.kwargs["identity_method"] == "native_signed_request_v1"
+    assert spies[0].call_args.kwargs["approved_iban_sha256"] == wiring.signed.trust.account_iiban_sha256
+    wiring.private_call.assert_not_called()
+    assert attestation._COLLECTOR is None

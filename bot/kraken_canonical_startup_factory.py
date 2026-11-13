@@ -50,7 +50,11 @@ class ReviewedCanonicalKrakenSources:
     native_four_sources: ReviewedNativeFourSources | None = field(default=None, repr=False)
     review_native_four_sources: Callable | None = field(default=None, repr=False)
 
+    identity_method: str = "response_echo"
+
     def __post_init__(self) -> None:
+        if self.identity_method not in {"response_echo", "native_signed_request_v1"}:
+            raise CanonicalKrakenStartupDenied("identity_method_invalid")
         for name in ("independent_remaining", "reviewed_source_owners", "receipts"):
             value = getattr(self, name)
             if not isinstance(value, Mapping):
@@ -117,6 +121,8 @@ def make_canonical_kraken_startup_factory(
                 if (set(remaining) != residual or any(not callable(p) for p in remaining.values())
                         or len({id(p) for p in remaining.values()}) != len(residual)):
                     raise CanonicalKrakenStartupDenied("mixed_native_and_external_sources_denied")
+                if sources.native_four_sources.ledger_binding.identity_method != sources.identity_method:
+                    raise CanonicalKrakenStartupDenied("ledger_identity_method_mismatch")
                 native = compose_reviewed_native_four_sources(
                     sources=sources.native_four_sources, review_binding=sources.review_native_four_sources,
                     manager=manager, strategy=strategy, broker=broker, trust=trust,
@@ -137,7 +143,7 @@ def make_canonical_kraken_startup_factory(
                     monitoring_category=sources.monitoring_category,
                     kill_switch_binding=sources.kill_switch_binding,
                     review_kill_switch_binding=sources.review_kill_switch_binding,
-                    independently_reviewed=True,
+                    independently_reviewed=True, identity_method=sources.identity_method,
                 )
             remaining = validate_six_source_bindings(
                 remaining,
@@ -153,6 +159,7 @@ def make_canonical_kraken_startup_factory(
                 independent_remaining=remaining,
                 reviewed_source_owners=sources.reviewed_source_owners,
                 monitoring_category=sources.monitoring_category, independently_reviewed=True,
+                identity_method=sources.identity_method,
             )
             if review_sources(sources) is not True or _canonical_broker(manager) is not broker:
                 raise CanonicalKrakenStartupDenied("runtime_source_binding_changed")

@@ -159,6 +159,8 @@ class ReviewedLedgerBinding:
     ledger_path: Path
     persistent_root: Path
     monitoring_category: Any
+    # Included in the exact binding reviewed by review_binding; never auto-selected.
+    identity_method: str = "response_echo"
 
 
 def _require(condition: bool, code: str) -> None:
@@ -293,10 +295,32 @@ def _private_reader(binding: ReviewedLedgerBinding) -> Callable:
     return read
 
 
-def _identity(read: Callable, binding: ReviewedLedgerBinding, now: float) -> None:
-    row = read("GetApiKeyInfo", {})
+def _identity(
+    read: Callable, binding: ReviewedLedgerBinding, now: float,
+    *, clock: Callable[[], float] = time.time,
+) -> None:
+    native = binding.identity_method == "native_signed_request_v1"
+    if native:
+        from bot.kraken_identity_read_timing import capture_identity_read
+        api = getattr(binding.broker, "api", None)
+        with capture_identity_read(api, clock, inspect_native_identity=True) as timing:
+            row = read("GetApiKeyInfo", {})
+        finished = clock()
+        _require(getattr(binding.broker, "api", None) is api and timing.attempts == 1
+                 and timing.native_key_digest is not None
+                 and hmac.compare_digest(timing.native_key_digest, binding.api_key_sha256),
+                 "native_credential_binding_unverified")
+        try:
+            timing.observation_start(timing.response, now, finished, MAX_AGE)
+        except ValueError:
+            raise KrakenLedgerDenied("identity_read_invalid_or_stale") from None
+        _require(isinstance(timing.response, Mapping) and row == timing.response.get("result"),
+                 "identity_response_changed")
+        now = finished
+    else:
+        row = read("GetApiKeyInfo", {})
     key, iban = row.get("apiKey"), row.get("iban")
-    _require(isinstance(key, str) and 0 < len(key) <= 512
+    _require(((native and "apiKey" not in row) or (isinstance(key, str) and 0 < len(key) <= 512))
              and isinstance(iban, str) and 0 < len(iban) <= 128
              and all(32 <= ord(char) < 127 for char in iban), "authenticated_identity_invalid")
     # Account-registry protocol: SHA-256 fingerprints a high-entropy Kraken API
@@ -305,15 +329,17 @@ def _identity(read: Callable, binding: ReviewedLedgerBinding, now: float) -> Non
     # protocol shared with the existing v477/v480 reviewed identity providers.
     # CodeQL py/weak-sensitive-data-hashing requires external false-positive
     # review here; do not hide the alert or substitute a different hash scheme.
-    key_hash = hashlib.sha256(key.encode()).hexdigest()
+    key_hash = (timing.native_key_digest if native and "apiKey" not in row
+                else hashlib.sha256(key.encode()).hexdigest())
     account_hash = hashlib.sha256(("kraken\0" + iban.strip().upper()).encode()).hexdigest()
     _require(hmac.compare_digest(key_hash, binding.api_key_sha256)
              and hmac.compare_digest(account_hash, binding.account_sha256),
              "authenticated_identity_pin_mismatch")
     expiry = row.get("validUntil")
-    _require(not isinstance(expiry, bool) and isinstance(expiry, (str, int))
+    _require((native and "validUntil" not in row) or (
+             not isinstance(expiry, bool) and isinstance(expiry, (str, int))
              and len(str(expiry)) <= 20 and str(expiry).isdigit()
-             and (int(expiry) == 0 or int(expiry) > now), "authenticated_key_expired_or_invalid")
+             and (int(expiry) == 0 or int(expiry) > now)), "authenticated_key_expired_or_invalid")
 
 
 def _collect(read: Callable, max_pages: int) -> dict:
@@ -597,6 +623,8 @@ def make_kraken_ledger_evidence_provider(
     try:
         _require(type(binding) is ReviewedLedgerBinding and callable(review_binding)
                  and review_binding(binding) is True, "explicit_reviewed_binding_required")
+        _require(binding.identity_method in {"response_echo", "native_signed_request_v1"},
+                 "identity_method_invalid")
         _require(_canonical_scope(binding.account) and _identifier(binding.provider_id)
                  and type(max_pages) is int and 1 <= max_pages <= MAX_PAGES
                  and callable(clock), "binding_or_read_budget_invalid")
@@ -616,9 +644,9 @@ def make_kraken_ledger_evidence_provider(
             db, path, file_before = _open(binding)
             version = db.execute("PRAGMA data_version").fetchone()[0]
             local = _snapshot(db, binding, clock())
-            _identity(read, binding, clock())
+            _identity(read, binding, clock(), clock=clock)
             observed = _collect(read, max_pages)
-            _identity(read, binding, clock())
+            _identity(read, binding, clock(), clock=clock)
             # Preserve exact small fees/partial fills even beside large balances.
             with localcontext() as decimal_context:
                 decimal_context.prec = 256
