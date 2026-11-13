@@ -103,9 +103,14 @@ class CommerceIntegrationTests(unittest.TestCase):
 
     def test_requires_adult_attestation(self):
         run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
-        with self.assertRaisesRegex(CommerceDenied,"adult_identity_required"):
-            self.service.start_checkout(owner_id="adult-1",adult_attested=False,
-                canonical_run=run,authoritative_score={"score":70},
-                success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        for attestation in (False, None, 1, "true"):
+            with self.subTest(attestation=attestation):
+                with self.assertRaisesRegex(CommerceDenied,"adult_identity_required"):
+                    self.service.start_checkout(owner_id="adult-1",adult_attested=attestation,
+                        canonical_run=run,authoritative_score={"score":70},
+                        success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_runs").fetchone()[0], 0)
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_reservations").fetchone()[0], 0)
+        self.assertIsNone(self.stripe.session)
 
 if __name__=="__main__": unittest.main()

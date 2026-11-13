@@ -22,6 +22,9 @@ class Tiq72TestCommerce:
         assert_test_mode_configuration()
         if not isinstance(owner_id, str) or not owner_id.strip():
             raise CommerceDenied("authenticated_owner_required")
+        # Reject ineligible checkout before persisting any completed-run data.
+        if adult_attested is not True:
+            raise CommerceDenied("adult_identity_required")
         run_id = self.store.save_run(owner_id, "v515-72-decisions",
                                      canonical_run, authoritative_score)
         reservation_id = self.store.reserve(run_id, owner_id, adult_attested)
