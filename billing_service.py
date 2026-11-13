@@ -53,6 +53,8 @@ _STRIPE_WEBHOOK_EVENTS = frozenset({
     "invoice.paid",
     "invoice.payment_succeeded",
     "invoice.payment_failed",
+    "charge.refunded",
+    "charge.dispute.created",
 })
 
 
@@ -899,10 +901,12 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             if event_type not in {
                 "checkout.session.completed", "checkout.session.async_payment_succeeded",
                 "checkout.session.async_payment_failed", "checkout.session.expired",
+                "charge.refunded", "charge.dispute.created",
             }:
                 return jsonify({"received": True, "ignored": True})
             if (_obj_value(event_obj, "livemode") is not False or
-                    _obj_value(event_obj, "payment_link") != expected[0]):
+                    (event_type.startswith("checkout.session.") and
+                     _obj_value(event_obj, "payment_link") != expected[0])):
                 return jsonify({"received": True, "ignored": True})
 
         if not _store().claim_event(event_id, event_type):

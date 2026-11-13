@@ -136,6 +136,7 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
     state = {"refunded": False}
     stripe = fake_stripe()
     charge = stripe.Charge.retrieve.return_value
+    charge["id"] = "ch_test_foundations"
     def retrieve_charge(_id):
         charge["refunded"] = state["refunded"]
         charge["amount_refunded"] = 9900 if state["refunded"] else 0
@@ -214,6 +215,12 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
     assert client.get("/course-portal/claim?token=" + token,
                       base_url="https://localhost").status_code == 403
     state["refunded"] = True
+    event.update(id="evt_test_sandbox_refund", type="charge.refunded",
+                 data={"object": {"id": "ch_test_foundations", "livemode": False}})
+    reversal = client.post("/api/billing/webhook", data=b"synthetic-verified",
+                           headers={"Stripe-Signature": "sandbox-valid"})
+    assert reversal.status_code == 200
+    assert app.config["COURSE_LEDGER"].get("cs_test_foundations_sandbox")["granted"] is False
     assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf",
                       base_url="https://localhost").status_code == 403
     assert len(sent) == 1

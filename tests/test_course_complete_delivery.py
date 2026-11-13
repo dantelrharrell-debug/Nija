@@ -41,7 +41,7 @@ def test_signed_course_checkout_sends_single_claim_and_revokes_on_refund(monkeyp
     def session(_sid, **_kwargs):
         assert _sid == session_id
         return {
-            "id": session_id,
+            "id": session_id, "livemode": True,
             "payment_link": COURSE_LINK,
             "mode": "payment",
             "status": "complete" if state["paid"] else "open",
@@ -59,11 +59,15 @@ def test_signed_course_checkout_sends_single_claim_and_revokes_on_refund(monkeyp
         if signature != "valid-test-signature":
             raise ValueError("invalid signed event")
         assert raw_payload == b"synthetic-signed-event"
+        if state["refunded"]:
+            return {"id": "evt_test_foundations_refund", "livemode": True,
+                    "type": "charge.refunded", "created": 1780000001,
+                    "data": {"object": {"id": "ch_test_foundations", "livemode": True}}}
         return {
             "id": "evt_test_foundations_paid",
             "type": "checkout.session.completed",
             "created": 1780000000,
-            "data": {"object": {"id": session_id, "payment_link": COURSE_LINK}},
+            "data": {"object": {"id": session_id, "livemode": True, "payment_link": COURSE_LINK}},
         }
 
     stripe = SimpleNamespace(
@@ -80,11 +84,12 @@ def test_signed_course_checkout_sends_single_claim_and_revokes_on_refund(monkeyp
             ),
         ),
         PaymentIntent=SimpleNamespace(retrieve=lambda _sid: {
-            "status": "succeeded", "amount_received": 9900,
+            "livemode": True, "status": "succeeded", "amount_received": 9900,
             "currency": "usd", "latest_charge": "ch_test_foundations",
         }),
         Charge=SimpleNamespace(retrieve=lambda _sid: {
-            "paid": True, "status": "succeeded", "currency": "usd",
+            "id": "ch_test_foundations",
+            "livemode": True, "paid": True, "status": "succeeded", "currency": "usd",
             "amount": 9900, "payment_intent": "pi_test_foundations",
             "refunded": state["refunded"],
             "amount_refunded": 9900 if state["refunded"] else 0,
@@ -148,6 +153,10 @@ def test_signed_course_checkout_sends_single_claim_and_revokes_on_refund(monkeyp
 
     # Refund verification revokes access without changing NIJA subscriptions.
     state["refunded"] = True
+    reversal = client.post("/api/billing/webhook", data=b"synthetic-signed-event",
+                           headers={"Stripe-Signature": "valid-test-signature"})
+    assert reversal.status_code == 200
+    assert app.config["COURSE_LEDGER"].get(session_id)["granted"] is False
     assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf",
                       base_url="https://localhost").status_code == 403
     assert app.config["COURSE_LEDGER"].get(session_id)["granted"] is False
