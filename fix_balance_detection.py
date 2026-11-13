@@ -78,7 +78,7 @@ def test_coinbase_credentials() -> Tuple[bool, Optional[str], Optional[str]]:
     if not api_key.startswith("organizations/"):
         print_warning("API_KEY format unusual (expected 'organizations/...')")
     else:
-        print_success(f"API_KEY format valid: {api_key[:40]}...")
+        print_success("API_KEY format valid")
     
     if "BEGIN EC PRIVATE KEY" not in api_secret:
         print_warning("API_SECRET doesn't look like PEM key (missing 'BEGIN EC PRIVATE KEY')")
@@ -120,8 +120,8 @@ def test_coinbase_connection(api_key: str, api_secret: str) -> Tuple[bool, Optio
         
         return True, client
         
-    except Exception as e:
-        print_error(f"API connection failed: {e}")
+    except Exception:
+        print_error("API connection failed; provider details withheld")
         print_warning("This usually means:")
         print_warning("  1. Invalid API credentials")
         print_warning("  2. API key lacks permissions")
@@ -196,9 +196,9 @@ def test_coinbase_accounts(client) -> Dict:
         print_success(f"✅ Total Balance: ${total:.2f} (USD: ${usd_total:.2f}, USDC: ${usdc_total:.2f})")
         return {"status": "success", "count": len(accounts), "total": total, "usd": usd_total, "usdc": usdc_total}
         
-    except Exception as e:
-        print_error(f"Account access failed: {e}")
-        return {"status": "error", "error": str(e)}
+    except Exception:
+        print_error("Account access failed; provider details withheld")
+        return {"status": "error", "error": "account_access_failed"}
 
 
 def test_kraken_credentials() -> Tuple[bool, Optional[str], Optional[str]]:
@@ -213,8 +213,8 @@ def test_kraken_credentials() -> Tuple[bool, Optional[str], Optional[str]]:
         print_info("Optional - only required if using Kraken platform trading")
         return False, None, None
     
-    print_success(f"Kraken API key found: {kraken_key[:20]}...")
-    print_success(f"Kraken API secret found ({len(kraken_secret)} chars)")
+    print_success("Kraken API key configured")
+    print_success("Kraken API secret configured")
     
     return True, kraken_key, kraken_secret
 
