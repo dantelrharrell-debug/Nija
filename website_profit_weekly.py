@@ -25,7 +25,7 @@ def _decimal(value: Any) -> Decimal | None:
     return result if result.is_finite() else None
 
 
-def summarize_week(days: list[dict[str, Any]], end: date) -> dict[str, Any]:
+def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: dict[str, Any] | None = None) -> dict[str, Any]:
     """Only return certified totals when seven distinct complete dates are present.
 
     The calling trusted process must verify evidence signatures independently.
@@ -53,7 +53,7 @@ def summarize_week(days: list[dict[str, Any]], end: date) -> dict[str, Any]:
             continue
         totals[field] = sum(values, Decimal(0))
         result[field] = int(totals[field]) if field in COUNTS else str(totals[field])
-    if len(totals) == len(FIELDS):
+    # Unique persons cannot be calculated by summing daily unique counts.\n    # Accept only independently reconciled, period-wide deduplicated counts.\n    for field in ("unique_visitors", "qualified_leads", "waitlist_signups"):\n        totals.pop(field, None)\n        result[field] = None\n        if weekly_unique_counts and weekly_unique_counts.get("period_start") == result["start"] and weekly_unique_counts.get("period_end") == result["end"] and weekly_unique_counts.get("certified") is True and weekly_unique_counts.get("source_reconciled") is True:\n            value = _decimal(weekly_unique_counts.get(field))\n            if value is not None and value >= 0 and value == value.to_integral_value():\n                totals[field] = value\n                result[field] = int(value)\n    if len(totals) == len(FIELDS):
         result["verification_status"] = "VERIFIED"
         profit = totals["attributable_revenue_usd"] - totals["attributable_costs_usd"]
         result["net_profit_usd"] = str(profit)
@@ -66,7 +66,7 @@ def summarize_week(days: list[dict[str, Any]], end: date) -> dict[str, Any]:
     return result
 
 
-def compare_weeks(days: list[dict[str, Any]], last_complete_day: date) -> dict[str, Any]:
+def compare_weeks(days: list[dict[str, Any]], last_complete_day: date, weekly_unique_counts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Compare two non-overlapping seven-day periods without imputing missing days."""
     return {
         "current": summarize_week(days, last_complete_day),
