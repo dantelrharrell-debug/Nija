@@ -78,15 +78,35 @@ def test_exact_source_passes_but_any_payload_or_context_change_denies(tmp_path):
 
 def test_real_scan_wrapper_rejects_changed_review_before_detection(tmp_path):
     source, _ = fixture_review(tmp_path)
-    baseline = json.loads((ROOT / ".secrets.baseline").read_text())
+    baseline = {
+        "version": "1.5.0",
+        "plugins_used": [{"name": "KeywordDetector", "keyword_exclude": ""}],
+        "filters_used": [], "results": {}, "reviewed_context_manifest": MANIFEST,
+    }
     (tmp_path / ".secrets.baseline").write_text(json.dumps(baseline))
-    source.write_text("changed source must remain private\n")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    def commit():
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run([
+            "git", "-c", "user.name=Source review test", "-c", "user.email=fixture@example.invalid",
+            "commit", "-qm", "Isolated review fixture",
+        ], cwd=tmp_path, check=True)
+
+    commit()
     report = tmp_path / "report.json"
-    result = subprocess.run(
-        [sys.executable, str(ROOT / "scripts/run_baseline_secret_scan.py"), "--report", str(report)],
-        cwd=tmp_path, capture_output=True, text=True,
-        env={**os.environ, "NIJA_DEFER_RUNTIME_SITE_HOOKS": "1"}, timeout=30,
-    )
+    env = {k: v for k, v in os.environ.items() if k not in {"GITHUB_SHA", "GITHUB_EVENT_NAME"}}
+    env["NIJA_DEFER_RUNTIME_SITE_HOOKS"] = "1"
+    def invoke():
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts/run_baseline_secret_scan.py"), "--report", str(report)],
+            cwd=tmp_path, capture_output=True, text=True, env=env, timeout=30,
+        )
+
+    assert invoke().returncode == 0
+    report.unlink()
+    source.write_text("changed source must remain private\n")
+    commit()  # A clean committed checkout must still fail its stale review.
+    result = invoke()
     assert result.returncode == 2
     assert json.loads(report.read_text())["outcome"] == "scanner_error"
     assert "changed source must remain private" not in report.read_text() + result.stdout + result.stderr
