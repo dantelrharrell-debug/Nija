@@ -448,3 +448,22 @@ def test_source_trust_maps_copy_caller_data(four):
     records.clear()
     assert operator.operator_public_keys
     assert set(risk.record_source_ids) == {"capital", "exposure", "policy"}
+
+
+def test_mixed_native_ledger_and_account_identity_methods_deny_before_io(four):
+    """No reviewed root can accidentally compose two different identity methods."""
+    four.wiring.resolve.return_value = replace(four.sources, identity_method="native_signed_request_v1")
+    with pytest.raises(root.CanonicalKrakenStartupDenied):
+        invoke(four)
+    assert_no_source_reads(four)
+
+
+def test_consistent_explicit_native_method_constructs_without_reading(four):
+    native_ledger = replace(four.bundle.ledger_binding, identity_method="native_signed_request_v1")
+    bundle = replace(four.bundle, ledger_binding=native_ledger)
+    four.wiring.resolve.return_value = replace(
+        four.sources, native_four_sources=bundle, identity_method="native_signed_request_v1",
+    )
+    binding = invoke(four)
+    assert len(binding.providers) == 13
+    assert_no_source_reads(four)

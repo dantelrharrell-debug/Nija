@@ -18,7 +18,10 @@ CATEGORY = object()
 ORDER = "OABCDE-ABCDE-ABCDEF"
 
 def identity(broker, *, account_scope, approved_iban_sha256,
-             approved_api_key_sha256, reviewed_provider_id, monitoring_category, clock):
+             approved_api_key_sha256, reviewed_provider_id, monitoring_category, clock,
+             identity_method="response_echo"):
+    if identity_method != "response_echo":
+        raise ValueError("fixture_only_supports_strict_identity")
     if approved_iban_sha256 != IBAN or approved_api_key_sha256 != PIN or monitoring_category is not CATEGORY:
         raise ValueError("independently_reviewed_identity_required")
     def observe():
@@ -280,7 +283,7 @@ class TestReadback(unittest.TestCase):
         with self.assertRaises(KrakenOpenOrderDenied):
             self.provider(b, l, reviewed_ledger_provider_id="approved-broker")
         with self.assertRaises(ValueError):
-            self.provider(b, l, approved_api_key_sha256="unreviewed")
+            self.provider(b, l, approved_api_key_sha256="unreviewed")  # pragma: allowlist secret (offline invalid pin fixture)
         b.callback = lambda params: (_ for _ in ()).throw(RuntimeError("secret private credentials"))
         with self.assertRaises(KrakenOpenOrderDenied) as error:
             self.provider(b, l)()

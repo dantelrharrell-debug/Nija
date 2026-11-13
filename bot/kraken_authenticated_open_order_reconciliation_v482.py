@@ -166,6 +166,7 @@ def make_kraken_open_order_reconciliation_provider(
     reviewed_ledger_provider_id: str,
     independent_open_intents: Callable[[], Mapping[str, Any]],
     monitoring_category: Any, clock: Callable[[], float] = time.time,
+    identity_method: str = "response_echo",
 ) -> Callable[[], Mapping[str, Any]]:
     """Match unchanged authenticated OpenOrders to independent ledger intents.
 
@@ -182,7 +183,7 @@ def make_kraken_open_order_reconciliation_provider(
         broker, account_scope=account_scope, approved_iban_sha256=approved_iban_sha256,
         approved_api_key_sha256=approved_api_key_sha256,
         reviewed_provider_id=reviewed_provider_id,
-        monitoring_category=monitoring_category, clock=clock,
+        monitoring_category=monitoring_category, clock=clock, identity_method=identity_method,
     )
 
     def observe() -> Mapping[str, Any]:

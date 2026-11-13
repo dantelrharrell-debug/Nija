@@ -53,6 +53,7 @@ def compose_reviewed_kraken_runtime_sources(
     review_kill_switch_binding: Callable[[ReviewedKillSwitchBinding], bool],
     independently_reviewed: bool = False,
     clock: Callable[[], float] | None = None,
+    identity_method: str = "response_echo",
 ) -> Mapping[str, Callable[[], Mapping[str, Any]]]:
     """Construct the two existing runtime readers and retain four external owners.
 
@@ -91,7 +92,8 @@ def compose_reviewed_kraken_runtime_sources(
             reviewed_provider_id=reviewed_provider_ids["position_sync"],
             reviewed_ledger_provider_id=reviewed_provider_ids["position_ledger_reconciliation"],
             independent_positions=independent_positions,
-            monitoring_category=monitoring_category, independently_reviewed=True, **options,
+            monitoring_category=monitoring_category, independently_reviewed=True,
+            identity_method=identity_method, **options,
         )
     except Exception:
         raise KrakenCollectorBindingDenied("reviewed_runtime_source_construction_failed") from None
@@ -109,6 +111,7 @@ def compose_reviewed_kraken_providers(
     independent_remaining: Mapping[str, Callable[[], Mapping[str, Any]]],
     monitoring_category: Any, independently_reviewed: bool = False,
     clock: Callable[[], float] | None = None,
+    identity_method: str = "response_echo",
     kill_switch_binding: ReviewedKillSwitchBinding | None = None,
     review_kill_switch_binding: Callable[[ReviewedKillSwitchBinding], bool] | None = None,
 ) -> Mapping[str, Callable[[], Mapping[str, Any]]]:
@@ -134,7 +137,7 @@ def compose_reviewed_kraken_providers(
             monitoring_category=monitoring_category,
             kill_switch_binding=kill_switch_binding,
             review_kill_switch_binding=review_kill_switch_binding,
-            independently_reviewed=True, clock=clock,
+            independently_reviewed=True, clock=clock, identity_method=identity_method,
         )
     if (not isinstance(independent_remaining, Mapping)
             or set(independent_remaining) != OTHER_FIELDS
@@ -154,7 +157,7 @@ def compose_reviewed_kraken_providers(
             reviewed_ledger_provider_id=reviewed_provider_ids["position_ledger_reconciliation"],
             independent_open_intents=independent_open_intents,
             monitoring_category=monitoring_category,
-            independently_reviewed=True, **options,
+            independently_reviewed=True, identity_method=identity_method, **options,
         )
         exits = make_kraken_protective_exit_provider(
             broker, account_scope=ACCOUNT,
@@ -163,7 +166,7 @@ def compose_reviewed_kraken_providers(
             reviewed_provider_id=reviewed_provider_ids["protective_exit_readback"],
             reviewed_ledger_provider_id=reviewed_provider_ids["position_ledger_reconciliation"],
             independent_positions=independent_positions,
-            monitoring_category=monitoring_category, **options,
+            monitoring_category=monitoring_category, identity_method=identity_method, **options,
         )
         writer_nonce_providers = make_kraken_writer_nonce_providers(
             broker, account_scope=ACCOUNT,

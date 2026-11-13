@@ -40,7 +40,7 @@ All tiers include:
    ```bash
    # Coinbase
    COINBASE_API_KEY=organizations/YOUR_ORG/apiKeys/YOUR_KEY
-   COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----..."
+   # Set COINBASE_API_SECRET privately to the complete downloaded PEM value.
    
    # Kraken (optional)
    KRAKEN_PLATFORM_API_KEY=your-key

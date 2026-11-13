@@ -80,8 +80,8 @@ def test_coinbase_credentials() -> Tuple[bool, Optional[str], Optional[str]]:
     else:
         print_success("API_KEY format valid")
     
-    if "BEGIN EC PRIVATE KEY" not in api_secret:
-        print_warning("API_SECRET doesn't look like PEM key (missing 'BEGIN EC PRIVATE KEY')")
+    if "BEGIN EC PRIVATE KEY" not in api_secret:  # pragma: allowlist secret (public PEM format marker, no key)
+        print_warning("API_SECRET doesn't look like PEM key (missing 'BEGIN EC PRIVATE KEY')")  # pragma: allowlist secret (public PEM format marker, no key)
         if len(api_secret) < 50:
             print_warning("API_SECRET appears to be raw key, not PEM format")
     else:
@@ -274,8 +274,8 @@ def main():
         print_info("   • Trade ✓")
         print_info("4. Download PEM file")
         print_info("5. Add to .env or environment:")
-        print_info('   export COINBASE_API_KEY="organizations/YOUR-ORG/apiKeys/YOUR-KEY"')
-        print_info('   export COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----\\nYOUR_KEY\\n-----END EC PRIVATE KEY-----"')
+        print_info('   export COINBASE_API_KEY="organizations/YOUR-ORG/apiKeys/YOUR-KEY"')  # pragma: allowlist secret (public placeholder only)
+        print_info('   export COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----\\nYOUR_KEY\\n-----END EC PRIVATE KEY-----"')  # pragma: allowlist secret (public YOUR_KEY placeholder, no private key)
         print_info("6. Run this script again to verify")
     
     # Test Kraken if configured
