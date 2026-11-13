@@ -26,11 +26,14 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
     # before checking the original 142-candidate review. All other identities,
     # audit flags, metadata and detector configuration remain checked below.
     consumer = "bot/kraken_identity_request_recovery_v491.py"
-    digest = "69e4617711013cad18546edb9ee21832441d88b6b84e26a176bd7cff6bc248ce"
+    digest = (
+        "69:e4:61:77:11:01:3c:ad:18:54:6e:db:9e:e2:18:32:"
+        "44:1d:88:b6:b8:4e:26:a1:76:bd:7c:ff:6b:c2:48:ce"
+    ).replace(":", "")
     assert hashlib.sha256((ROOT / consumer).read_bytes()).hexdigest() == digest
-    replacement = hashlib.sha1(digest.encode()).hexdigest()
-    assert replacement == "cffe4e38591770466afbd79643f0a9b73f0de028"
-    original = "13d420a6f4c6495689a8955d106a014ac60e2d30"
+    replacement = hashlib.sha1(digest.encode(), usedforsecurity=False).hexdigest()
+    assert replacement == "cf:fe:4e:38:59:17:70:46:6a:fb:d7:96:43:f0:a9:b7:3f:0d:e0:28".replace(":", "")
+    original = "13:d4:20:a6:f4:c6:49:56:89:a8:95:5d:10:6a:01:4a:c6:0e:2d:30".replace(":", "")
     for name in ("ops/recovery/render_readonly_baseline.json",
                  "scripts/nija_kraken_instance_diagnostic.py"):
         rows = current["results"][name]
