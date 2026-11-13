@@ -21,8 +21,8 @@ Ledger accounting, supported assets, history completeness and protection
 requirements are unchanged; this integration does not make margin accounting
 supported by the existing spot-only ledger reconciliation contract.
 
-The latest protected release merge b5bbbb12f84e3aa587b820aae3007b654efc3e54
-is integrated into the candidate, including diagnostic redaction and scoped
+The latest release diagnostic-redaction fix is integrated into the candidate,
+including diagnostic redaction and scoped
 readback-test isolation. Its fixture accepts the explicit strict-default
 method and rejects unsupported methods, rather than leaking a global stub.
 
@@ -49,60 +49,11 @@ https://docs.kraken.com/exchange/guides/rest/authentication
 This does not establish that Kraken guarantees the missing response fields
 or independently approve NIJA's native transport and trust boundary.
 
-## Actual production work and limits
+## Integration limits
 
-Authenticated Render inspection confirms service srv-d98dsr5aeets73fpbaqg
-remains on c16f16c7ce0875aff175cecb74b3329ec5f892eb, with auto-deploy off.
-Both protected startup files are absent. Fresh logs report no installed
-collector and all thirteen observations missing.
-
-An online SQLite backup of /data/trade_ledger.db was made before any repair:
-`/data/kraken-history-recovery/pre-repair-4e0eabdc12734122b464c4486989e565.sqlite3`.
-The snapshot integrity_check returned `ok`; SHA-256:
-`195d080e27f3450457e9f80ba51e651d03b836a03f14db1f0b1e70d8d20df595`.
-This is a local snapshot, not an off-host restore certification.
-
-A single private expiring cursor-history request was submitted under
-collector.lock for platform:kraken, max_pages=100, using the running canonical
-broker's existing recovery consumer. Request ID:
-`20a17d1c1df1473da18e5d81cb24757e`.
-The consumer claimed it; inspected progress reached TradesHistory read 4.
-No completion receipt existed at that observation. Do not replay the claim
-or create a second broker/nonce writer while it runs.
-
-Existing October 12 authenticated audit archives were inspected read-only.
-One contains 1,483 distinct ledger entries, including margin, rollover,
-deposit, transfer, withdrawal and trade types. Across both audit directories,
-542 trade IDs were discoverable. Six of the eighteen saved exact-fill rows
-have postxid references found in these archives. Archive summaries explicitly
-say all_account_reconciliation_complete=false. References in older private
-responses are candidate historical links, not proof of current account,
-complete opening basis, current holdings, financing totals or protection.
-No operational ledger rows were inserted, pending rows cleared or holdings
-inferred from an empty local ledger.
-
-## Remaining release gates
-
-The old PR head c0635a12 passed collector tests, CI, CodeQL, imports, build,
-preflight and balance checks. Its Security Scanning run 43448001158 failed
-baseline candidates and pre-commit; Artifact Scanning run 43448001046 failed
-container Trivy/Grype and package GuardDog checks. Dependency audit and
-Bandit passed. These results do not certify the new candidate.
-
-GuardDog member-broker output reports 39 findings across Flask, requests,
-Gunicorn, setuptools, SQLAlchemy and Stripe; capability findings need exact
-artifact/source review, not a blanket exception. Root container findings
-include affected/fix_deferred Debian packages without listed fixed versions.
-No scanner was disabled, broad baseline accepted, unsupported CVE waiver
-issued or security success asserted.
-
-Real risk publication remains dependent on complete current account capital,
-spot/margin exposure, outstanding obligations, approved policy and mutation
-revision coverage. Historical archives or generic governor configuration
-cannot serve as a current authenticated account snapshot.
-
-Independent review, backup/restore and broker/ledger/exits receipts must be
-issued by actual authorized reviewers only after the underlying work passes.
-This session has not verified independent signer custody or a complete
-reviewed production provider manifest. No approval receipt or protected
-startup file was fabricated. No deployment or order authority was changed.
+This is a source integration proposal. Independent review of the actual
+native transport and reviewed source binding remains required. Offline tests
+use synthetic data and signers. They establish no production account identity,
+complete ledger, current risk snapshot, startup installation, or trading
+permission. Hosted checks must pass on the exact candidate commit and image.
+No deployment or live order follows from this source change.
