@@ -276,6 +276,39 @@ class CommissioningGate(AccountOrderAdmission):
             logger.warning("COMMISSIONING_PRETRADE_DENIED fail_closed=true")
             raise
 
+    def verify_consumed_first_trade(self, reservation: Reservation, plan: StartupVerificationPlan) -> None:
+        """Recheck the exact consumed attempt immediately before terminal transport.
+
+        This never creates or releases a reservation. A denial leaves the
+        durable attempt consumed for independent reconciliation. The adapter
+        separately disarms its one transport attempt before invoking this read.
+        """
+        if type(reservation) is not Reservation or type(reservation.candidate) is not Candidate:
+            raise AdmissionDenied("commissioning_consumed_reservation_required")
+        candidate = reservation.candidate
+        with self._transaction() as conn:
+            approval_id, digest, deadline = self._approval(candidate, plan)
+            row = conn.execute("""SELECT a.credential_fingerprint,a.writer_generation,a.plan_digest,
+                a.release_id,a.approval_id,a.approval_sha256,a.token,a.state,
+                r.account,r.credential_fingerprint,r.writer_generation,r.intent_digest,r.state
+                FROM commissioning_attempts a JOIN account_entry_reservations r ON r.token=a.token
+                WHERE a.account=? AND a.account_fingerprint=?""",
+                (candidate.account, plan.account_fingerprint)).fetchone()
+            expected = (
+                candidate.credential_fingerprint, candidate.writer_generation, plan.digest(),
+                self.release_id, approval_id, digest, reservation.token, "CONTROLLED_FIRST_TRADE",
+                candidate.account, candidate.credential_fingerprint, candidate.writer_generation,
+                candidate.intent_digest, "submitting",
+            )
+            if row != expected:
+                raise AdmissionDenied("commissioning_consumed_attempt_binding_mismatch")
+            self._pretrade(candidate, plan, conn)
+            current_id, current_digest, current_deadline = self._approval(candidate, plan)
+            if (current_id, current_digest) != (approval_id, digest):
+                raise AdmissionDenied("commissioning_approval_changed_before_transport")
+            if time.time() >= min(deadline, current_deadline):
+                raise AdmissionDenied("commissioning_approval_expired_before_transport")
+
     def consume_first_trade(self, candidate: Candidate, plan: StartupVerificationPlan) -> Reservation:
         """Atomically latch one signed, bounded intent BEFORE transport.
 
