@@ -8,6 +8,7 @@ import re
 import subprocess
 
 HOOKS = {
+    "Verify reviewed secret source context": "reviewed-secret-context",
     "Detect secrets": "detect-secrets",  # pragma: allowlist secret - fixed public hook identifier
     "Gitleaks secret scanner": "gitleaks",
     "TruffleHog secret scanner": "trufflehog",

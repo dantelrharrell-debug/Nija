@@ -46,8 +46,16 @@ def scan(report_path: Path) -> int:
         if report["version"] != report["required_version"]:
             raise ValueError("scanner_version_mismatch")
         baseline = Path(".secrets.baseline").read_bytes()
-        if json.loads(baseline)["version"] != report["required_version"]:
+        baseline_data = json.loads(baseline)
+        if baseline_data["version"] != report["required_version"]:
             raise ValueError("baseline_version_mismatch")
+        # Bind marker-only detector exceptions to complete reviewed source.
+        # A new PEM payload can share the old delimiter's detector identity.
+        if "reviewed_context_manifest" in baseline_data:
+            from check_reviewed_secret_context import MANIFEST, check_context
+            if (baseline_data["reviewed_context_manifest"] != MANIFEST
+                    or not check_context(Path.cwd())):
+                raise ValueError("reviewed_source_context_changed")
         revision = _checkout_revision()
         report["checked_out_commit"], report["checked_out_tree"] = revision
         event = os.environ.get("GITHUB_EVENT_NAME")
