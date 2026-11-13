@@ -1,0 +1,38 @@
+name: NIJA IONOS lead safe export source tests
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/ionos_lead_readonly_export.mjs'
+      - 'scripts/ionos_lead_readonly_verify.mjs'
+      - 'tests/test_ionos_lead_readonly_export.mjs'
+      - 'docs/IONOS_SELF_SERVICE_LEAD_EXPORT_20261113.md'
+      - '.github/workflows/ionos-lead-readonly-export-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/ionos_lead_readonly_export.mjs'
+      - 'scripts/ionos_lead_readonly_verify.mjs'
+      - 'tests/test_ionos_lead_readonly_export.mjs'
+      - '.github/workflows/ionos-lead-readonly-export-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-export-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax-check read-only export and offline verifier
+        run: |
+          node --check scripts/ionos_lead_readonly_export.mjs
+          node --check scripts/ionos_lead_readonly_verify.mjs
+      - name: Verify fail-closed export, authenticated encryption, and read-only behavior with synthetic records
+        env:
+          NIJA_IONOS_PB_READ_TOKEN: ''
+        run: node --test tests/test_ionos_lead_readonly_export.mjs
