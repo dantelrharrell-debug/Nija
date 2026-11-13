@@ -92,13 +92,19 @@ def make_kraken_account_identity_provider(
     clock: Callable[[], float] = time.time,
     parsed_field_observer: Callable[[Mapping[str, bool]], None] | None = None,
     http_field_observer: Callable[[Mapping[str, bool]], None] | None = None,
+    identity_method: str = "response_echo",
 ) -> Callable[[], Mapping[str, Any]]:
     """Return a single-field v452 producer using an existing authenticated client.
 
     The approved pins MUST originate in an independently reviewed account
     registry, not in the first GetApiKeyInfo response or a runtime ready flag.
     The observation never contains IIBAN, API key, or broker response rows.
+    The alternative native_signed_request_v1 requires independent review of
+    the canonical native transport. Missing expiry then means valid-at-read,
+    never a claim of an unlimited key lifetime. No existing caller selects it.
     """
+    if identity_method not in {"response_echo", "native_signed_request_v1"}:
+        raise KrakenIdentityDenied("identity_method_invalid")
     try:
         account_pin = _sha256_fingerprint(approved_iban_sha256)
         key_pin = _sha256_fingerprint(approved_api_key_sha256)
@@ -130,7 +136,10 @@ def make_kraken_account_identity_provider(
             raise KrakenIdentityDenied("observation_clock_invalid")
         try:
             api = getattr(broker, "api", None)
-            with capture_identity_read(api, clock, inspect_http_fields=callable(http_field_observer)) as timing:
+            with capture_identity_read(
+                api, clock, inspect_http_fields=callable(http_field_observer),
+                inspect_native_identity=identity_method == "native_signed_request_v1",
+            ) as timing:
                 response = read("GetApiKeyInfo", {}, category=monitoring_category)
         except Exception:
             raise KrakenIdentityDenied("authenticated_identity_read_failed") from None
@@ -177,25 +186,35 @@ def make_kraken_account_identity_provider(
                 # Diagnostics must never weaken or block identity verification.
                 pass
         api_key = row.get("apiKey")
-        if not isinstance(api_key, str) or not api_key or len(api_key) > 512:
+        native = identity_method == "native_signed_request_v1"
+        if native and (not timing.attempts or timing.native_key_digest is None
+                       or not hmac.compare_digest(timing.native_key_digest, key_pin)):
+            raise KrakenIdentityDenied("native_credential_binding_unverified")
+        if "apiKey" not in row and native:
+            pass  # Authenticated request proof; never insert a key into the reply.
+        elif not isinstance(api_key, str) or not api_key or len(api_key) > 512:
             raise KrakenIdentityDenied("authenticated_api_key_identity_missing",
                                        response_shape=_identity_response_shape(row))
-        if not hmac.compare_digest(hashlib.sha256(api_key.encode("utf-8")).hexdigest(), key_pin):
+        elif not hmac.compare_digest(hashlib.sha256(api_key.encode("utf-8")).hexdigest(), key_pin):
             raise KrakenIdentityDenied("approved_api_key_identity_mismatch")
         if not hmac.compare_digest(_fingerprint_iban(row.get("iban")), account_pin):
             raise KrakenIdentityDenied("approved_broker_account_mismatch")
         # An expired key cannot certify a presently authenticated account.
         expiry = row.get("validUntil")
-        if (isinstance(expiry, bool) or not isinstance(expiry, (str, int))
+        if "validUntil" not in row and native:
+            # Success proves validity at this read only, never indefinite expiry.
+            # Preserve the existing 60-second transport/freshness contract.
+            pass
+        elif (isinstance(expiry, bool) or not isinstance(expiry, (str, int))
                 or not str(expiry).isdigit()):
             raise KrakenIdentityDenied("key_expiry_unverified")
-        expires_at = int(expiry)
-        if expires_at != 0 and expires_at <= finished:
+        elif int(expiry) != 0 and int(expiry) <= finished:
             raise KrakenIdentityDenied("key_expired")
 
         evidence_id = hashlib.sha256(
             ("kraken-account-identity-v480:" + account_pin + ":" +
-             key_pin + ":" + account_scope + ":" + repr(started)).encode("utf-8")
+             key_pin + ":" + account_scope + ":" + repr(started) +
+             (":native_signed_request_v1" if native else "")).encode("utf-8")
         ).hexdigest()
         return {
             "account": account_scope,
