@@ -27,6 +27,7 @@ RELEASE_BRANCH = "release/justcall-handoff-only-20261017"
 SOURCE_PATHS = (
     "bot/kraken_sqlite_readonly_preflight_v488.py",
     "bot/kraken_live_history_recovery.py",
+    "bot/kraken_history_response_journal.py",
     "bot/universal_broker_exit_supervisor_patch.py",
     "bot/kraken_identity_request_recovery_v491.py",
     "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py",
