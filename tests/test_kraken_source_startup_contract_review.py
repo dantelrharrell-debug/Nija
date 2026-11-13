@@ -54,6 +54,27 @@ class SourceStartupContractReview(unittest.TestCase):
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
         self.assertLess(calls["install_from_canonical_startup"], calls["start_trading_engine"])
 
+    def test_protected_registration_precedes_install_in_same_main_function(self):
+        module = tree("bot/bot_main.py")
+        main = next(n for n in module.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+        registration = [n for n in ast.walk(main) if isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Name) and n.func.id == "register_from_protected_root"]
+        installation = [n for n in ast.walk(main) if isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Name) and n.func.id == "install_from_canonical_startup"]
+        self.assertEqual(len(registration), 1)
+        self.assertEqual(len(installation), 1)
+        self.assertLess(registration[0].lineno, installation[0].lineno)
+        # Reject a future exec/subprocess handoff between registration and install.
+        between = [n for n in ast.walk(main) if isinstance(n, ast.Call)
+                   and registration[0].lineno < n.lineno < installation[0].lineno]
+        forbidden = {"execv", "execve", "execvp", "execvpe", "execl", "execlp", "execlpe",
+                     "Popen", "run", "call", "check_call", "check_output", "system", "fork"}
+        for call in between:
+            if isinstance(call.func, ast.Attribute):
+                self.assertNotIn(call.func.attr, forbidden)
+            elif isinstance(call.func, ast.Name):
+                self.assertNotIn(call.func.id, forbidden | {"exec"})
+
     def test_new_interpreter_does_not_inherit_registration(self):
         # An actual fresh interpreter must start without an in-memory factory.
         script = ("import sys,types; p=types.ModuleType('bot'); "

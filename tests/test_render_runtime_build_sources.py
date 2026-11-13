@@ -34,7 +34,7 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         self.assertEqual(set(built), set(SOURCE_PATHS))
         self.assertEqual(
             built["start.sh"],
-            "40be05c6a4cc21f42bba1a755b3dfad6c33746588800563284013a00f7faf0ca",  # pragma: allowlist secret
+            "be868922a649560144d6e178489e8e955f2b537a3e95c8c74053e2317e8a6866",  # pragma: allowlist secret
         )
         # Public Git-input -> reproduced-output digests for release and main.
         broker_outputs = {
