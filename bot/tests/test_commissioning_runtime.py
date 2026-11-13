@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +15,7 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from bot.account_order_admission import AdmissionDenied
+from bot.account_order_admission import AdmissionDenied, Reservation
 from bot.broker_manager import BrokerType, KrakenBroker
 from bot.commissioning_runtime import (
     CommissioningCompositionDenied,
@@ -50,6 +51,7 @@ class CommissioningRuntimeTests(unittest.TestCase):
             collector=lambda *_: None,
             fence=lambda *_: True,
             consume_first_trade=self.consume,
+            verify_consumed_first_trade=lambda *_: None,
         )
         self.consumed = []
         self.request = SimpleNamespace(
@@ -63,6 +65,7 @@ class CommissioningRuntimeTests(unittest.TestCase):
 
     def consume(self, candidate, plan):
         self.consumed.append((candidate, plan))
+        return Reservation("offline-only-token", candidate)
 
     def adapter(self, *, enabled=False):
         return CommissioningDispatchAdapter(
@@ -130,7 +133,7 @@ class CommissioningRuntimeTests(unittest.TestCase):
             def __exit__(self, *_exc: object) -> None:
                 real_lock.release()
 
-        def consume_permission(candidate: Candidate, plan: StartupVerificationPlan) -> None:
+        def consume_permission(candidate: Candidate, plan: StartupVerificationPlan) -> Reservation:
             calls.append((candidate, plan))
             if threading.current_thread().name == "first-consumer":
                 first_in_gate.set()
@@ -140,6 +143,7 @@ class CommissioningRuntimeTests(unittest.TestCase):
                 # With consume-before-lock, the loser reaches this point
                 # before it can observe that the transport is already armed.
                 second_progress.set()
+            return Reservation("offline-only-token", candidate)
 
         def consume(name: str) -> None:
             try:
@@ -205,6 +209,35 @@ class CommissioningRuntimeTests(unittest.TestCase):
             with self.subTest(method=method, params=params):
                 with self.assertRaises(AdmissionDenied):
                     adapter.validate_kraken_order_request(method, params)
+
+    def test_plan_replacement_after_consumption_cannot_change_transport_terms(self):
+        adapter = self.adapter(enabled=True)
+        adapter.consume(self.request)
+        adapter.plan = replace(self.plan, base_quantity="0.021")
+        changed = adapter.plan.order_parameters("entry")
+        changed.update({"close[ordertype]": "stop-loss-limit", "close[price]": self.plan.stop_trigger,
+                        "close[price2]": self.plan.stop_limit})
+        with self.assertRaises(AdmissionDenied):
+            adapter.validate_kraken_order_request("AddOrder", changed)
+        self.assertFalse(adapter._armed)
+
+    def test_failed_terminal_recheck_disarms_without_retry_or_raw_exception(self):
+        adapter = self.adapter(enabled=True)
+        adapter.consume(self.request)
+        exact = self.plan.order_parameters("entry")
+        exact.update({"close[ordertype]": "stop-loss-limit", "close[price]": self.plan.stop_trigger,
+                      "close[price2]": self.plan.stop_limit})
+        def deny(*_args):
+            raise RuntimeError("private-provider-diagnostic-must-not-escape")
+        self.gate.verify_consumed_first_trade = deny
+        with self.assertRaises(AdmissionDenied) as raised:
+            adapter.validate_kraken_order_request("AddOrder", exact)
+        self.assertTrue(is_internal_dispatch_failure(str(raised.exception)))
+        self.assertNotIn("private-provider", str(raised.exception))
+        self.assertFalse(adapter._armed)
+        with self.assertRaisesRegex(AdmissionDenied, "not_armed"):
+            adapter.validate_kraken_order_request("AddOrder", exact)
+
 
     def test_armed_first_trade_cannot_be_substituted_with_a_sell(self):
         adapter = self.adapter(enabled=True)
