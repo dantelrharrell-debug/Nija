@@ -6,7 +6,7 @@ deduplicate events, and sign each day's evidence before these figures are usable
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -53,7 +53,20 @@ def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: 
             continue
         totals[field] = sum(values, Decimal(0))
         result[field] = int(totals[field]) if field in COUNTS else str(totals[field])
-    # Unique persons cannot be calculated by summing daily unique counts.\n    # Accept only independently reconciled, period-wide deduplicated counts.\n    for field in ("unique_visitors", "qualified_leads", "waitlist_signups"):\n        totals.pop(field, None)\n        result[field] = None\n        if weekly_unique_counts and weekly_unique_counts.get("period_start") == result["start"] and weekly_unique_counts.get("period_end") == result["end"] and weekly_unique_counts.get("certified") is True and weekly_unique_counts.get("source_reconciled") is True:\n            value = _decimal(weekly_unique_counts.get(field))\n            if value is not None and value >= 0 and value == value.to_integral_value():\n                totals[field] = value\n                result[field] = int(value)\n    if len(totals) == len(FIELDS):
+    # Daily unique counts are not additive across a week.
+    for field in ("unique_visitors", "qualified_leads", "waitlist_signups"):
+        totals.pop(field, None)
+        result[field] = None
+        if (isinstance(weekly_unique_counts, dict)
+                and weekly_unique_counts.get("period_start") == result["start"]
+                and weekly_unique_counts.get("period_end") == result["end"]
+                and weekly_unique_counts.get("certified") is True
+                and weekly_unique_counts.get("source_reconciled") is True):
+            value = _decimal(weekly_unique_counts.get(field))
+            if value is not None and value >= 0 and value == value.to_integral_value():
+                totals[field] = value
+                result[field] = int(value)
+    if len(totals) == len(FIELDS):
         result["verification_status"] = "VERIFIED"
         profit = totals["attributable_revenue_usd"] - totals["attributable_costs_usd"]
         result["net_profit_usd"] = str(profit)
@@ -67,8 +80,33 @@ def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: 
 
 
 def compare_weeks(days: list[dict[str, Any]], last_complete_day: date, weekly_unique_counts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Compare two non-overlapping seven-day periods without imputing missing days."""
-    return {
-        "current": summarize_week(days, last_complete_day),
-        "previous": summarize_week(days, last_complete_day - timedelta(days=7)),
-    }
+    """Compare exactly two complete, non-overlapping seven-day periods."""
+    if not isinstance(last_complete_day, date) or isinstance(last_complete_day, datetime):
+        raise ValueError("last_complete_day must be a date")
+    if not isinstance(days, list) or not all(isinstance(row, dict) for row in days):
+        raise ValueError("days must be a list of daily records")
+    if weekly_unique_counts is not None and (
+            not isinstance(weekly_unique_counts, list)
+            or not all(isinstance(row, dict) for row in weekly_unique_counts)):
+        raise ValueError("weekly_unique_counts must be a list of records")
+
+    previous_end = last_complete_day - timedelta(days=7)
+    expected = {(last_complete_day - timedelta(days=i)).isoformat() for i in range(14)}
+    actual = [row.get("date") for row in days]
+    valid_dates = (len(actual) == 14 and len(set(actual)) == 14
+                   and set(actual) == expected
+                   and all(isinstance(value, str) for value in actual))
+    counts = weekly_unique_counts or []
+
+    def period(end: date) -> dict[str, Any]:
+        start = (end - timedelta(days=6)).isoformat()
+        end_str = end.isoformat()
+        subset = [row for row in days if isinstance(row.get("date"), str)
+                  and start <= row["date"] <= end_str] if valid_dates else []
+        matches = [row for row in counts
+                   if row.get("period_start") == start and row.get("period_end") == end_str]
+        evidence = matches[0] if len(matches) == 1 else None
+        return summarize_week(subset, end, evidence)
+
+    return {"current": period(last_complete_day),
+            "previous": period(previous_end)}
