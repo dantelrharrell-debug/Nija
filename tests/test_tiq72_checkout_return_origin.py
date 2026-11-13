@@ -12,6 +12,14 @@ class FakeStripe:
         self.checkout = type("Checkout", (), {})()
         self.checkout.Session = type("Session", (), {})()
         self.checkout.Session.create = self.create
+        self.Price = type("Price", (), {})()
+        self.Price.retrieve = self.retrieve_price
+        self.price_override = {}
+
+    def retrieve_price(self, price_id):
+        return {"id":price_id,"livemode":False,"active":True,"type":"one_time",
+                "currency":"usd","unit_amount":100,"product":"prod_approved_test",
+                **self.price_override}
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
@@ -52,6 +60,18 @@ class TestTiq72CheckoutReturnOrigin(unittest.TestCase):
             with self.subTest(url=url):
                 with self.assertRaises(StripeVerificationError):
                     create_test_checkout(self.client, "reservation-1", url,
+                                         "https://nija.example/cancel")
+        self.assertEqual(self.client.calls, [])
+
+    def test_mismatched_price_cannot_open_checkout(self):
+        for mismatch in ({"unit_amount":200}, {"currency":"eur"},
+                         {"livemode":True}, {"product":"prod_other"},
+                         {"active":False}, {"type":"recurring"}):
+            with self.subTest(mismatch=mismatch):
+                self.client.price_override = mismatch
+                with self.assertRaisesRegex(StripeVerificationError, "test_price_identity_mismatch"):
+                    create_test_checkout(self.client, "reservation-1",
+                                         "https://nija.example/success",
                                          "https://nija.example/cancel")
         self.assertEqual(self.client.calls, [])
 
