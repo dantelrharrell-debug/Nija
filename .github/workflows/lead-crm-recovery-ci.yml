@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - 'render_lead_intake.py'
+      - 'scripts/nija_lead_storage_preflight.py'
+      - 'tests/test_nija_lead_storage_preflight.py'
+      - 'scripts/nija_lead_metadata_inventory.py'
+      - 'tests/test_nija_lead_metadata_inventory.py'
       - 'scripts/verify_nija_lead_storage_readonly.py'
       - 'tests/test_verify_nija_lead_storage_readonly.py'
       - 'docs/NIJA_LEAD_STORAGE_RECOVERY_GATE_20261112.md'
@@ -23,6 +27,10 @@ on:
     branches: [main]
     paths:
       - 'render_lead_intake.py'
+      - 'scripts/nija_lead_storage_preflight.py'
+      - 'tests/test_nija_lead_storage_preflight.py'
+      - 'scripts/nija_lead_metadata_inventory.py'
+      - 'tests/test_nija_lead_metadata_inventory.py'
       - 'scripts/verify_nija_lead_storage_readonly.py'
       - 'tests/test_verify_nija_lead_storage_readonly.py'
       - 'docs/NIJA_LEAD_STORAGE_RECOVERY_GATE_20261112.md'

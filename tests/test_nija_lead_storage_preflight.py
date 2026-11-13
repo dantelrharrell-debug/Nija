@@ -124,6 +124,20 @@ class PreflightTests(unittest.TestCase):
             self.assertIn("lead_database_not_verified", result["issues"])
             self.assertEqual(result["lead_database"]["read_error"], "wal_database_requires_offline_snapshot")
 
+    def test_rollback_journal_refuses_sqlite_and_preserves_files(self):
+        from unittest.mock import patch
+        make_db(self.lead)
+        make_db(self.forward, forwarding=True)
+        journal = Path(str(self.lead) + "-journal")
+        journal.write_bytes(b"synthetic hot rollback journal")
+        before = {p.name: p.read_bytes() for p in self.disk.iterdir()}
+        from scripts.nija_lead_storage_preflight import _sqlite_summary
+        with patch("sqlite3.connect", side_effect=AssertionError("SQLite must not open")):
+            result = _sqlite_summary(self.lead)
+        self.assertEqual(result["read_error"], "rollback_journal_requires_offline_snapshot")
+        self.assertIsNone(result["row_count"])
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.disk.iterdir()})
+
     def test_whitespace_primary_override_does_not_fall_back(self):
         make_db(self.lead)
         make_db(self.forward, forwarding=True)
