@@ -146,18 +146,24 @@ def _raw_submission_timestamp(payload: dict[str, Any]) -> object:
 
 
 def _source_event_id(payload: dict[str, Any]) -> str:
-    """Keep one consistent, explicit upstream ID across recognized wrappers.
+    """Read one real upstream submission ID, not a generated forwarding key.
 
-    Do not use legacy internal_id: it can be blank or refer to a different
-    resource. Never silently replace conflicting identifiers with a digest.
+    NIJA's forwarded canonical payload includes an internal 64-hex event_id
+    *and* source_event_id. They may differ: verify the internal marker against
+    the original source ID rather than mistaking it for conflicting consent.
     """
-    observed: set[str] = set()
-    keys = ("event_id", "eventId", "submission_id", "submissionId",
-            "source_event_id", "sourceEventId")
-    for source in _lead_field_sources(payload):
-        for key in keys:
+    sources = _lead_field_sources(payload)
+    original_keys = ("submission_id", "submissionId", "source_event_id", "sourceEventId")
+    transport_keys = ("event_id", "eventId")
+    originals: set[str] = set()
+    transport: set[str] = set()
+    source_marker_present = False
+    for source in sources:
+        for key in original_keys + transport_keys:
             if key not in source:
                 continue
+            if key in ("source_event_id", "sourceEventId"):
+                source_marker_present = True
             value = source[key]
             if value is None or value == "":
                 continue
@@ -166,11 +172,33 @@ def _source_event_id(payload: dict[str, Any]) -> str:
             if len(str(value).strip()) > 160:
                 raise ValueError("Upstream submission ID is too long")
             cleaned = _clean_text(value, max_length=160)
-            if cleaned:
-                observed.add(cleaned)
-                if len(observed) > 1:
-                    raise ValueError("Conflicting upstream submission IDs")
-    return next(iter(observed), "")
+            if not cleaned:
+                continue
+            if key in original_keys:
+                originals.add(cleaned)
+            else:
+                transport.add(cleaned)
+    if len(originals) > 1 or len(transport) > 1:
+        raise ValueError("Conflicting upstream submission IDs")
+    original = next(iter(originals), "")
+    downstream_key = next(iter(transport), "")
+    if original:
+        if downstream_key and downstream_key != original:
+            email = normalize_email(_first_form_field(
+                sources, ("email", "email_address", "emailAddress", "Email", "Email Address")
+            ))
+            expected = hashlib.sha256(
+                f"submission-id|{email.casefold()}|{original}".encode("utf-8")
+            ).hexdigest() if email else ""
+            if downstream_key != expected:
+                raise ValueError("Conflicting upstream submission IDs")
+        return original
+    if source_marker_present and payload.get("send_acknowledgment") is False:
+        # An explicit empty source marker in an internal forwarding envelope
+        # means provenance is unknown. Never promote the delivery key to a
+        # fabricated original website submission ID.
+        return ""
+    return downstream_key
 
 
 def _stable_event_fallback(payload: dict[str, Any], serialized: str) -> str:
