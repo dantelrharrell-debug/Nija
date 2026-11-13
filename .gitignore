@@ -557,3 +557,7 @@ bot/data/*.jsonl
 
 # Generated Capacitor web entrypoint; source is frontend/templates/index.html
 /frontend/index.html
+
+# Reviewed account risk publication source and offline regression.
+!/bot/kraken_account_risk_publisher.py
+!/tests/test_kraken_account_risk_publisher.py

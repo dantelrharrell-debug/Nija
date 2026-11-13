@@ -20,6 +20,8 @@ on:
       - 'bot/kraken_redis_evidence.py'
       - 'bot/kraken_operator_authorization.py'
       - 'bot/kraken_risk_evidence.py'
+      - 'bot/kraken_account_risk_publisher.py'
+      - 'tests/test_kraken_account_risk_publisher.py'
       - 'bot/tests/test_kraken_ledger_evidence.py'
       - 'bot/tests/test_kraken_redis_evidence.py'
       - 'bot/tests/test_kraken_operator_authorization.py'
@@ -113,6 +115,7 @@ jobs:
           python -m pytest -q tests/test_kraken_native_four_source_binding.py
           bot/tests/test_kraken_ledger_evidence.py bot/tests/test_kraken_redis_evidence.py
           bot/tests/test_kraken_operator_authorization.py bot/tests/test_kraken_risk_evidence.py
+          tests/test_kraken_account_risk_publisher.py
       - name: Verify canonical construction of reviewed native kill-switch and position-sync readers
         run: >-
           python -m pytest -q tests/test_kraken_canonical_native_source_bindings.py
