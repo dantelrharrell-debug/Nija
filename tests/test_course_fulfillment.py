@@ -163,9 +163,7 @@ def test_tax_amount_mismatch_denied(tmp_path):
 @pytest.mark.parametrize("mode", [None, False, 0, 1, "true"])
 def test_live_course_requires_explicit_boolean_mode(tmp_path, resource, mode):
     """Incomplete or test-mode provider objects never authorize live delivery."""
-    from tests.test_course_sandbox_isolation import fake_stripe
-    stripe = fake_stripe(link=COURSE_LINK, price=COURSE_PRICE, product=COURSE_PRODUCT,
-                         session_live=True, intent_live=True, charge_live=True)
+    stripe = _live_course_provider()
     target = {"session": stripe.checkout.Session.retrieve.return_value,
               "intent": stripe.PaymentIntent.retrieve.return_value,
               "charge": stripe.Charge.retrieve.return_value}[resource]
@@ -180,9 +178,7 @@ def test_live_course_requires_explicit_boolean_mode(tmp_path, resource, mode):
 @pytest.mark.parametrize("event_type", ["charge.refunded", "charge.dispute.created"])
 def test_course_reversal_reconciles_only_matching_purchase(tmp_path, event_type):
     from course_fulfillment import handle_course_event
-    from tests.test_course_sandbox_isolation import fake_stripe
-    stripe = fake_stripe(link=COURSE_LINK, price=COURSE_PRICE, product=COURSE_PRODUCT,
-                         session_live=True, intent_live=True, charge_live=True)
+    stripe = _live_course_provider()
     charge = stripe.Charge.retrieve.return_value
     charge["id"] = "ch_test_foundations"
     ledger = CourseLedger(create_engine("sqlite:///" + str(tmp_path / "reversal.db")))
@@ -216,3 +212,30 @@ def test_course_reversal_rejects_unverified_charge(tmp_path, event_type):
     handle_course_event(stripe, ledger, event_type, obj)
     assert ledger.get("cs_existing")["granted"] is True
     stripe.checkout.Session.retrieve.assert_not_called()
+
+
+def _live_course_provider():
+    """Self-contained provider fixture; independent of pytest import ordering."""
+    stripe = Mock()
+    stripe.checkout.Session.retrieve.return_value = {
+        "livemode": True, "payment_link": COURSE_LINK, "mode": "payment",
+        "status": "complete", "payment_status": "paid", "amount_subtotal": 9900,
+        "amount_total": 9900, "total_details": {"amount_tax": 0, "amount_discount": 0},
+        "customer_details": {"email": "buyer@example.test"},
+        "payment_intent": "pi_test_foundations",
+    }
+    stripe.checkout.Session.list_line_items.return_value = {
+        "data": [{"quantity": 1, "price": {"id": COURSE_PRICE, "product": COURSE_PRODUCT,
+                                           "unit_amount": 9900, "currency": "usd"}}],
+        "has_more": False,
+    }
+    stripe.PaymentIntent.retrieve.return_value = {
+        "livemode": True, "status": "succeeded", "amount_received": 9900,
+        "currency": "usd", "latest_charge": "ch_test_foundations",
+    }
+    stripe.Charge.retrieve.return_value = {
+        "livemode": True, "paid": True, "status": "succeeded", "amount": 9900,
+        "currency": "usd", "payment_intent": "pi_test_foundations",
+        "refunded": False, "amount_refunded": 0, "disputed": False,
+    }
+    return stripe
