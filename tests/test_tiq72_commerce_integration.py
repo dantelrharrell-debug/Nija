@@ -18,6 +18,10 @@ class FakeStripe:
         self.session = None
         self.checkout = Obj(Session=Obj(create=self.create, retrieve=self.retrieve,
                                          list_line_items=self.items))
+        self.Price = Obj(retrieve=self.retrieve_price)
+    def retrieve_price(self, price_id):
+        return {"id":price_id,"livemode":False,"active":True,"type":"one_time",
+                "currency":"usd","unit_amount":100,"product":"prod_test_1"}
     def create(self, **kw):
         self.session = dict(id="cs_test_abc", livemode=False, mode="payment",
             payment_status="paid", status="complete", currency="usd", amount_total=100,
