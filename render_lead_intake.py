@@ -599,8 +599,29 @@ def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
                 raw,
             ),
         )
-        connection.commit()
         duplicate = cursor.rowcount == 0
+        if duplicate and source_id:
+            # A stable submission ID identifies one immutable customer intent.
+            # Ignore a changed transport timestamp, but never silently accept
+            # modified contact/consent data under an already stored identity.
+            prior_row = connection.execute(
+                "SELECT source_payload_json FROM website_leads WHERE event_key=?",
+                (event_key,),
+            ).fetchone()
+            if prior_row is None:
+                raise ValueError("Existing submission identity could not be verified")
+            try:
+                prior = normalize_lead_payload(json.loads(prior_row["source_payload_json"]))
+            except (ValueError, TypeError, KeyError) as exc:
+                raise ValueError("Existing submission requires identity review") from exc
+            immutable_fields = (
+                "email", "name", "phone", "communications_consent",
+                "consent_marketing_email", "consent_sms",
+                "consent_ai_voice", "program_consent",
+            )
+            if any(prior.get(field) != canonical.get(field) for field in immutable_fields):
+                raise ValueError("Conflicting data for existing upstream submission ID")
+        connection.commit()
     return canonical, event_key, duplicate
 
 
