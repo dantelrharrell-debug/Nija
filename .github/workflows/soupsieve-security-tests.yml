@@ -1,0 +1,34 @@
+name: Soup Sieve security regressions
+on:
+  pull_request:
+    paths:
+      - 'requirements.txt'
+      - 'tests/test_soupsieve_selector_security.py'
+      - '.github/workflows/soupsieve-security-tests.yml'
+permissions:
+  contents: read
+jobs:
+  isolated-parser-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install only the pinned parser pair
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+          pins = [line for line in Path('requirements.txt').read_text().splitlines()
+                  if line.startswith(('beautifulsoup4==', 'soupsieve=='))]
+          assert len(pins) == 2
+          subprocess.run([sys.executable, '-m', 'pip', 'install', *pins], check=True)
+          PY
+      - name: Verify selectors and bounded advisory reproductions
+        run: python -B -m unittest discover -s tests -p 'test_soupsieve_selector_security.py' -v
