@@ -7,7 +7,8 @@
   "commit": null,
   "source_sha256": {
     "bot/kraken_sqlite_readonly_preflight_v488.py": "89a1213bb4048109b3722b3d6f80b3882a8aa8c9975ff789e868e9dd7b8845ae",
-    "bot/kraken_live_history_recovery.py": "02d382407fe6f71fd8cb36190c5c87fcdb0f79e6ef4f62d597e633343e99e4df",
+    "bot/kraken_live_history_recovery.py": "e4afeb2e5b61f9ce0613ceda15027ea7a2438268f9adaa37771d74a11a680d7c",
+    "bot/kraken_history_response_journal.py": "edc60e27664448e4f3ce78f362fdd9b9c319cd8b5707bd1af00ec5679757854d",
     "bot/universal_broker_exit_supervisor_patch.py": "7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758",
     "bot/kraken_identity_request_recovery_v491.py": "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2",
     "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py": "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
