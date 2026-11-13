@@ -383,6 +383,8 @@ def test_forward_includes_stable_event_id_and_consent_provenance(monkeypatch, tm
     assert sent[0]["name"] == "Website Visitor"
     assert sent[0]["event_id"] and len(sent[0]["event_id"]) == 64
     assert sent[0]["communications_consent"] == "true"
+    assert sent[0]["send_acknowledgment"] is False
+    assert sent[0]["source_event_id"] == "hero-submission-001"
     assert sent[0]["consent_source"] == "hero-email-optin"
     assert sent[0]["consent_recorded_at"] == "2026-10-12T14:10:00.000Z"
     replay_status, replay = _request(dict(lead))
