@@ -1,7 +1,7 @@
 # NIJA lead-only protected backup and isolated restore
 
 Status: PARTIALLY COMPLETE. A consistent encrypted point-in-time backup and
-isolated restore succeeded. Durable private-key custody, ongoing retention,
+isolated restore succeeded, including retrieval of all recovery inputs from Drive. Ongoing retention,
 required release security gates, published routing and approved live delivery QA
 remain uncertified. Do not enable dispatch, marketing or trading from this report.
 
@@ -77,12 +77,24 @@ permissions. It was independently downloaded through Drive after upload.
 | Intake SQLite snapshot | `524ee06ffaf55c19497387d1e2db50e4437227068db95ef68e728481b47c955e` |
 | Forwarding SQLite snapshot | `83f91b71df3856c9f3d648bf21eb2b48c8916737ebd137db7ed74aaf480bf57a` |
 
-The public recipient certificate is stored with the ciphertext. This is not a
-secret and cannot decrypt the backup. **The private key has NOT been uploaded or
-independently retained.** Automatic approval review rejected the attempted key
-upload because its destination/custody arrangement was not explicitly authorized.
-No alternative key-transfer route was attempted. The key remains local with 0600
-permissions; transient local custody is not durable recovery-key evidence.
+The public recipient certificate is stored with the ciphertext. It cannot decrypt
+the backup. The initial private-key upload was rejected because destination and
+custody approval were not explicit; no alternate route was attempted. The owner
+subsequently approved the exact separate private destination. On
+**2026-11-13T01:17:02.885Z**, the key was saved as
+`NIJA_Lead_Recovery_Key_20261113.pem` in the separate existing **NIJA Production
+Backups** folder linked below. Folder and uploaded file metadata independently
+confirmed not shared, sole-owner permissions and the intended parent. No
+permission was added or changed. Private-key contents never entered Render,
+GitHub, chat output or logs.
+
+At **2026-11-13T01:17:47.499465Z**, all three recovery inputs (key, certificate,
+encrypted backup) were freshly retrieved from Drive into a restricted directory
+on the isolated host. Retrieved key bytes matched the original without exposing
+the key or its fingerprint. Authenticated decryption, both snapshot checksums,
+SQLite integrity/foreign-key checks and full typed-record/schema reconciliation
+passed again. This clears the durable-key-custody blocker for this specific
+point-in-time backup. Ongoing retention and production delivery remain separate.
 
 ## Independent restoration results
 
@@ -157,12 +169,11 @@ mismatch returns failure. Keep the original encrypted copy unchanged on failure.
 
 ## Remaining decisions and operating limits
 
-1. Obtain explicit approval for durable custody of the new private key. The
-   concrete proposed destination is the separate existing private
+1. Completed: owner approved durable key custody in the separate existing private
    [NIJA Production Backups](https://drive.google.com/drive/folders/1vFAsMURwf036cI7t41DyEU4zXHywdbfq)
-   folder, independently verified owner-only, under the exact filename
-   `NIJA_Lead_Recovery_Key_20261113.pem`. Do not upload until approved. Then
-   independently retrieve that key and repeat restore verification.
+   folder; exact filename `NIJA_Lead_Recovery_Key_20261113.pem`. Independent
+   retrieval and repeated restoration succeeded as documented above. Keep key
+   access restricted; never paste it into chat or GitHub.
 2. Proposed retention remains 30 daily/12 weekly encrypted copies with age,
    checksum, decryptability and periodic restore checks. No recurring production
    job, alert recipient, immutability policy or paid service was created. A folder
@@ -182,3 +193,20 @@ rolls back only the proposed reusable tooling; it does not erase the existing
 backup or alter production. Any future lead-only production restore requires an
 approved quiescence, reconciliation of post-capture admissions/claims and exact
 cutover plan. Never restore the shared trading disk for CRM recovery testing.
+
+## Hosted release checks and confirmed security repair
+
+PR #3847 head a4375994a5bc4aa99bc5005cbe711677049a83b4 passed 9/9 direct-head
+capture/restore tests (run43342249475), general CI43342249670 and
+CodeQL43342249923. Security43342249416 and Artifact43342249397 failed.
+Secret report14000106797 identifies152unbaselined candidates in86files, zero
+in the six backup PR files; integration checkout
+a1455b988c76e3c71adbdd52c5862bb405da99c1. Counts110Secret Keyword,
+24Private Key,9Basic Auth,7Base64,2Hex. Preexistence is not dismissal; none was
+approved, baselined or suppressed. Eight precommit hooks remain failed.
+
+Separate review PR #3848 head a2e4236f6afdb5afee2b1e81afe6030384eaefc4
+repairs the two identified Soup Sieve advisories. Direct-head parser tests3/3
+(run43342755115), full resolved dependency audit131614769398, general
+CI43342754519 and CodeQL43342754647 passed. Its precommit/secret checks still
+failed. No merge/deployment occurred. Preserve the safety hold.

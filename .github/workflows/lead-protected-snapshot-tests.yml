@@ -7,6 +7,7 @@ on:
       - 'tests/test_nija_lead_protected_snapshot.py'
       - 'tests/test_nija_lead_isolated_restore_verify.py'
       - '.github/workflows/lead-protected-snapshot-tests.yml'
+      - 'docs/LEAD_PROTECTED_BACKUP_RESTORE_20261113.md'
   workflow_dispatch:
 permissions:
   contents: read
