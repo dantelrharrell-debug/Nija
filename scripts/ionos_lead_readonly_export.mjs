@@ -68,8 +68,11 @@ async function readCollection(base, name, token, fetchImpl) {
     u.searchParams.set('sort', 'id');
     const list = await authorizedJson(u.toString(), token, fetchImpl);
     if (!Array.isArray(list.items) || !Number.isSafeInteger(list.totalItems) || !Number.isSafeInteger(list.totalPages) ||
+        !Number.isSafeInteger(list.perPage) || list.perPage < 1 || list.perPage > 200 ||
         list.totalItems < 0 || list.totalItems > MAX_ROWS || list.totalPages < 0 ||
-        list.page !== page || list.totalPages > MAX_PAGES) {
+        list.page !== page || list.totalPages > MAX_PAGES ||
+        list.totalPages !== Math.ceil(list.totalItems / list.perPage) ||
+        list.items.length > list.perPage) {
       throw Error('Incomplete or malformed collection page');
     }
     if (total === null) { total = list.totalItems; pages = list.totalPages; }
