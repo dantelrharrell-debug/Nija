@@ -22,6 +22,23 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
         "git", "show", "15b64ddcb44fa67f33a336b799ee8f89b1bc1fe9:.secrets.baseline",
     ], cwd=ROOT))
     current = json.loads((ROOT / ".secrets.baseline").read_text())
+    # Normalize only the separately reviewed public source-digest replacement
+    # before checking the original 142-candidate review. All other identities,
+    # audit flags, metadata and detector configuration remain checked below.
+    consumer = "bot/kraken_identity_request_recovery_v491.py"
+    digest = "69e4617711013cad18546edb9ee21832441d88b6b84e26a176bd7cff6bc248ce"
+    assert hashlib.sha256((ROOT / consumer).read_bytes()).hexdigest() == digest
+    replacement = hashlib.sha1(digest.encode()).hexdigest()
+    assert replacement == "cffe4e38591770466afbd79643f0a9b73f0de028"
+    original = "13d420a6f4c6495689a8955d106a014ac60e2d30"
+    for name in ("ops/recovery/render_readonly_baseline.json",
+                 "scripts/nija_kraken_instance_diagnostic.py"):
+        rows = current["results"][name]
+        matches = [row for row in rows if row["type"] == "Hex High Entropy String"
+                   and row["hashed_secret"] == replacement]
+        assert len(matches) == 1
+        assert not any(row["hashed_secret"] == original for row in rows)
+        matches[0]["hashed_secret"] = original
     review = json.loads((ROOT / MANIFEST).read_text())
     assert current["reviewed_context_manifest"] == MANIFEST
     assert {k: v for k, v in before.items() if k != "results"} == {

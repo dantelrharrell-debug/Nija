@@ -10,7 +10,7 @@
     "bot/kraken_live_history_recovery.py": "e4afeb2e5b61f9ce0613ceda15027ea7a2438268f9adaa37771d74a11a680d7c",
     "bot/kraken_history_response_journal.py": "edc60e27664448e4f3ce78f362fdd9b9c319cd8b5707bd1af00ec5679757854d",
     "bot/universal_broker_exit_supervisor_patch.py": "7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758",
-    "bot/kraken_identity_request_recovery_v491.py": "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2",
+    "bot/kraken_identity_request_recovery_v491.py": "69e4617711013cad18546edb9ee21832441d88b6b84e26a176bd7cff6bc248ce",
     "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py": "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
     "bot/broker_manager.py": "2fe509fa53fc0ceafae78467f6121473ce43bd5832e9438705c19aa2c5a97990",
     "bot/canonical_broker_startup_convergence_v24.py": "96876ef73948b28be79bb66c2c20bf5ca8dc0c0ef695dc4db8d3aac5f730fe4f",

@@ -477,3 +477,14 @@ class IdentityProbeTests(unittest.TestCase):
         self.assertEqual(identity_probe()["reason"], "approved_api_key_identity_mismatch")
         self.receipt(collection_succeeded=False, failure_code="private-credential-canary")
         self.assertEqual(identity_probe()["reason"], "identity_comparison_unverified")
+
+
+class IdentityConsumerSourcePinTests(unittest.TestCase):
+    def test_identity_consumer_pins_match_exact_source_and_inventory(self):
+        from scripts import nija_kraken_instance_diagnostic as diagnostic
+        root = Path(__file__).resolve().parents[1]
+        inventory = json.loads((root / "ops/recovery/render_readonly_baseline.json").read_text())
+        for path, expected in diagnostic.IDENTITY_CONSUMER_PINS:
+            with self.subTest(path=path):
+                self.assertEqual(hashlib.sha256((root / path).read_bytes()).hexdigest(), expected)
+                self.assertEqual(inventory["source_sha256"][path], expected)
