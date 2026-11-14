@@ -53,6 +53,8 @@ _STRIPE_WEBHOOK_EVENTS = frozenset({
     "invoice.paid",
     "invoice.payment_succeeded",
     "invoice.payment_failed",
+    "charge.refunded",
+    "charge.dispute.created",
 })
 
 
@@ -112,11 +114,15 @@ def _normalized_email(value: Any) -> str:
 
 
 def _stripe_module():
-    import stripe
-
     secret = os.getenv("STRIPE_SECRET_KEY", "").strip()
     if not secret:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
+    if (os.getenv("RENDER_SERVICE_ID", "").strip() == "srv-dasmtjfpn0mc73948r10"
+            and not secret.startswith(("rk_test_", "sk_test_"))):
+        # This isolated service must never contact Stripe with live credentials.
+        raise RuntimeError("billing_staging_requires_stripe_test_key")
+    import stripe
+
     stripe.api_key = secret
     return stripe
 
@@ -899,10 +905,12 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             if event_type not in {
                 "checkout.session.completed", "checkout.session.async_payment_succeeded",
                 "checkout.session.async_payment_failed", "checkout.session.expired",
+                "charge.refunded", "charge.dispute.created",
             }:
                 return jsonify({"received": True, "ignored": True})
             if (_obj_value(event_obj, "livemode") is not False or
-                    _obj_value(event_obj, "payment_link") != expected[0]):
+                    (event_type.startswith("checkout.session.") and
+                     _obj_value(event_obj, "payment_link") != expected[0])):
                 return jsonify({"received": True, "ignored": True})
 
         if not _store().claim_event(event_id, event_type):
