@@ -616,3 +616,38 @@ def test_versioned_standard_beta_price_mappings_are_distinct(monkeypatch, tmp_pa
     assert current.offer_code == "standard_beta_v2"
     assert current.price_id == "price_standard_v2"
     assert legacy.price_id != current.price_id
+
+
+@pytest.mark.parametrize("prefix", ["rk_live_", "sk_live_", "invalid_"])
+def test_staging_rejects_live_and_unknown_key_modes_before_stripe(monkeypatch, prefix):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dasmtjfpn0mc73948r10")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", prefix + "synthetic_fixture")
+    with pytest.raises(RuntimeError, match="^billing_staging_requires_stripe_test_key$"):
+        billing._stripe_module()
+    assert fake_stripe.api_key is None
+
+
+@pytest.mark.parametrize("prefix", ["rk_test_", "sk_test_"])
+def test_staging_accepts_test_mode_keys(monkeypatch, prefix):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dasmtjfpn0mc73948r10")
+    key = prefix + "synthetic_fixture"
+    monkeypatch.setenv("STRIPE_SECRET_KEY", key)
+    assert billing._stripe_module() is fake_stripe
+    assert fake_stripe.api_key == key
+
+
+def test_staging_guard_does_not_change_production_key_configuration(monkeypatch):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dasn1mbbc2fs738036gg")
+    key = "rk_" + "live_" + "synthetic_fixture"
+    monkeypatch.setenv("STRIPE_SECRET_KEY", key)
+    assert billing._stripe_module() is fake_stripe
+    assert fake_stripe.api_key == key
