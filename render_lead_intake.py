@@ -146,15 +146,59 @@ def _raw_submission_timestamp(payload: dict[str, Any]) -> object:
 
 
 def _source_event_id(payload: dict[str, Any]) -> str:
-    """Use an immutable upstream submission ID when supplied; never invent one."""
-    for source in _lead_field_sources(payload):
-        for key in ("event_id", "eventId", "submission_id", "submissionId"):
-            value = source.get(key)
-            if isinstance(value, (str, int)) and not isinstance(value, bool):
-                cleaned = _clean_text(value, max_length=160)
-                if cleaned:
-                    return cleaned
-    return ""
+    """Read one real upstream submission ID, not a generated forwarding key.
+
+    NIJA's forwarded canonical payload includes an internal 64-hex event_id
+    *and* source_event_id. They may differ: verify the internal marker against
+    the original source ID rather than mistaking it for conflicting consent.
+    """
+    sources = _lead_field_sources(payload)
+    original_keys = ("submission_id", "submissionId", "source_event_id", "sourceEventId")
+    transport_keys = ("event_id", "eventId")
+    originals: set[str] = set()
+    transport: set[str] = set()
+    source_marker_present = False
+    for source in sources:
+        for key in original_keys + transport_keys:
+            if key not in source:
+                continue
+            if key in ("source_event_id", "sourceEventId"):
+                source_marker_present = True
+            value = source[key]
+            if value is None or value == "":
+                continue
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                raise ValueError("Upstream submission ID must be scalar")
+            if len(str(value).strip()) > 160:
+                raise ValueError("Upstream submission ID is too long")
+            cleaned = _clean_text(value, max_length=160)
+            if not cleaned:
+                continue
+            if key in original_keys:
+                originals.add(cleaned)
+            else:
+                transport.add(cleaned)
+    if len(originals) > 1 or len(transport) > 1:
+        raise ValueError("Conflicting upstream submission IDs")
+    original = next(iter(originals), "")
+    downstream_key = next(iter(transport), "")
+    if original:
+        if downstream_key and downstream_key != original:
+            email = normalize_email(_first_form_field(
+                sources, ("email", "email_address", "emailAddress", "Email", "Email Address")
+            ))
+            expected = hashlib.sha256(
+                f"submission-id|{email.casefold()}|{original}".encode("utf-8")
+            ).hexdigest() if email else ""
+            if downstream_key != expected:
+                raise ValueError("Conflicting upstream submission IDs")
+        return original
+    if source_marker_present and payload.get("send_acknowledgment") is False:
+        # An explicit empty source marker in an internal forwarding envelope
+        # means provenance is unknown. Never promote the delivery key to a
+        # fabricated original website submission ID.
+        return ""
+    return downstream_key
 
 
 def _stable_event_fallback(payload: dict[str, Any], serialized: str) -> str:
@@ -583,8 +627,29 @@ def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
                 raw,
             ),
         )
-        connection.commit()
         duplicate = cursor.rowcount == 0
+        if duplicate and source_id:
+            # A stable submission ID identifies one immutable customer intent.
+            # Ignore a changed transport timestamp, but never silently accept
+            # modified contact/consent data under an already stored identity.
+            prior_row = connection.execute(
+                "SELECT source_payload_json FROM website_leads WHERE event_key=?",
+                (event_key,),
+            ).fetchone()
+            if prior_row is None:
+                raise ValueError("Existing submission identity could not be verified")
+            try:
+                prior = normalize_lead_payload(json.loads(prior_row["source_payload_json"]))
+            except (ValueError, TypeError, KeyError) as exc:
+                raise ValueError("Existing submission requires identity review") from exc
+            immutable_fields = (
+                "email", "name", "phone", "communications_consent",
+                "consent_marketing_email", "consent_sms",
+                "consent_ai_voice", "program_consent",
+            )
+            if any(prior.get(field) != canonical.get(field) for field in immutable_fields):
+                raise ValueError("Conflicting data for existing upstream submission ID")
+        connection.commit()
     return canonical, event_key, duplicate
 
 
@@ -931,7 +996,7 @@ def handle_lead_intake_post(handler: Any) -> bool:
     if claim_token:
         uncertain = False
         try:
-            forwarded = _forward({**canonical, "event_id": forward_key})
+            forwarded = _forward({**canonical, "event_id": forward_key, "send_acknowledgment": False})
         except Exception as exc:
             # The canonical lead is already persisted; never expose webhook
             # URL, provider credentials, or payloads in error logs.
