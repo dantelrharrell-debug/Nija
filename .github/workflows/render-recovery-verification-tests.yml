@@ -3,6 +3,8 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'scripts/stage_archived_kraken_history.py'
+      - 'tests/test_stage_archived_kraken_history.py'
       - 'bot.py'
       - 'bot/redis_env.py'
       - 'start.sh'
@@ -60,6 +62,7 @@ jobs:
           python-version: '3.11'
       - name: Exercise offline fail-closed deployment, checkout, digest and authority boundaries
         run: |
+          python -B -S -m unittest discover -s tests -p test_stage_archived_kraken_history.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_margin_cash_reconciliation.py -v
           python -B -S -m unittest discover -s tests -p test_redis_configuration_error_privacy.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_instance_diagnostic.py -v
