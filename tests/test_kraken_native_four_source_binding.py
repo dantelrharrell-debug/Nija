@@ -177,6 +177,87 @@ def test_combined_native_four_and_pair_construct_all_thirteen_without_external_s
     native.switch.get_status.assert_not_called()
 
 
+@pytest.mark.parametrize("native_pair", [False, True])
+def test_native_ledger_supplies_both_consumers_without_reads(four, native, monkeypatch, native_pair):
+    """Reuse the reviewed reconciliation reader, including native position sync."""
+    sources = native.sources if native_pair else four.sources
+    four.wiring.resolve.return_value = replace(
+        sources, native_four_sources=four.bundle, review_native_four_sources=four.review,
+        independent_remaining={} if native_pair else four.sources.independent_remaining,
+        independent_open_intents=None, independent_positions=None, use_native_ledger_readers=True,
+    )
+    compose = Mock(wraps=root.compose_authenticated_kraken_collector_sources)
+    pair = Mock(wraps=root.compose_reviewed_kraken_runtime_sources)
+    monkeypatch.setattr(root, "compose_authenticated_kraken_collector_sources", compose)
+    monkeypatch.setattr(root, "compose_reviewed_kraken_runtime_sources", pair)
+    binding = invoke(four)
+    ledger = binding.providers["position_ledger_reconciliation"]
+    assert compose.call_args.kwargs["independent_open_intents"] is ledger
+    assert compose.call_args.kwargs["independent_positions"] is ledger
+    if native_pair:
+        assert pair.call_args.kwargs["independent_positions"] is ledger
+    else:
+        pair.assert_not_called()
+    assert len({id(p) for p in binding.providers.values()}) == len(REQUIRED)
+    assert_no_source_reads(four)
+    # Exercise the actual native reader against the absent certification DB.
+    # It must not create a DB, sample Kraken, or manufacture an empty snapshot.
+    with pytest.raises(four_root.NativeFourSourceBindingDenied):
+        compose.call_args.kwargs["independent_positions"]()
+    assert not four.bundle.ledger_binding.ledger_path.exists()
+    four.wiring.private_call.assert_not_called()
+    assert attestation._COLLECTOR is None
+
+
+@pytest.mark.parametrize("field", ["independent_open_intents", "independent_positions"])
+def test_native_ledger_mode_rejects_mixed_owners(four, field):
+    options = dict(independent_open_intents=None, independent_positions=None, use_native_ledger_readers=True)
+    options[field] = Mock()
+    with pytest.raises(root.CanonicalKrakenStartupDenied):
+        replace(four.sources, **options)
+    assert_no_source_reads(four)
+
+
+@pytest.mark.parametrize("change", ["sources", "review", "both"])
+def test_native_ledger_mode_requires_exact_native_binding_and_reviewer(four, change):
+    options = dict(independent_open_intents=None, independent_positions=None, use_native_ledger_readers=True)
+    if change in {"sources", "both"}:
+        options["native_four_sources"] = None
+    if change in {"review", "both"}:
+        options["review_native_four_sources"] = None
+    with pytest.raises(root.CanonicalKrakenStartupDenied):
+        replace(four.sources, **options)
+    assert_no_source_reads(four)
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true"])
+def test_native_ledger_mode_requires_explicit_boolean(four, value):
+    with pytest.raises(root.CanonicalKrakenStartupDenied):
+        replace(four.sources, use_native_ledger_readers=value)
+    assert_no_source_reads(four)
+
+
+def test_native_ledger_shared_readers_recheck_revoked_source_review(four, monkeypatch):
+    four.wiring.resolve.return_value = replace(
+        four.sources, independent_open_intents=None, independent_positions=None, use_native_ledger_readers=True,
+    )
+    compose = Mock(wraps=root.compose_authenticated_kraken_collector_sources)
+    monkeypatch.setattr(root, "compose_authenticated_kraken_collector_sources", compose)
+    invoke(four)
+    four.review.return_value = False
+    for name in ("independent_open_intents", "independent_positions"):
+        with pytest.raises(four_root.NativeFourSourceBindingDenied):
+            compose.call_args.kwargs[name]()
+    assert_no_source_reads(four)
+
+
+@pytest.mark.parametrize("field", ["independent_open_intents", "independent_positions"])
+def test_original_external_reader_mode_still_requires_both_readers(four, field):
+    with pytest.raises(root.CanonicalKrakenStartupDenied):
+        replace(four.sources, **{field: None})
+    assert_no_source_reads(four)
+
+
 @pytest.mark.parametrize("field", ["manager", "strategy", "broker"])
 def test_foreign_canonical_owner_denies_before_native_review(four, field):
     four.wiring.resolve.return_value = replace(

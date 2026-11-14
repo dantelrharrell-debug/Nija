@@ -103,6 +103,15 @@ for atomic installation. The original six-external-source API is preserved.
 | position_sync | Authenticated current holdings and complete ledger/adoption readback |
 | three receipt envelopes | Genuine independent_review, backup_restore, broker_ledger_exits certifications |
 
+With reviewed native four-source construction, an explicit
+`use_native_ledger_readers=True` plus `None` for both independent reader fields
+binds them to the existing guarded native ledger reconciliation provider. Its
+reconciled positions and open intentions feed the downstream readers without
+creating another source owner or sampling at construction. This is a wiring
+option, not permission to omit the complete independently persisted ledger or
+its authenticated review. Default external callbacks remain required unless
+this exact mode is selected. See `kraken-native-four-source-binding.md`.
+
 Production's complete risk snapshot source and durable duplicate-inventory
 binding have not been established. This factory does not synthesize either.
 A green global risk flag, healthy heartbeat or empty local SQLite table cannot
