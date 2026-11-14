@@ -13,6 +13,8 @@ on:
       - 'bot/kraken_startup_evidence_binding.py'
       - 'bot/kraken_canonical_startup_factory.py'
       - 'bot/kraken_native_four_source_binding.py'
+      - 'bot/kraken_margin_cash_reconciliation.py'
+      - 'tests/test_kraken_margin_cash_reconciliation.py'
       - 'bot/kraken_live_history_recovery.py'
       - 'bot/kraken_history_response_journal.py'
       - 'scripts/nija_kraken_readonly_history_collector_v441.py'
@@ -58,6 +60,7 @@ jobs:
           python-version: '3.11'
       - name: Exercise offline fail-closed deployment, checkout, digest and authority boundaries
         run: |
+          python -B -S -m unittest discover -s tests -p test_kraken_margin_cash_reconciliation.py -v
           python -B -S -m unittest discover -s tests -p test_redis_configuration_error_privacy.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_instance_diagnostic.py -v
           python -B -S -m unittest discover -s tests -p test_render_recovery_verification.py -v
