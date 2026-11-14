@@ -39,6 +39,39 @@ def _reviewed_source_drift(root: Path, review: dict) -> list[str]:
     return changed
 
 
+def _reviewed_source_checkout_reason(root: Path, review: dict, name: str) -> str:
+    """Classify a failed source pin using only local Git evidence, never bytes."""
+    try:
+        name_path = PurePosixPath(name)
+        if name_path.is_absolute() or ".." in name_path.parts or str(name_path) != name:
+            return "reviewed_path_invalid"
+        expected = review["files"][name].replace(":", "")
+        original = subprocess.run(
+            ["git", "show", "HEAD:" + name], cwd=root, capture_output=True, check=True,
+        ).stdout
+        if hashlib.sha256(original).hexdigest() != expected:
+            return "committed_source_review_pin_mismatch"
+        target = root / name
+        if target.resolve() != target.absolute() or not target.is_file():
+            return "worktree_source_path_invalid"
+        if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+            return "worktree_source_changed_from_commit"
+        return "source_matches_reviewed_commit"
+    except (OSError, KeyError, ValueError, TypeError, subprocess.CalledProcessError):
+        return "committed_source_unavailable"
+
+
+def _reviewed_source_drift_summary(root: Path, review: dict) -> str:
+    """Provide paths and fixed reason codes only; source and hashes remain private."""
+    paths = _reviewed_source_drift(root, review)
+    if not paths:
+        return "manifest_validation_failed"
+    return ", ".join(
+        path + "=" + _reviewed_source_checkout_reason(root, review, path)
+        for path in paths
+    )
+
+
 def test_review_adds_only_the_exact_142_reviewed_identities():
     before = json.loads(subprocess.check_output([
         "git", "show", "15b64ddcb44fa67f33a336b799ee8f89b1bc1fe9:.secrets.baseline",
@@ -73,7 +106,7 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
     assert len(review["files"]) == 78
     assert check_context(ROOT), (
         "Reviewed context invalid (paths only): "
-        + ", ".join(_reviewed_source_drift(ROOT, review) or ["manifest validation"])
+        + _reviewed_source_drift_summary(ROOT, review)
     )
     old = {(p, x["type"], x["hashed_secret"]): x
            for p, rows in before["results"].items() for x in rows}
@@ -123,6 +156,33 @@ def test_reviewed_source_drift_reports_only_paths_and_preserves_denial(tmp_path)
     paths = _reviewed_source_drift(tmp_path, review)
     assert paths == ["probe.py"]
     assert changed_bytes not in repr(paths)
+    assert not check_context(tmp_path)
+
+
+def test_checkout_drift_diagnosis_distinguishes_mutated_source_from_stale_pin(tmp_path):
+    source, manifest = fixture_review(tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Source review test",
+         "-c", "user.email=fixture@example.invalid",
+         "commit", "-qm", "Reviewed fixture source"],
+        cwd=tmp_path, check=True,
+    )
+    review = json.loads(manifest.read_text())
+    assert _reviewed_source_checkout_reason(tmp_path, review, "probe.py") == "source_matches_reviewed_commit"
+    canary = "synthetic fixture bytes must never enter a source review report"
+    source.write_text(canary)
+    reason = _reviewed_source_drift_summary(tmp_path, review)
+    assert reason == "probe.py=worktree_source_changed_from_commit"
+    assert canary not in reason
+    assert not check_context(tmp_path)
+    source.write_text("public format marker\n")
+    review["files"]["probe.py"] = "00:" * 31 + "00"
+    reason = _reviewed_source_drift_summary(tmp_path, review)
+    assert reason == "probe.py=committed_source_review_pin_mismatch"
+    assert canary not in reason
+    manifest.write_text(json.dumps(review))
     assert not check_context(tmp_path)
 
 
