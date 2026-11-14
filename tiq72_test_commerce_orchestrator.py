@@ -100,14 +100,27 @@ class Tiq72TestCommerce:
             event["id"], event_type, reservation_id, session_id,
             verified_reversal=True)
 
-    def fulfill_report(self, *, owner_id, reservation_id, report):
-        """Report must be generated server-side; never accept a browser-authored report."""
+    def fulfill_report(self, *, owner_id, reservation_id, report=None):
+        """Deliver only the stored score for a verified, owner-bound entitlement."""
         if not isinstance(owner_id, str) or not owner_id:
             raise CommerceDenied("authenticated_owner_required")
+        if report is not None:
+            raise CommerceDenied("caller_report_forbidden")
         row = self.store.db.execute(
-            "SELECT owner_id FROM tiq72_reservations WHERE id=?",
+            """SELECT reservation.owner_id, run.score_json
+               FROM tiq72_reservations reservation
+               JOIN tiq72_runs run ON run.id = reservation.run_id
+               WHERE reservation.id=? AND run.owner_id=reservation.owner_id
+                 AND run.version='v515-72-decisions'""",
             (reservation_id,)).fetchone()
         if not row or row[0] != owner_id:
             raise CommerceDenied("reservation_not_owned")
-        self.store.save_report(reservation_id, report)
+        import json
+        try:
+            stored_score = json.loads(row[1])
+        except (TypeError, ValueError) as exc:
+            raise CommerceDenied("stored_score_invalid") from exc
+        if not isinstance(stored_score, dict):
+            raise CommerceDenied("stored_score_invalid")
+        self.store.save_report(reservation_id, stored_score)
         return self.store.get_report(reservation_id, owner_id)
