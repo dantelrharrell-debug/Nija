@@ -1,9 +1,114 @@
 from __future__ import annotations
 
+import copy
 import importlib
+
+import pytest
 
 
 v364 = importlib.import_module("bot.runtime_kraken_openpositions_margin_reconciliation_v364_patch")
+
+
+def _valid_response():
+    return {"error": [], "result": {"TX": {
+        "pair": "XETHZUSD", "type": "buy", "vol": "0.5", "vol_closed": "0.1",
+        "cost": "1200", "value": "1000", "margin": "600",
+    }}}
+
+
+@pytest.mark.parametrize("response", [
+    {}, {"result": {}}, {"error": []}, {"error": [], "result": None},
+    {"error": [], "result": []}, {"error": [], "result": False},
+    {"error": None, "result": {}}, {"error": "", "result": {}},
+    {"error": {}, "result": {}},
+])
+def test_malformed_envelope_never_reports_an_empty_account(response):
+    assert v364._extract_long_margin_truth(response, "ETH-USD")["ok"] is False
+
+
+@pytest.mark.parametrize("field", ["vol", "vol_closed"])
+@pytest.mark.parametrize("invalid", [None, True, False, "NaN", "Infinity", "-0.1", "private-value", {}])
+def test_invalid_quantity_cannot_become_zero(field, invalid):
+    response = _valid_response()
+    response["result"]["TX"][field] = invalid
+    before = copy.deepcopy(response)
+    truth = v364._extract_long_margin_truth(response, "ETH-USD")
+    assert truth["ok"] is False
+    assert "private-value" not in str(truth)
+    assert response == before
+
+
+@pytest.mark.parametrize("field", ["vol", "vol_closed", "pair", "type"])
+def test_missing_position_fields_are_not_flat_position_evidence(field):
+    response = _valid_response()
+    del response["result"]["TX"][field]
+    assert v364._extract_long_margin_truth(response, "ETH-USD")["ok"] is False
+
+
+@pytest.mark.parametrize("row", [None, [], {}, {"pair": ""}])
+def test_unclassifiable_row_is_not_silently_omitted(row):
+    response = _valid_response()
+    response["result"]["unknown"] = row
+    assert v364._extract_long_margin_truth(response, "ETH-USD")["ok"] is False
+
+
+def test_closed_volume_cannot_exceed_original_volume():
+    response = _valid_response()
+    response["result"]["TX"]["vol_closed"] = "0.6"
+    assert v364._extract_long_margin_truth(response, "ETH-USD")["ok"] is False
+
+
+def test_only_explicit_empty_result_is_empty_position_evidence():
+    truth = v364._extract_long_margin_truth({"error": [], "result": {}}, "ETH-USD")
+    assert truth == {"ok": True, "found": False, "symbol": "ETH-USD"}
+
+
+def test_rejected_payload_does_not_echo_exchange_error_text():
+    truth = v364._extract_long_margin_truth({"error": ["private-payload"], "result": {}}, "ETH-USD")
+    assert truth["ok"] is False
+    assert "private-payload" not in str(truth)
+
+
+def test_invalid_snapshot_never_reaches_margin_ledger(monkeypatch):
+    class Broker:
+        def _kraken_api_call(self, method, params):
+            assert method == "OpenPositions"
+            return {"error": []}
+
+    real_import = v364.importlib.import_module
+
+    def guarded_import(name):
+        assert name != "bot.margin_position_ledger", "invalid snapshot reached a writable ledger"
+        return real_import(name)
+
+    monkeypatch.setattr(v364.importlib, "import_module", guarded_import)
+    assert v364._reconcile_open_position(Broker(), "platform:kraken", "ETH-USD")["ok"] is False
+
+
+@pytest.mark.parametrize("field", ["value", "cost", "margin"])
+@pytest.mark.parametrize("invalid", [None, True, "NaN", "Infinity", "-1", "private-payload"])
+def test_malformed_valuation_does_not_fall_back_to_another_field(field, invalid):
+    response = _valid_response()
+    response["result"]["TX"][field] = invalid
+    truth = v364._extract_long_margin_truth(response, "ETH-USD")
+    assert truth["ok"] is False
+    assert "private-payload" not in str(truth)
+
+
+def test_aggregate_overflow_cannot_reach_position_authority():
+    response = _valid_response()
+    response["result"]["TX"]["value"] = "1e308"
+    response["result"]["TX2"] = dict(response["result"]["TX"])
+    assert v364._extract_long_margin_truth(response, "ETH-USD")["ok"] is False
+
+
+def test_valid_zero_value_preserves_existing_cost_fallback():
+    response = _valid_response()
+    response["result"]["TX"]["value"] = "0"
+    truth = v364._extract_long_margin_truth(response, "ETH-USD")
+    assert truth["ok"] is True
+    assert truth["notional_usd"] == 960.0
+    assert truth["confirmed_fill_proof"] is False
 
 
 def test_extracts_legacy_eth_long_without_creating_fill_proof():
