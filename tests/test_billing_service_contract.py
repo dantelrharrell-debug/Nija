@@ -642,6 +642,42 @@ def test_staging_accepts_test_mode_keys(monkeypatch, prefix):
     assert fake_stripe.api_key == key
 
 
+
+@pytest.mark.parametrize("value", [
+    "mk_sandbox_invalid", "pk_test_publishable_only", "rk_live_wrong_mode",
+    "sk_live_wrong_mode", "invalid_secret",
+])
+@pytest.mark.parametrize("service_id,sandbox_mode", [
+    ("srv-dbc4oe5g1s2s73925fb0", "false"),
+    ("srv-dbc4oe5g1s2s73925fb0", "true"),
+    ("srv-dasn1mbbc2fs738036gg", "true"),
+])
+def test_course_sandbox_rejects_invalid_or_live_stripe_keys_before_import(
+        monkeypatch, service_id, sandbox_mode, value):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", service_id)
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", sandbox_mode)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", value)
+    with pytest.raises(RuntimeError, match="^course_sandbox_requires_stripe_test_key$"):
+        billing._stripe_module()
+    assert fake_stripe.api_key is None
+
+
+@pytest.mark.parametrize("prefix", ["rk_test_", "sk_test_"])
+def test_course_sandbox_accepts_only_test_mode_key_prefix(monkeypatch, prefix):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dbc4oe5g1s2s73925fb0")
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    secret = prefix + "isolated_synthetic_fixture"
+    monkeypatch.setenv("STRIPE_SECRET_KEY", secret)
+    assert billing._stripe_module() is fake_stripe
+    assert fake_stripe.api_key == secret
+
+
 def test_staging_guard_does_not_change_production_key_configuration(monkeypatch):
     import sys
     fake_stripe = SimpleNamespace(api_key=None)
