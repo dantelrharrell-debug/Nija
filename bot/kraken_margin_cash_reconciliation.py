@@ -1,4 +1,4 @@
-"""Offline comparison of margin cash records, never collector certification.
+"""Offline comparison of margin cash and position records, never certification.
 
 Kraken margin P&L and opening/trading fees belong to `margin` ledger rows;
 financing fees belong to `rollover` rows. They must not be reconstructed as
@@ -25,6 +25,9 @@ _OTHER_TYPES = frozenset({
 })
 _PIN = re.compile(r"[0-9a-f]{64}\Z")
 _DECIMAL = re.compile(r"-?[0-9]{1,32}(?:\.[0-9]{1,32})?\Z")
+_POSITION_ID = re.compile(r"T[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{6}\Z")
+_ORDER_ID = re.compile(r"O[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{6}\Z")
+_PAIR = re.compile(r"[A-Z0-9]{3,32}\Z")
 
 
 class MarginCashReconciliationDenied(ValueError):
@@ -49,6 +52,16 @@ def _amount(value: Any, *, signed: bool = False) -> Decimal:
     number = Decimal(value)
     _require(signed or number >= 0, "negative_cash_fee")
     return number
+
+
+def _scope(account_scope: str, account_sha256: str, api_key_sha256: str) -> None:
+    _require(type(account_scope) is str and (
+        account_scope == "platform:kraken" or (
+            account_scope.startswith("user:") and account_scope.endswith(":kraken")
+            and len(account_scope.split(":")) == 3 and _identifier(account_scope.split(":")[1]))),
+        "cash_scope_invalid")
+    _require(all(type(p) is str and _PIN.fullmatch(p) for p in (account_sha256, api_key_sha256)),
+             "cash_scope_pins_invalid")
 
 
 def _normalize(row: Mapping[str, Any]) -> tuple:
@@ -83,13 +96,7 @@ def compare_margin_cash_records(
     settlements and spot balances need their own reconciliation. Unknown types
     deny to avoid silently dropping new financing events.
     """
-    _require(type(account_scope) is str and (
-        account_scope == "platform:kraken" or (
-            account_scope.startswith("user:") and account_scope.endswith(":kraken")
-            and len(account_scope.split(":")) == 3 and _identifier(account_scope.split(":")[1]))),
-        "cash_scope_invalid")
-    _require(all(type(p) is str and _PIN.fullmatch(p) for p in (account_sha256, api_key_sha256)),
-             "cash_scope_pins_invalid")
+    _scope(account_scope, account_sha256, api_key_sha256)
     _require(isinstance(exchange_ledger, Mapping) and type(persisted_rows) is list,
              "cash_records_invalid")
     _require(len(exchange_ledger) <= MAX_ROWS and len(persisted_rows) <= MAX_ROWS,
@@ -136,4 +143,84 @@ def compare_margin_cash_records(
         "complete_history_verified": False, "account_identity_verified": False,
         "positions_reconciled": False, "protective_exits_verified": False,
         "collector_certified": False, "authorizes_orders": False,
+    }
+
+
+def _position(row: Mapping[str, Any]) -> tuple:
+    """Normalize static OpenPositions terms, never infer fill allocation or value."""
+    order = row.get("ordertxid")
+    pair = row.get("pair")
+    _require(type(order) is str and _ORDER_ID.fullmatch(order) is not None
+             and type(pair) is str and _PAIR.fullmatch(pair) is not None,
+             "margin_position_identity_invalid")
+    _require(row.get("posstatus") == "open" and row.get("type") in ("buy", "sell")
+             and _identifier(row.get("ordertype")), "margin_position_state_invalid")
+    stamp = row.get("time")
+    _require(type(stamp) in (str, int, float), "margin_position_time_invalid")
+    timestamp = _amount(str(stamp))
+    _require(timestamp > 0, "margin_position_time_invalid")
+    cost, fee, volume, closed, margin = (
+        _amount(row.get(field)) for field in ("cost", "fee", "vol", "vol_closed", "margin")
+    )
+    _require(cost > 0 and volume > 0 and closed < volume and margin > 0, "margin_position_amounts_invalid")
+    return (order, pair, row["type"], row["ordertype"], timestamp, cost, fee, volume, closed, margin)
+
+
+def compare_margin_position_records(
+    exchange_positions: Mapping[str, Mapping[str, Any]],
+    persisted_rows: list[Mapping[str, Any]], *, account_scope: str,
+    account_sha256: str, api_key_sha256: str,
+) -> dict[str, Any]:
+    """Compare individual unconsolidated margin positions against persisted rows.
+
+    Callers supply the complete default unconsolidated OpenPositions result,
+    not the HTTP envelope, a filtered subset, or market-consolidated rows.
+    Each independent local row adds exchange_position_id and the same four
+    provenance fields as the cash comparison. Provenance declarations are
+    compared, not authenticated here. No row is inserted, allocated or adopted.
+
+    Remaining base quantities are vol minus vol_closed. Keep buys and sells
+    separate; netting can hide exposure. Preserve raw pair codes and decimal
+    strings. Live mark-to-market value/net and financing terms are outside this
+    comparison, as are history, close allocations, balances and protection.
+    Input agreement (including empty inputs) never certifies a collector.
+    """
+    _scope(account_scope, account_sha256, api_key_sha256)
+    _require(isinstance(exchange_positions, Mapping) and type(persisted_rows) is list,
+             "margin_position_records_invalid")
+    _require(len(exchange_positions) <= MAX_ROWS and len(persisted_rows) <= MAX_ROWS,
+             "margin_position_budget_exceeded")
+    observed, local = {}, {}
+    for identity, row in exchange_positions.items():
+        _require(type(identity) is str and _POSITION_ID.fullmatch(identity) is not None
+                 and isinstance(row, Mapping), "margin_position_row_invalid")
+        observed[identity] = _position(row)
+    for row in persisted_rows:
+        _require(isinstance(row, Mapping), "margin_position_row_invalid")
+        _require((row.get("broker"), row.get("account_scope"), row.get("account_sha256"),
+                  row.get("api_key_sha256")) == ("kraken", account_scope, account_sha256, api_key_sha256),
+                 "margin_position_provenance_mismatch")
+        identity = row.get("exchange_position_id")
+        _require(type(identity) is str and _POSITION_ID.fullmatch(identity) is not None
+                 and identity not in local, "margin_position_id_missing_or_duplicate")
+        local[identity] = _position(row)
+    _require(observed.keys() == local.keys(), "margin_position_set_mismatch")
+    _require(observed == local, "margin_position_terms_mismatch")
+    quantities: dict[str, dict[str, Decimal]] = {}
+    with localcontext() as context:
+        context.prec = 160
+        for row in observed.values():
+            _, pair, side, _, _, _, _, volume, closed, _ = row
+            totals = quantities.setdefault(pair, {"buy": Decimal(0), "sell": Decimal(0)})
+            totals[side] += volume - closed
+    return {
+        "input_positions_match": True, "matched_position_count": len(observed),
+        "remaining_base_quantities_by_pair": {
+            pair: {side: format(value, "f") for side, value in totals.items()}
+            for pair, totals in sorted(quantities.items())
+        },
+        "complete_snapshot_verified": False, "account_identity_verified": False,
+        "fill_allocation_verified": False, "balances_reconciled": False,
+        "protective_exits_verified": False, "collector_certified": False,
+        "authorizes_orders": False,
     }
