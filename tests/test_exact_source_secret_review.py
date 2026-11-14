@@ -39,7 +39,6 @@ def _reviewed_source_drift(root: Path, review: dict) -> list[str]:
     return changed
 
 
-
 def _reviewed_source_checkout_reason(root: Path, review: dict, name: str) -> str:
     """Classify a failed source pin using only local Git evidence, never bytes."""
     try:
@@ -158,7 +157,6 @@ def test_reviewed_source_drift_reports_only_paths_and_preserves_denial(tmp_path)
     assert paths == ["probe.py"]
     assert changed_bytes not in repr(paths)
     assert not check_context(tmp_path)
-
 
 
 def test_checkout_drift_diagnosis_distinguishes_mutated_source_from_stale_pin(tmp_path):
