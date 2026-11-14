@@ -16,6 +16,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts/run_baseline_secret_scan
 
 def run_scan(
     root: Path, baseline: dict, source: str, extra_env: dict | None = None, *, dirty: bool = False,
+    isolated_python: bool = False,
 ) -> tuple[subprocess.CompletedProcess, dict]:
     """Build a throwaway tracked repository and invoke the actual scan wrapper."""
     subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -35,7 +36,7 @@ def run_scan(
     env.update(NIJA_DEFER_RUNTIME_SITE_HOOKS="1")
     env.update(extra_env or {})
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--report", str(report)], cwd=root,
+        [sys.executable, *(["-S"] if isolated_python else []), str(SCRIPT), "--report", str(report)], cwd=root,
         capture_output=True, text=True, timeout=30,
         env=env,
     )
@@ -138,6 +139,15 @@ def test_invalid_baseline_fails_closed_with_evidence(tmp_path, baseline):
     assert report["outcome"] == "scanner_error"
 
 
+def test_missing_scanner_dependency_still_writes_failing_value_free_report(tmp_path, baseline):
+    """A failed CI dependency installation must retain evidence, never a green result."""
+    result, report = run_scan(tmp_path, baseline, "count = 12\n", isolated_python=True)
+    assert result.returncode == 2
+    assert report["outcome"] == "scanner_error"
+    assert report["exit_code"] == 2
+    assert report["findings"] == []
+
+
 def test_priority_review_queue_is_value_free_and_private_keys_first():
     from scripts.run_baseline_secret_scan import priority_review_locations
 
@@ -172,10 +182,16 @@ def test_security_workflow_keeps_secret_findings_blocking():
     enforcement = next(step for step in steps if step["name"] == "Enforce baseline-aware scanning")
     evidence = next(step for step in steps if step["name"] == "Retain value-free secret scan evidence")
     assert "run_baseline_secret_scan.py" in enforcement["run"]
+    assert enforcement["if"] == "always()"
+    assert "detect-secrets --version" not in enforcement["run"]
     assert "continue-on-error" not in enforcement
     assert "|| true" not in enforcement["run"]
     assert evidence["if"] == "always()"
     assert evidence["with"]["path"] == "secret-scan-report.json"
+    regression = next(step for step in steps if step["name"] == "Validate baseline reporting regressions")
+    assert steps.index(regression) < steps.index(enforcement) < steps.index(evidence)
+    assert "continue-on-error" not in workflow["jobs"]["secrets-scan"]
+    assert "continue-on-error" not in regression
 
 
 def test_precommit_failure_propagates_and_reports_real_outcome():

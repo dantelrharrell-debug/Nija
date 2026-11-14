@@ -146,9 +146,13 @@ jobs:
           tests/test_profit_optimization_env_template_guard.py
 
     - name: Enforce baseline-aware scanning
+      # Preserve a value-free report even when regression/setup steps fail.
+      # The wrapper verifies its pinned scanner version and writes a failing
+      # scanner_error report if dependencies are unavailable. Previous failed
+      # steps remain failures; this step never makes them successful.
+      if: always()
       run: |
         set -euo pipefail
-        detect-secrets --version
         python scripts/run_baseline_secret_scan.py --report secret-scan-report.json
 
     - name: Retain value-free secret scan evidence
