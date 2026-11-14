@@ -34,7 +34,27 @@ pair, supply an empty map and the factory constructs all six readers. Overlappin
 or mixed sources are rejected. Both original external-callback modes remain.
 
 Actual reviewed independent_open_intents and independent_positions readers are
-still mandatory. No backing data is discovered, initialized or certified here.
+still mandatory. The protected resolver can explicitly set
+`use_native_ledger_readers=True` and pass `None` for both reader fields. In that
+mode, the canonical factory supplies the guarded native
+`position_ledger_reconciliation` reader to open-order reconciliation, protective
+exit readback and native position synchronization. That existing reader returns
+both orders and positions only after reconciling the independently persisted
+ledger against authenticated broker history. The same reviewed ledger binding
+therefore owns all three consumers; no duplicate callback implementation or
+second ledger owner is needed. Mixing this mode with supplied reader callbacks,
+omitting the exact native four-source binding/reviewer or using a truthy
+non-boolean selector is rejected. The default external-reader mode is unchanged.
+
+Construction performs no reads. Every subsequent reader call rechecks native
+binding review and invokes the real ledger reader anew, retaining original
+source timestamps, provenance, full reconciliation, pagination and revocation
+checks. This mode creates no persistence owner or backing data, does not turn
+an empty database into complete evidence, and does not extend the existing spot
+reader to margin history. Full margin-aware accounting remains a production
+blocker; the offline margin cash comparator is not that implementation.
+
+No backing data is discovered, initialized or certified here.
 RedisEvidenceReader checks its three fencing observations together; only its
 duplicate-fence row is selected, leaving existing canonical writer/nonce
 providers unchanged. Each observation reads anew; no cached proof is introduced.

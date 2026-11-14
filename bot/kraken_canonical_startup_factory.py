@@ -39,8 +39,8 @@ class ReviewedCanonicalKrakenSources:
     manager: Any = field(repr=False)
     strategy: Any = field(repr=False)
     broker: Any = field(repr=False)
-    independent_open_intents: Callable = field(repr=False)
-    independent_positions: Callable = field(repr=False)
+    independent_open_intents: Callable | None = field(repr=False)
+    independent_positions: Callable | None = field(repr=False)
     independent_remaining: Mapping[str, Callable] = field(repr=False)
     reviewed_source_owners: Mapping[str, str] = field(repr=False)
     monitoring_category: Any = field(repr=False)
@@ -51,10 +51,24 @@ class ReviewedCanonicalKrakenSources:
     review_native_four_sources: Callable | None = field(default=None, repr=False)
 
     identity_method: str = "response_echo"
+    use_native_ledger_readers: bool = False
 
     def __post_init__(self) -> None:
         if self.identity_method not in {"response_echo", "native_signed_request_v1"}:
             raise CanonicalKrakenStartupDenied("identity_method_invalid")
+        if type(self.use_native_ledger_readers) is not bool:
+            raise CanonicalKrakenStartupDenied("native_ledger_mode_invalid")
+        if self.use_native_ledger_readers:
+            # Explicitly select the reviewed native reconciliation reader for
+            # both consumers. Never discover a database or mix ledger owners.
+            if (type(self.native_four_sources) is not ReviewedNativeFourSources
+                    or not callable(self.review_native_four_sources)
+                    or self.independent_open_intents is not None
+                    or self.independent_positions is not None):
+                raise CanonicalKrakenStartupDenied("explicit_native_ledger_binding_required")
+        elif (not callable(self.independent_open_intents)
+              or not callable(self.independent_positions)):
+            raise CanonicalKrakenStartupDenied("complete_live_sources_and_receipts_required")
         for name in ("independent_remaining", "reviewed_source_owners", "receipts"):
             value = getattr(self, name)
             if not isinstance(value, Mapping):
@@ -62,8 +76,6 @@ class ReviewedCanonicalKrakenSources:
             object.__setattr__(self, name, MappingProxyType(dict(value)))
         if (set(self.receipts) != RECEIPTS
                 or any(type(value) is not str or not value for value in self.receipts.values())
-                or not callable(self.independent_open_intents)
-                or not callable(self.independent_positions)
                 or self.monitoring_category is None):
             raise CanonicalKrakenStartupDenied("complete_live_sources_and_receipts_required")
 
@@ -112,6 +124,8 @@ def make_canonical_kraken_startup_factory(
                     or sources.broker is not broker or review_sources(sources) is not True):
                 raise CanonicalKrakenStartupDenied("reviewed_runtime_source_binding_required")
             remaining = sources.independent_remaining
+            open_intents = sources.independent_open_intents
+            positions = sources.independent_positions
             if sources.native_four_sources is not None or sources.review_native_four_sources is not None:
                 if dict(sources.reviewed_source_owners) != EXPECTED_OWNERS:
                     raise CanonicalKrakenStartupDenied("complete_reviewed_source_owners_required")
@@ -129,6 +143,12 @@ def make_canonical_kraken_startup_factory(
                     monitoring_category=sources.monitoring_category,
                 )
                 remaining = {**remaining, **native}
+                if sources.use_native_ledger_readers:
+                    # This reader returns both independently persisted orders
+                    # and positions only after full reconciliation. Each call
+                    # rechecks actual owners and reads anew; no cached proof,
+                    # schema initialization or timestamp renewal is introduced.
+                    open_intents = positions = native["position_ledger_reconciliation"]
             if sources.kill_switch_binding is not None or sources.review_kill_switch_binding is not None:
                 # Review still covers all six actual owners. Construct the
                 # existing native pair only from explicit reviewed bindings.
@@ -138,7 +158,7 @@ def make_canonical_kraken_startup_factory(
                     broker=broker, approved_api_key_sha256=trust.api_key_sha256,
                     approved_iban_sha256=trust.account_iiban_sha256,
                     reviewed_provider_ids=trust.reviewed_provider_ids,
-                    independent_positions=sources.independent_positions,
+                    independent_positions=positions,
                     independent_remaining=remaining,
                     monitoring_category=sources.monitoring_category,
                     kill_switch_binding=sources.kill_switch_binding,
@@ -154,8 +174,8 @@ def make_canonical_kraken_startup_factory(
                 broker=broker, approved_api_key_sha256=trust.api_key_sha256,
                 approved_iban_sha256=trust.account_iiban_sha256,
                 reviewed_provider_ids=trust.reviewed_provider_ids,
-                independent_open_intents=sources.independent_open_intents,
-                independent_positions=sources.independent_positions,
+                independent_open_intents=open_intents,
+                independent_positions=positions,
                 independent_remaining=remaining,
                 reviewed_source_owners=sources.reviewed_source_owners,
                 monitoring_category=sources.monitoring_category, independently_reviewed=True,
