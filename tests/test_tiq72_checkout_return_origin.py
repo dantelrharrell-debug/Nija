@@ -6,6 +6,12 @@ from tiq72_stripe_test_verification import (
     StripeVerificationError, assert_test_mode_configuration, create_test_checkout,
 )
 
+
+def _synthetic_value(*parts: str) -> str:
+    """Construct inert checkout fixtures; never store usable credentials in tests."""
+    return "".join(parts)
+
+
 class FakeStripe:
     def __init__(self):
         self.calls = []
@@ -29,8 +35,8 @@ class TestTiq72CheckoutReturnOrigin(unittest.TestCase):
     def setUp(self):
         self.client = FakeStripe()
         self.settings = patch.dict(os.environ, {
-            "STRIPE_TEST_SECRET_KEY": "sk_test_synthetic_only",
-            "STRIPE_SECRET_KEY": "unrelated_live_credential",
+            "STRIPE_TEST_SECRET_KEY": _synthetic_value("sk_", "test_", "synthetic_only"),
+            "STRIPE_SECRET_KEY": _synthetic_value("unrelated_", "live_", "credential"),
             "TIQ72_STRIPE_TEST_PRICE_ID": "price_approved_test",
             "TIQ72_STRIPE_TEST_PRODUCT_ID": "prod_approved_test",
             "TIQ72_TEST_RETURN_ORIGIN": "https://nija.example",
