@@ -62,11 +62,13 @@ class CommerceIntegrationTests(unittest.TestCase):
                 "data":{"object":{"id":"cs_test_abc","metadata":{"tiq72_reservation_id":rid}}}}
             self.assertTrue(self.service.accept_signed_checkout(raw_body=b"signed",signature="sig"))
             self.assertFalse(self.service.accept_signed_checkout(raw_body=b"signed",signature="sig"))
-            report=self.service.fulfill_report(owner_id="adult-1",reservation_id=rid,
-                                               report={"score":70})
+            with self.assertRaisesRegex(CommerceDenied,"caller_report_forbidden"):
+                self.service.fulfill_report(owner_id="adult-1",reservation_id=rid,
+                                            report={"score":999})
+            report=self.service.fulfill_report(owner_id="adult-1",reservation_id=rid)
             self.assertEqual(report,{"score":70})
             with self.assertRaisesRegex(CommerceDenied,"reservation_not_owned"):
-                self.service.fulfill_report(owner_id="other",reservation_id=rid,report={"score":70})
+                self.service.fulfill_report(owner_id="other",reservation_id=rid)
             self.store.record_verified_event("evt_refund","charge.refunded",rid,
                                              "cs_test_abc",verified_reversal=True)
             with self.assertRaisesRegex(CommerceDenied,"report_unavailable"):
@@ -83,7 +85,7 @@ class CommerceIntegrationTests(unittest.TestCase):
             success_url="https://example.org/success",cancel_url="https://example.org/cancel")
         with self.assertRaisesRegex(CommerceDenied,"active_entitlement_required"):
             self.service.fulfill_report(owner_id="adult-1",
-                reservation_id=result["reservation_id"],report={"score":70})
+                reservation_id=result["reservation_id"])
 
     def test_unpaid_checkout_cannot_grant_entitlement(self):
         run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
