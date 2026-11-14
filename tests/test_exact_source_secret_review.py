@@ -4,7 +4,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 
@@ -15,6 +15,28 @@ import yaml
 from scripts.check_reviewed_secret_context import MANIFEST, check_context
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _reviewed_source_drift(root: Path, review: dict) -> list[str]:
+    """Identify reviewed source drift by path only; never export source or digests."""
+    changed = []
+    for name, expected in review["files"].items():
+        if not isinstance(name, str):
+            changed.append("invalid_review_path")
+            continue
+        path = PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts or str(path) != name:
+            changed.append("invalid_review_path")
+            continue
+        source = root / name
+        try:
+            if (source.resolve() != source.absolute() or not source.is_file()
+                    or hashlib.sha256(source.read_bytes()).hexdigest()
+                    != expected.replace(":", "")):
+                changed.append(name)
+        except (OSError, ValueError, TypeError):
+            changed.append(name)
+    return changed
 
 
 def test_review_adds_only_the_exact_142_reviewed_identities():
@@ -49,7 +71,10 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
     }
     assert len(review["entries"]) == 142
     assert len(review["files"]) == 78
-    assert check_context(ROOT)
+    assert check_context(ROOT), (
+        "Reviewed context invalid (paths only): "
+        + ", ".join(_reviewed_source_drift(ROOT, review) or ["manifest validation"])
+    )
     old = {(p, x["type"], x["hashed_secret"]): x
            for p, rows in before["results"].items() for x in rows}
     new = {(p, x["type"], x["hashed_secret"]): x
@@ -87,6 +112,18 @@ def fixture_review(root, contents="public format marker\n"):
         "entries": [{"path": "probe.py", "line": 1, "type": "Private Key"}],
     }))
     return source, manifest
+
+
+def test_reviewed_source_drift_reports_only_paths_and_preserves_denial(tmp_path):
+    source, manifest = fixture_review(tmp_path)
+    review = json.loads(manifest.read_text())
+    assert _reviewed_source_drift(tmp_path, review) == []
+    changed_bytes = "changed fixture bytes must not appear in diagnostics"
+    source.write_text(changed_bytes)
+    paths = _reviewed_source_drift(tmp_path, review)
+    assert paths == ["probe.py"]
+    assert changed_bytes not in repr(paths)
+    assert not check_context(tmp_path)
 
 
 def test_exact_source_passes_but_any_payload_or_context_change_denies(tmp_path):
