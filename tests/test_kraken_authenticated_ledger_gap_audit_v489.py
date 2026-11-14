@@ -1,4 +1,5 @@
 """Offline regression of v489 authenticated-history gap audit; no production API calls."""
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -6,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bot.kraken_authenticated_ledger_gap_audit_v489 import (
-    inspect_authenticated_kraken_ledger_gaps, _summarize_trades,
+    inspect_authenticated_kraken_ledger_gaps, _summarize_trades, _margin_counts,
 )
 
 ORDER = "OABCDE-ABCDE-ABCDEF"
@@ -101,6 +102,49 @@ class LedgerGapTests(unittest.TestCase):
             _summarize_trades({"T1": {"ordertxid": "internal-id", "type": "buy",
                                   "pair": "ETHUSD", "vol": "1", "cost": "2",
                                   "fee": "0", "price": "2"}})
+
+    def test_margin_amount_agreement_does_not_hide_reconciliation_blocker(self):
+        before = self.path.read_bytes()
+        fill = {"ordertxid": ORDER, "type": "buy", "pair": "ETHUSD",
+                "vol": "1", "cost": "2000", "fee": "2", "price": "2000",
+                "margin": "500"}
+        observed = {
+            "account_scope_asserted_by_caller": "platform:kraken",
+            "repeat_read_consistent": True, "trading_authorized": False,
+            "history": {"trades": {"TPRIVATE": fill}, "closed": {}, "ledger": {}},
+            "open_orders": {}, "balance": {},
+        }
+        for pair in ("ETHUSD", "ETHUSD:BTNL"):
+            with self.subTest(pair=pair):
+                fill["pair"] = pair
+                with patch("bot.kraken_authenticated_ledger_gap_audit_v489.make_kraken_account_identity_provider",
+                           return_value=lambda: {"verified": True}), patch(
+                        "bot.kraken_authenticated_ledger_gap_audit_v489.collect_from_existing_broker",
+                        return_value=observed) as reader:
+                    result = inspect_authenticated_kraken_ledger_gaps(**self.args)
+                reader.assert_called_once()
+                self.assertEqual(result["counts"]["fills_with_nonzero_margin"], 1)
+                self.assertIn(
+                    "margin_history_requires_independent_position_and_financing_reconciliation",
+                    result["issues"],
+                )
+                if pair == "ETHUSD":
+                    self.assertEqual(result["counts"]["broker_ledger_fill_amount_mismatches"], 0)
+                self.assertFalse(result["collector_install_allowed"])
+                self.assertFalse(result["independent_ledger_certified"])
+                self.assertFalse(result["authorizes_orders"])
+                self.assertNotIn("TPRIVATE", json.dumps(result))
+                self.assertNotIn(ORDER, json.dumps(result))
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_missing_or_invalid_margin_is_unknown_not_spot(self):
+        invalid = [None, True, False, "NaN", "Infinity", "-1", {}, "private-payload"]
+        rows = {str(index): {"margin": value} for index, value in enumerate(invalid)}
+        rows.update({"missing": {}, "malformed": None, "zero": {"margin": "0.000"},
+                     "positive": {"margin": "0.01"}})
+        self.assertEqual(_margin_counts(rows), {
+            "fills_with_nonzero_margin": 1, "fills_with_unknown_margin": 10,
+        })
 
 
 if __name__ == "__main__":

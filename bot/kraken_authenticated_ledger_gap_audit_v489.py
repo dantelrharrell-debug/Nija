@@ -129,6 +129,23 @@ def _summarize_ledger(rows: Any) -> tuple[
     return orders, unlinked
 
 
+def _margin_counts(trades: Mapping) -> dict[str, int]:
+    """Describe explicit margin evidence without inferring spot or position basis."""
+    counts = {"fills_with_nonzero_margin": 0, "fills_with_unknown_margin": 0}
+    for row in trades.values():
+        if not isinstance(row, Mapping) or "margin" not in row:
+            counts["fills_with_unknown_margin"] += 1
+            continue
+        try:
+            margin = _amount(row["margin"])
+        except ValueError:
+            counts["fills_with_unknown_margin"] += 1
+            continue
+        if margin > 0:
+            counts["fills_with_nonzero_margin"] += 1
+    return counts
+
+
 def inspect_authenticated_kraken_ledger_gaps(
     broker: Any, *, ledger_path: Path, persistent_root: Path,
     approved_api_key_sha256: str, approved_iban_sha256: str,
@@ -257,6 +274,13 @@ def inspect_authenticated_kraken_ledger_gaps(
                 or not isinstance(observed.get("open_orders"), Mapping)
                 or not isinstance(observed.get("balance"), Mapping)):
             return reject("broker_history_or_scope_unverified")
+        # Amount agreement cannot establish spot eligibility or margin basis.
+        # Preserve these blockers even if later pair/amount validation fails.
+        counts.update(_margin_counts(observed["history"]["trades"]))
+        if counts["fills_with_nonzero_margin"]:
+            reject("margin_history_requires_independent_position_and_financing_reconciliation")
+        if counts["fills_with_unknown_margin"]:
+            reject("broker_fill_margin_classification_unverified")
         broker_orders = _summarize_trades(observed["history"]["trades"])
         counts["authenticated_kraken_fill_orders"] = len(broker_orders)
         counts["kraken_fill_orders_without_ledger"] = len(
