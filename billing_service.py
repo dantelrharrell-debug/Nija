@@ -114,11 +114,15 @@ def _normalized_email(value: Any) -> str:
 
 
 def _stripe_module():
-    import stripe
-
     secret = os.getenv("STRIPE_SECRET_KEY", "").strip()
     if not secret:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
+    if (os.getenv("RENDER_SERVICE_ID", "").strip() == "srv-dasmtjfpn0mc73948r10"
+            and not secret.startswith(("rk_test_", "sk_test_"))):
+        # This isolated service must never contact Stripe with live credentials.
+        raise RuntimeError("billing_staging_requires_stripe_test_key")
+    import stripe
+
     stripe.api_key = secret
     return stripe
 
