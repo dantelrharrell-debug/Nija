@@ -224,3 +224,88 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
     assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf",
                       base_url="https://localhost").status_code == 403
     assert len(sent) == 1
+
+
+def _course_readiness_fixture(monkeypatch, isolated_sandbox, *, events=None,
+                              price_patch=None, link_patch=None):
+    """Provider-shaped test sandbox; never contacts Stripe or sends email."""
+    monkeypatch.setenv("NIJA_BILLING_PUBLIC_URL", "https://nija-course-sandbox.onrender.com")
+    monkeypatch.setenv("NIJA_BILLING_IDENTITY_SECRET", "test_identity_secret")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_fake_no_network")
+    app = billing.create_app(BillingServiceStore(isolated_sandbox))
+    price = {
+        "id": course.SANDBOX_COURSE_PRICE, "product": course.SANDBOX_COURSE_PRODUCT,
+        "livemode": False, "active": True, "type": "one_time",
+        "unit_amount": 9900, "currency": "usd",
+    }
+    link = {"id": course.SANDBOX_COURSE_LINK, "livemode": False, "active": True}
+    price.update(price_patch or {})
+    link.update(link_patch or {})
+    provider = SimpleNamespace(
+        Price=SimpleNamespace(retrieve=lambda _id, **_opts: price),
+        PaymentLink=SimpleNamespace(retrieve=lambda _id: link),
+        WebhookEndpoint=SimpleNamespace(list=lambda **_opts: {"data": [{
+            "url": "https://nija-course-sandbox.onrender.com/api/billing/webhook",
+            "status": "enabled",
+            "enabled_events": (list(billing._COURSE_SANDBOX_WEBHOOK_EVENTS)
+                               if events is None else events),
+        }]}),
+    )
+    monkeypatch.setattr(billing, "_stripe_module", lambda: provider)
+    return app.test_client()
+
+
+def test_course_sandbox_readyz_requires_only_course_checkout_and_reversal_events(
+        isolated_sandbox, monkeypatch):
+    client = _course_readiness_fixture(monkeypatch, isolated_sandbox)
+    response = client.get("/readyz")
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json() == {"service": "nija-billing", "status": "ready"}
+    assert not (billing._COURSE_SANDBOX_WEBHOOK_EVENTS &
+                {"customer.subscription.created", "invoice.paid"})
+
+
+@pytest.mark.parametrize("event", sorted([
+    "checkout.session.completed", "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed", "checkout.session.expired",
+    "charge.refunded", "charge.dispute.created",
+]))
+def test_course_sandbox_readyz_rejects_missing_required_webhook_event(
+        isolated_sandbox, monkeypatch, event):
+    events = sorted(billing._COURSE_SANDBOX_WEBHOOK_EVENTS - {event})
+    client = _course_readiness_fixture(monkeypatch, isolated_sandbox, events=events)
+    assert client.get("/readyz").status_code == 503
+
+
+@pytest.mark.parametrize("price_patch", [
+    {"livemode": True}, {"active": False}, {"type": "recurring"},
+    {"currency": "eur"}, {"unit_amount": 100},
+    {"product": "prod_wrong"}, {"id": "price_wrong"},
+])
+def test_course_sandbox_readyz_rejects_bad_price_identity(
+        isolated_sandbox, monkeypatch, price_patch):
+    client = _course_readiness_fixture(
+        monkeypatch, isolated_sandbox, price_patch=price_patch)
+    assert client.get("/readyz").status_code == 503
+
+
+@pytest.mark.parametrize("link_patch", [
+    {"livemode": True}, {"active": False}, {"id": "plink_wrong"},
+])
+def test_course_sandbox_readyz_rejects_bad_payment_link_identity(
+        isolated_sandbox, monkeypatch, link_patch):
+    client = _course_readiness_fixture(
+        monkeypatch, isolated_sandbox, link_patch=link_patch)
+    assert client.get("/readyz").status_code == 503
+
+
+@pytest.mark.parametrize("name,value", [
+    ("NIJA_COURSE_SANDBOX_DB_ISOLATED", "false"),
+    ("STRIPE_SECRET_KEY", "sk_live_wrong_mode"),
+    ("NIJA_COURSE_PUBLIC_URL", "https://production.example.test"),
+])
+def test_course_sandbox_readyz_rejects_invalid_isolation(
+        isolated_sandbox, monkeypatch, name, value):
+    client = _course_readiness_fixture(monkeypatch, isolated_sandbox)
+    monkeypatch.setenv(name, value)
+    assert client.get("/readyz").status_code == 503
