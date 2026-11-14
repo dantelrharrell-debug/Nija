@@ -30,6 +30,10 @@ on:
       - 'requirements.txt'
       - 'bot/failure_cluster_engine.py'
       - 'bot/runtime_kraken_native_margin_backup_v380_patch.py'
+      - 'bot/runtime_kraken_openpositions_margin_reconciliation_v364_patch.py'
+      - 'bot/tests/test_runtime_kraken_openpositions_margin_reconciliation_v364.py'
+      - 'bot/tests/test_execution_pipeline_margin_ledger_hooks.py'
+      - 'bot/tests/test_margin_position_ledger.py'
       - 'tests/test_v392_hardened_client_id_patch.py'
       - 'ops/recovery/render_readonly_baseline.json'
       - 'tests/test_kraken_instance_diagnostic.py'
@@ -71,6 +75,9 @@ jobs:
             tests/test_v392_hardened_client_id_patch.py \
             bot/tests/test_failure_cluster_engine.py \
             bot/tests/test_runtime_kraken_native_margin_backup_v380.py \
+            bot/tests/test_runtime_kraken_openpositions_margin_reconciliation_v364.py \
+            bot/tests/test_execution_pipeline_margin_ledger_hooks.py \
+            bot/tests/test_margin_position_ledger.py \
             tests/test_kraken_instance_diagnostic.py \
             tests/test_render_recovery_verification.py \
             tests/test_kraken_collector_composition_v487.py \
