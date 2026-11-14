@@ -6,7 +6,7 @@ const seo = readFileSync(new URL("../web/trading-challenge/v515/src/lib/seo.js",
 
 function routeMetadata(route) {
   const key = JSON.stringify(route) + ": { title: ";
-  const line = seo.split("\\n").find((entry) => entry.includes(key));
+  const line = seo.split("\n").find((entry) => entry.includes(key));
   assert.ok(line, "route metadata exists: " + route);
   return line;
 }
