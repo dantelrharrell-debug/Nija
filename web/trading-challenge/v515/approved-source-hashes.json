@@ -41,7 +41,7 @@
   "src/lib/tiqProgress.js": "db9d7b914015cbdcf96b662dfae3442691b0ed9e3c8737343e576baf6ad5aca2",
   "src/lib/tiqBackendClient.js": "e1d18ab028f795a722ce4cbbba863fb30756273e009e958572083472640d0526",
   "src/lib/gameAnalytics.js": "04b60626cbbdc97411b8f092e1c6c5873353cf9229be30d96b4e2ed151b5f6d2",
-  "src/lib/seo.js": "84bbc54cd5b4732c790afd4a08d67f44c1a6b66303d15574ce8a0f3834f36152",
+  "src/lib/seo.js": "13b27da2326996d351dd4716e58d722b40e633204368176abadcc74c3a36971e",
   "src/lib/tiqNews.js": "97f234bb388421db11f7129fb225eb283656bb53bb7ee7e741d1ae24e332ace5",
   "src/lib/pb.js": "fda4bd64f66e99d983b91b88619a9200705de972e9a5ef82d71e516a89e1755f",
   "src/lib/adultDeclaration.js": "48cf9027f7113098d31f40ae92969ada7135e3e1038c726d244df2874f3a5082",
