@@ -78,6 +78,36 @@ class CommerceIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(CommerceDenied,"report_unavailable"):
                 self.store.get_report(rid,"adult-1")
 
+    def test_malformed_stored_score_fails_closed_after_payment(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
+            canonical_run=run,authoritative_score={"score":70},
+            success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        rid=result["reservation_id"]
+        with self.db:
+            self.db.execute(
+                "UPDATE tiq72_runs SET score_json=? WHERE id=(SELECT run_id FROM tiq72_reservations WHERE id=?)",
+                ("not-json",rid))
+        self.store.record_verified_event("evt_paid_invalid_score",
+            "checkout.session.completed",rid,"cs_test_abc",verified_paid=True)
+        with self.assertRaisesRegex(CommerceDenied,"stored_score_invalid"):
+            self.service.fulfill_report(owner_id="adult-1",reservation_id=rid)
+        self.assertEqual(self.db.execute(
+            "SELECT COUNT(*) FROM tiq72_reports WHERE reservation_id=?",(rid,)).fetchone()[0],0)
+
+    def test_report_cannot_be_fulfilled_after_refund(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
+            canonical_run=run,authoritative_score={"score":70},
+            success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        rid=result["reservation_id"]
+        self.store.record_verified_event("evt_paid_then_refund",
+            "checkout.session.completed",rid,"cs_test_abc",verified_paid=True)
+        self.store.record_verified_event("evt_refund_before_report",
+            "charge.refunded",rid,"cs_test_abc",verified_reversal=True)
+        with self.assertRaisesRegex(CommerceDenied,"active_entitlement_required"):
+            self.service.fulfill_report(owner_id="adult-1",reservation_id=rid)
+
     def test_report_denied_before_verified_payment(self):
         run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
         result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
