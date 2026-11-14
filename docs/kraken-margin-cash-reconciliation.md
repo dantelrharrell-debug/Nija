@@ -1,4 +1,4 @@
-# Margin cash comparison: first accounting component
+# Margin cash and open-position comparison
 
 `bot/kraken_margin_cash_reconciliation.py` compares independently persisted
 margin/rollover ledger rows against supplied Kraken Ledgers records. It performs
@@ -15,6 +15,8 @@ Missing/extra rows, duplicate local IDs and account/key provenance conflicts den
 Sources checked on November 14, 2026:
 - https://docs.kraken.com/api-reference/account-data/get-ledgers-info
 - https://support.kraken.com/articles/360027712571-how-to-calculate-profits-losses-from-trading-on-margin
+- https://docs.kraken.com/api-reference/account-data/get-open-positions
+- https://support.kraken.com/articles/360001184886-how-to-interpret-trades-history-fields
 
 ## Call contract
 
@@ -35,6 +37,40 @@ position reconciliation, protective exits, collector certification or orders.
 It contains no private ledger IDs or transaction references. Fixed denial codes
 do not interpolate input values. No API calls, signing, database writes,
 credential changes, startup hooks, or production configuration changes occur.
+
+## Individual open margin position comparison
+
+`compare_margin_position_records(exchange_positions, persisted_rows,
+account_scope=..., account_sha256=..., api_key_sha256=...)` compares the supplied
+unconsolidated OpenPositions result against independently persisted position
+records. It requires the exact position-ID set, original opening-order ID, raw
+pair code, direction, order type, position timestamp, cost, fee, opened volume,
+closed volume and margin amount to match. Financial values remain bounded decimal
+strings. Missing, extra, duplicate, malformed, closed, zero-margin or conflicting
+rows deny. Multiple position IDs may share an opening order, preserving partial
+executions instead of merging them by order ID.
+
+Each local row carries `exchange_position_id`, `broker`, `account_scope`,
+`account_sha256`, `api_key_sha256` and the listed native Kraken fields. Read
+OpenPositions without market consolidation and without a position-ID filter.
+The caller must establish request scope and response completeness; this pure
+comparison cannot detect an omitted position that is missing from both inputs.
+Do not copy the broker response into local rows and call that independence.
+
+Remaining base quantities are computed as `vol - vol_closed` with exact decimal
+arithmetic. Buys and sells remain separate per raw pair code, so opposite
+positions cannot conceal each other's exposure. These quantities are not USD
+valuation. Dynamic `value`, `net`, financing terms and next-rollover time are
+outside this comparison and are not authenticated by its output. Fees still
+require the separate ledger cash comparison; a matching position fee field
+does not identify the asset actually charged.
+
+Outputs contain counts and aggregate quantities, not position/order IDs.
+`input_positions_match` reports agreement of the supplied static terms only.
+Complete-snapshot, identity, fill-allocation, balance, protection, collector
+certification and order-authorization flags remain false, including for empty
+inputs. This adds an accounting comparison, not a production persistence owner,
+margin-aware collector provider, account-risk publisher or startup binding.
 
 ## Remaining integration work
 
@@ -60,4 +96,8 @@ Run `NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -B -S -m unittest discover -s tests
 and fees, tiny fees beside large amounts, distinct assets, missing/extra/duplicate
 records, account and credential conflicts, malformed decimals, changed terms,
 unknown types, nonzero rollover amounts, no input mutation, and non-certification.
+Position tests additionally cover partial closes, duplicate/missing/extra lots,
+shared opening orders, separate buy/sell totals, every static field, scope
+conflicts, unsupported consolidation, row budgets, tiny remainders beside large
+volumes and fixed errors that do not disclose position/order identifiers.
 The existing offline recovery workflow runs this suite without dependencies.
