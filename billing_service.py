@@ -117,10 +117,17 @@ def _stripe_module():
     secret = os.getenv("STRIPE_SECRET_KEY", "").strip()
     if not secret:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
-    if (os.getenv("RENDER_SERVICE_ID", "").strip() == "srv-dasmtjfpn0mc73948r10"
-            and not secret.startswith(("rk_test_", "sk_test_"))):
-        # This isolated service must never contact Stripe with live credentials.
-        raise RuntimeError("billing_staging_requires_stripe_test_key")
+    service_id = os.getenv("RENDER_SERVICE_ID", "").strip()
+    course_sandbox = os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+    staging_service = service_id == "srv-dasmtjfpn0mc73948r10"
+    course_sandbox_service = service_id == "srv-dbc4oe5g1s2s73925fb0"
+    if (staging_service or course_sandbox_service or course_sandbox) and not secret.startswith(
+            ("rk_test_", "sk_test_")):
+        # Never send live, publishable, or unknown keys to Stripe from an
+        # isolated billing or course test environment. Fail before import.
+        reason = ("course_sandbox_requires_stripe_test_key" if course_sandbox_service or course_sandbox
+                  else "billing_staging_requires_stripe_test_key")
+        raise RuntimeError(reason)
     import stripe
 
     stripe.api_key = secret
