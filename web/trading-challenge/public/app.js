@@ -88,7 +88,9 @@
     text("balance", cash(virtualBalance));
     text("round-counter", "ROUND " + (round + 1) + " OF " + scenarios.length);
     text("streak", "DECISIONS MADE " + answers.length);
-    el("progress-bar").style.width = (100 * round / scenarios.length) + "%";
+    const progress = Math.round(100 * round / scenarios.length);
+    el("progress-bar").style.width = progress + "%";
+    el("progress-bar").parentElement.setAttribute("aria-valuenow", String(progress));
     text("round-tag", s.tag); text("round-title", s.title);
     text("round-caption", s.caption); text("headline", s.headline);
     text("question", s.question);
@@ -135,7 +137,9 @@
     feedback.classList.remove("hidden");
     text("next", round === scenarios.length - 1 ? "See challenge summary →" : "Next market moment →");
     el("next").classList.remove("hidden");
-    el("progress-bar").style.width = 100 * answers.length / scenarios.length + "%";
+    const progress = Math.round(100 * answers.length / scenarios.length);
+    el("progress-bar").style.width = progress + "%";
+    el("progress-bar").parentElement.setAttribute("aria-valuenow", String(progress));
   }
   function finish() {
     text("free-summary", "You finished with " + cash(virtualBalance) + " in fictional capital. Short-term simulated P&L does not determine decision quality. Unlock the optional $1 analysis of risk, research, and discipline.");
