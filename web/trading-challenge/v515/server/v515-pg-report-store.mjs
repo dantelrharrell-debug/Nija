@@ -70,4 +70,64 @@ export class V515PgReportStore {
       throw e;
     } finally { client.release(); }
   }
+
+  // Signed events are verified with fresh Stripe retrieval BEFORE reaching here.
+  // A row lock serializes payment, reversal and report creation; a terminal
+  // refund/dispute can never be re-granted by a late checkout webhook.
+  async recordVerifiedProviderEvent({eventId,eventType,reservationId,sessionId}) {
+    const paymentEvents = ["checkout.session.completed","checkout.session.async_payment_succeeded"];
+    const reverseEvents = ["charge.refunded","charge.dispute.created"];
+    if (!okId(eventId) || !eventId.startsWith("evt_") ||
+        !okId(reservationId) || !okId(sessionId) ||
+        !sessionId.startsWith("cs_test_") ||
+        ![...paymentEvents,...reverseEvents].includes(eventType))
+      throw new PaidReportDenied("invalid_verified_event");
+    const client=await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const locked=await client.query(`
+        SELECT reservation_id, stripe_session, state
+        FROM tiq72_v515_reservations
+        WHERE reservation_id=$1 FOR UPDATE`,[reservationId]);
+      const purchase=locked.rows?.[0];
+      if (!purchase || purchase.reservation_id!==reservationId ||
+          purchase.stripe_session!==sessionId)
+        throw new PaidReportDenied("reservation_session_mismatch");
+      const inserted=await client.query(`
+        INSERT INTO tiq72_v515_verified_events
+          (event_id,event_type,reservation_id,stripe_session)
+        VALUES ($1,$2,$3,$4)
+        ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
+        [eventId,eventType,reservationId,sessionId]);
+      if (!inserted.rowCount) {
+        const previous=await client.query(`
+          SELECT event_type,reservation_id,stripe_session
+          FROM tiq72_v515_verified_events WHERE event_id=$1`,[eventId]);
+        const p=previous.rows?.[0];
+        if (!p || p.event_type!==eventType ||
+            p.reservation_id!==reservationId || p.stripe_session!==sessionId)
+          throw new PaidReportDenied("provider_event_replay_conflict");
+        await client.query("COMMIT");
+        return {duplicate:true,state:purchase.state};
+      }
+      let next;
+      if (paymentEvents.includes(eventType)) {
+        if (!["checkout_created","paid"].includes(purchase.state))
+          throw new PaidReportDenied("terminal_state_cannot_be_paid");
+        next="paid";
+      } else if (eventType==="charge.dispute.created") {
+        next="disputed";
+      } else {
+        next=purchase.state==="disputed"?"disputed":"refunded";
+      }
+      await client.query(`
+        UPDATE tiq72_v515_reservations SET state=$2,updated_at=now()
+        WHERE reservation_id=$1`,[reservationId,next]);
+      await client.query("COMMIT");
+      return {duplicate:false,state:next};
+    } catch(e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {client.release();}
+  }
 }
