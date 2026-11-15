@@ -161,6 +161,8 @@ def register_from_protected_root() -> str:
         )
         registered_here = True
         return "protected_startup_factory_registered"
+    except PermissionError:
+        return "protected_startup_permission_denied"
     except FileNotFoundError:
         return "protected_startup_artifacts_missing"
     except (Exception, SystemExit):
