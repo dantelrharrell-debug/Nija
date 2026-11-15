@@ -17,6 +17,56 @@ from scripts.check_reviewed_secret_context import MANIFEST, check_context
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def normalize_reviewed_recovery_pin_replacements(current):
+    """Check three public file digests before comparing the historical baseline."""
+    name = "ops/recovery/render_readonly_baseline.json"
+    pins = json.loads((ROOT / name).read_text())["source_sha256"]
+    replacements = (
+        ("bot/kraken_live_history_recovery.py", 10,
+         "bf:d7:45:d6:8e:48:69:7f:37:d8:7a:82:8f:f9:5f:9a:d0:0f:81:b6"),
+        ("bot/broker_manager.py", 15,
+         "93:50:a9:d3:ef:51:4c:73:6b:e6:88:06:15:5d:ed:b8:82:1a:44:5a"),
+        ("start.sh", 19,
+         "32:a7:f6:5b:69:fe:c0:d3:0a:48:45:46:1d:ce:4f:31:ea:90:24:b4"),
+    )
+    for source, line, original in replacements:
+        digest = hashlib.sha256((ROOT / source).read_bytes()).hexdigest()
+        assert pins[source] == digest
+        identity = hashlib.sha1(digest.encode(), usedforsecurity=False).hexdigest()
+        matches = [row for row in current["results"][name]
+                   if row["type"] == "Hex High Entropy String"
+                   and row["line_number"] == line and row["hashed_secret"] == identity]
+        assert len(matches) == 1
+        assert not any(row["hashed_secret"] == original.replace(":", "")
+                       for row in current["results"][name])
+        matches[0]["hashed_secret"] = original.replace(":", "")
+
+
+@pytest.mark.parametrize("source", [
+    "bot/kraken_live_history_recovery.py", "bot/broker_manager.py", "start.sh",
+])
+def test_public_recovery_digest_review_rejects_substitution(tmp_path, monkeypatch, source):
+    """An exact public digest review must never allow a replacement candidate."""
+    name = "ops/recovery/render_readonly_baseline.json"
+    target = tmp_path / name
+    target.parent.mkdir(parents=True)
+    target.write_bytes((ROOT / name).read_bytes())
+    baseline_path = tmp_path / ".secrets.baseline"
+    baseline = json.loads((ROOT / ".secrets.baseline").read_text())
+    baseline["results"] = {name: baseline["results"][name]}
+    baseline_path.write_text(json.dumps(baseline))
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "add", name], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        assert hook_main(["--json", "--baseline", str(baseline_path), name]) == 0
+    payload = json.loads(target.read_text())
+    payload["source_sha256"][source] = hashlib.sha256(b"unreviewed-public-digest-substitution").hexdigest()
+    target.write_text(json.dumps(payload, indent=2) + "\n")
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        assert hook_main(["--json", "--baseline", str(baseline_path), name]) == 1
+
+
 def _reviewed_source_drift(root: Path, review: dict) -> list[str]:
     """Identify reviewed source drift by path only; never export source or digests."""
     changed = []
@@ -77,6 +127,7 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
         "git", "show", "15b64ddcb44fa67f33a336b799ee8f89b1bc1fe9:.secrets.baseline",
     ], cwd=ROOT))
     current = json.loads((ROOT / ".secrets.baseline").read_text())
+    normalize_reviewed_recovery_pin_replacements(current)
     # Normalize only the separately reviewed public source-digest replacement
     # before checking the original 142-candidate review. All other identities,
     # audit flags, metadata and detector configuration remain checked below.
