@@ -112,9 +112,13 @@ export class V515PgReportStore {
       }
       let next;
       if (paymentEvents.includes(eventType)) {
-        if (!["checkout_created","paid"].includes(purchase.state))
-          throw new PaidReportDenied("terminal_state_cannot_be_paid");
-        next="paid";
+        // Stripe delivers events out of order. Receipt is durable, but late
+        // success must never restore a refunded or disputed entitlement.
+        if (purchase.state==="refunded"||purchase.state==="disputed")
+          next=purchase.state;
+        else if (["checkout_created","paid"].includes(purchase.state))
+          next="paid";
+        else throw new PaidReportDenied("checkout_not_reserved");
       } else if (eventType==="charge.dispute.created") {
         next="disputed";
       } else {
