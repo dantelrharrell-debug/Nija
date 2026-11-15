@@ -6,7 +6,7 @@ export const TEST_PRODUCT="prod_nija_iq72_sandbox_v1";
 export class PaidReportDenied extends Error {constructor(code){super(code);this.name="PaidReportDenied";}}
 const idOf=x=>typeof x==="string"?x:x?.id;
 const ident=(v,p="")=>typeof v==="string"&&v.length>p.length&&v.length<=160&&v.startsWith(p);
-function requireProof({session,lines,intent,charge,reservationId}) {
+export function requireProof({session,lines,intent,charge,reservationId}) {
   if(session?.livemode!==false||session.mode!=="payment"||
      session.status!=="complete"||session.payment_status!=="paid"||
      session.client_reference_id!==reservationId||
