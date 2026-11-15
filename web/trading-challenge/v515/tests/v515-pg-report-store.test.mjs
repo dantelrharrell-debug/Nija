@@ -52,3 +52,61 @@ test("inappropriate session rejected before DB connect",async()=>{
  const f=fixture();await assert.rejects(f.store.storeVerifiedReport({ownerId:"test-owner",runId:"test-run",sessionId:"cs_live_wrong",report:{iq:93}}),/invalid_report_transaction/);
  assert.equal(f.calls.length,0);
 });
+
+function eventFixture({state="checkout_created",duplicate=false,prior=null,session="cs_test_example"}={}) {
+ const calls=[];let released=0;
+ const row={reservation_id:"reservation-test",stripe_session:session,state};
+ const client={query:async(sql,params)=>{
+   calls.push({sql,params});
+   if(sql.includes("FROM tiq72_v515_reservations")&&sql.includes("FOR UPDATE"))
+     return {rows:[row]};
+   if(sql.includes("INSERT INTO tiq72_v515_verified_events"))
+     return {rowCount:duplicate?0:1};
+   if(sql.includes("FROM tiq72_v515_verified_events WHERE event_id"))
+     return {rows:prior?[prior]:[]};
+   return {rowCount:1,rows:[]};
+ },release:()=>{released++;}};
+ const store=new V515PgReportStore({connect:async()=>client});
+ const record=(eventType="checkout.session.completed",sessionId="cs_test_example")=>
+   store.recordVerifiedProviderEvent({eventId:"evt_test",eventType,
+     reservationId:"reservation-test",sessionId});
+ return {record,calls,get released(){return released}};
+}
+test("signed paid event locks row and commits paid grant",async()=>{
+ const f=eventFixture();assert.deepEqual(await f.record(),{duplicate:false,state:"paid"});
+ assert.ok(f.calls.some(x=>x.sql.includes("FOR UPDATE")));
+ assert.ok(f.calls.some(x=>x.sql.includes("INSERT INTO tiq72_v515_verified_events")));
+ assert.ok(f.calls.some(x=>x.sql.includes("UPDATE tiq72_v515_reservations")&&x.params[1]==="paid"));
+ assert.ok(f.calls.some(x=>x.sql==="COMMIT"));assert.equal(f.released,1);
+});
+test("event ID duplicate with same identity is idempotent",async()=>{
+ const f=eventFixture({duplicate:true,prior:{event_type:"checkout.session.completed",
+  reservation_id:"reservation-test",stripe_session:"cs_test_example"}});
+ assert.deepEqual(await f.record(),{duplicate:true,state:"checkout_created"});
+ assert.ok(!f.calls.some(x=>x.sql.includes("UPDATE tiq72_v515_reservations")));
+});
+test("event replay of another reservation rejects",async()=>{
+ const f=eventFixture({duplicate:true,prior:{event_type:"checkout.session.completed",
+  reservation_id:"other-reservation",stripe_session:"cs_test_example"}});
+ await assert.rejects(f.record(),/provider_event_replay_conflict/);
+ assert.ok(f.calls.some(x=>x.sql==="ROLLBACK"));
+});
+test("checkout event after terminal refund cannot resurrect entitlement",async()=>{
+ const f=eventFixture({state:"refunded"});
+ await assert.rejects(f.record(),/terminal_state_cannot_be_paid/);
+ assert.ok(f.calls.some(x=>x.sql==="ROLLBACK"));
+});
+test("refund event updates state after locking purchase",async()=>{
+ const f=eventFixture({state:"paid"});
+ assert.deepEqual(await f.record("charge.refunded"),{duplicate:false,state:"refunded"});
+ assert.ok(f.calls.some(x=>x.sql.includes("UPDATE tiq72_v515_reservations")&&x.params[1]==="refunded"));
+});
+test("dispute state stays terminal on later refund",async()=>{
+ const f=eventFixture({state:"disputed"});
+ assert.deepEqual(await f.record("charge.refunded"),{duplicate:false,state:"disputed"});
+});
+test("foreign Stripe checkout blocked without ledger changes",async()=>{
+ const f=eventFixture({session:"cs_test_other"});
+ await assert.rejects(f.record(),/reservation_session_mismatch/);
+ assert.ok(!f.calls.some(x=>x.sql.includes("UPDATE tiq72_v515_reservations")));
+});
