@@ -415,3 +415,90 @@ def test_test_grant_reconciliation_fails_closed_on_mode_delivery_or_stale_previe
                         lambda: ("plink_live", "price_live", "prod_live", True))
     assert c.post(p, json={"expected_session_ids": ids[1:]}, headers=h).status_code == 503
     assert calls == []
+
+
+def test_simulated_sender_transport_only_in_private_isolated_sandbox(tmp_path, monkeypatch):
+    """The diagnostic sends ONLY Resend's simulator payload; no payment or link."""
+    import billing_service as billing
+    import course_portal as course
+    from billing_service_store import BillingServiceStore
+    from types import SimpleNamespace
+
+    token = "operator-test-token-2026-" * 3
+    db = f"sqlite:///{tmp_path / 'simulated-email.db'}"
+    monkeypatch.setenv("BILLING_DATABASE_URL", db)
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "false")
+    monkeypatch.setenv("NIJA_COURSE_UPLOAD_SECRET", token)
+    monkeypatch.setenv("RESEND_API_KEY", "not-a-real-test-key")
+    monkeypatch.setenv("NIJA_COURSE_SENDER", "NIJA AI Trading <support@nijaaitrading.com>")
+    monkeypatch.setattr(course.PortalStore, "has_bundle", lambda self: True)
+    monkeypatch.setattr(course, "expected_course_identity",
+                        lambda: ("plink_test", "price_test", "prod_test", False))
+    forbidden = lambda *_a, **_k: pytest.fail("Cannot queue actual course delivery")
+    monkeypatch.setattr(course, "on_course_payment", forbidden)
+    monkeypatch.setattr(course, "_email_access", forbidden)
+
+    calls = []
+    def fake_post(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return SimpleNamespace(status_code=200, json=lambda: {"id": "email_simulator_id"})
+    monkeypatch.setattr(course.requests, "post", fake_post)
+    app = billing.create_app(BillingServiceStore(db))
+    client = app.test_client()
+    url = "/course-portal/admin/test-simulator-email"
+    auth = {"Authorization": "Bearer " + token}
+    confirmation = {"confirmation": "SIMULATOR_ONLY"}
+    assert client.post(url, json=confirmation).status_code == 403
+    assert client.post(url, headers=auth, json={}).status_code == 400
+    response = client.post(url, headers=auth, json=confirmation)
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "provider_accepted": True, "simulated": True,
+        "email_sent_to_real_customer": False,
+        "course_access_granted": False, "test_mode": True
+    }
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://api.resend.com/emails"
+    assert calls[0]["json"]["to"] == ["delivered@resend.dev"]
+    assert "claim?token=" not in str(calls[0]["json"])
+    assert "course access link" in calls[0]["json"]["text"].lower()
+    assert calls[0]["headers"]["Idempotency-Key"].startswith("nija-course-simulator-v1-")
+
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "true")
+    assert client.post(url, headers=auth, json=confirmation).status_code == 503
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "false")
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "false")
+    assert client.post(url, headers=auth, json=confirmation).status_code == 503
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    monkeypatch.setattr(course, "expected_course_identity",
+                        lambda: ("plink_live", "price_live", "prod_live", True))
+    assert client.post(url, headers=auth, json=confirmation).status_code == 503
+    assert len(calls) == 1
+
+
+def test_simulated_sender_failure_is_generic_and_does_not_issue_access(tmp_path, monkeypatch):
+    import billing_service as billing
+    import course_portal as course
+    from billing_service_store import BillingServiceStore
+    from types import SimpleNamespace
+    db = f"sqlite:///{tmp_path / 'simulator-failure.db'}"
+    token = "other-test-operator-token-" * 3
+    monkeypatch.setenv("BILLING_DATABASE_URL", db)
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "false")
+    monkeypatch.setenv("NIJA_COURSE_UPLOAD_SECRET", token)
+    monkeypatch.setenv("RESEND_API_KEY", "not-a-real-key")
+    monkeypatch.setattr(course.PortalStore, "has_bundle", lambda self: True)
+    monkeypatch.setattr(course, "expected_course_identity",
+                        lambda: ("plink_test", "price_test", "prod_test", False))
+    def rejected(*_a, **_k):
+        return SimpleNamespace(status_code=401, json=lambda: {"message": "internal secret"})
+    monkeypatch.setattr(course.requests, "post", rejected)
+    client = billing.create_app(BillingServiceStore(db)).test_client()
+    response = client.post("/course-portal/admin/test-simulator-email",
+                           headers={"Authorization": "Bearer " + token},
+                           json={"confirmation": "SIMULATOR_ONLY"})
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "simulated_provider_not_accepted"}
+    assert b"internal secret" not in response.data
