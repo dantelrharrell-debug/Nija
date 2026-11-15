@@ -91,9 +91,19 @@ test("event replay of another reservation rejects",async()=>{
  await assert.rejects(f.record(),/provider_event_replay_conflict/);
  assert.ok(f.calls.some(x=>x.sql==="ROLLBACK"));
 });
-test("checkout event after terminal refund cannot resurrect entitlement",async()=>{
+test("late paid checkout after refund is acknowledged but never restored",async()=>{
  const f=eventFixture({state:"refunded"});
- await assert.rejects(f.record(),/terminal_state_cannot_be_paid/);
+ assert.deepEqual(await f.record(),{duplicate:false,state:"refunded"});
+ assert.ok(f.calls.some(x=>x.sql.includes("UPDATE tiq72_v515_reservations")&&x.params[1]==="refunded"));
+ assert.ok(f.calls.some(x=>x.sql==="COMMIT"));
+});
+test("late paid checkout after dispute remains disputed",async()=>{
+ const f=eventFixture({state:"disputed"});
+ assert.deepEqual(await f.record(),{duplicate:false,state:"disputed"});
+});
+test("checkout never pays an unreserved record",async()=>{
+ const f=eventFixture({state:"reserved"});
+ await assert.rejects(f.record(),/checkout_not_reserved/);
  assert.ok(f.calls.some(x=>x.sql==="ROLLBACK"));
 });
 test("refund event updates state after locking purchase",async()=>{
