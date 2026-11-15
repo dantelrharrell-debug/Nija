@@ -6,7 +6,10 @@ CREATE TABLE IF NOT EXISTS tiq72_v515_runs (
   run_id TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL,
   canonical_run JSONB NOT NULL,
+  canonical_digest TEXT NOT NULL,
+  attempt_key TEXT NOT NULL,
   version TEXT NOT NULL DEFAULT 'v515-72-decisions',
+  CONSTRAINT tiq72_v515_unique_attempt UNIQUE (owner_id, attempt_key),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT tiq72_v515_run_version CHECK (version = 'v515-72-decisions'),
   CONSTRAINT tiq72_v515_owner_nonempty CHECK (length(owner_id) BETWEEN 1 AND 160)
