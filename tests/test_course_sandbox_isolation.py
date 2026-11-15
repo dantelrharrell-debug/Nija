@@ -136,6 +136,7 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
     state = {"refunded": False}
     stripe = fake_stripe()
     charge = stripe.Charge.retrieve.return_value
+    charge["id"] = "ch_test_foundations"
     def retrieve_charge(_id):
         charge["refunded"] = state["refunded"]
         charge["amount_refunded"] = 9900 if state["refunded"] else 0
@@ -214,6 +215,49 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
     assert client.get("/course-portal/claim?token=" + token,
                       base_url="https://localhost").status_code == 403
     state["refunded"] = True
+    # Signed provider refund revokes the DURABLE ledger immediately, before
+    # any further customer download request; one previously-sent email remains.
+    event.update(id="evt_test_sandbox_refund", type="charge.refunded",
+                 data={"object": {"id": "ch_test_foundations", "livemode": False}})
+    refunded = client.post("/api/billing/webhook", data=b"synthetic-verified",
+                           headers={"Stripe-Signature": "sandbox-valid"})
+    assert refunded.status_code == 200
+    assert app.config["COURSE_LEDGER"].get("cs_test_foundations_sandbox")["granted"] is False
     assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf",
                       base_url="https://localhost").status_code == 403
     assert len(sent) == 1
+    repeat = client.post("/api/billing/webhook", data=b"synthetic-verified",
+                         headers={"Stripe-Signature": "sandbox-valid"})
+    assert repeat.status_code == 200 and repeat.get_json()["duplicate"] is True
+    assert len(sent) == 1
+
+
+def test_verified_charge_dispute_revokes_only_own_course_entitlement(isolated_sandbox):
+    """Provider-refetched charge dispute revokes the matching course intent only."""
+    ledger = course.CourseLedger(create_engine(isolated_sandbox))
+    ledger.upsert("cs_test_own", "own@example.test", None,
+                  "pi_test_foundations", "paid", True)
+    ledger.upsert("cs_test_other", "other@example.test", None,
+                  "pi_test_unrelated", "paid", True)
+    stripe = fake_stripe()
+    charge = stripe.Charge.retrieve.return_value
+    charge["id"] = "ch_test_foundations"
+    charge["payment_intent"] = "pi_test_foundations"
+    charge["disputed"] = True
+    stripe.Charge.retrieve.return_value = charge
+    # Match only one test-mode course session on revalidation.
+    course.handle_course_event(
+        stripe, ledger, "charge.dispute.created",
+        {"charge": "ch_test_foundations", "livemode": False}
+    )
+    assert ledger.get("cs_test_own")["granted"] is False
+    assert ledger.get("cs_test_other")["granted"] is True
+    # A live-mode charge cannot touch an isolated TEST entitlement.
+    ledger.upsert("cs_test_own", "own@example.test", None,
+                  "pi_test_foundations", "paid", True)
+    charge["livemode"] = True
+    course.handle_course_event(
+        stripe, ledger, "charge.dispute.created",
+        {"charge": "ch_test_foundations", "livemode": False}
+    )
+    assert ledger.get("cs_test_own")["granted"] is True
