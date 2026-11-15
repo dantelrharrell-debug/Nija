@@ -361,3 +361,21 @@ def test_real_bot_main_calls_protected_registration_after_strategy_before_instal
     assert calls["_publish_canonical_strategy_for_runtime"] < calls["register_from_protected_root"]
     assert calls["register_from_protected_root"] < calls["install_from_canonical_startup"]
     assert calls["install_from_canonical_startup"] < calls["start_trading_engine"]
+
+@pytest.mark.parametrize("blocked_name", [root.MANIFEST_NAME, root.SOURCE_NAME])
+def test_unreadable_protected_artifact_has_distinct_fail_closed_status(
+    protected, monkeypatch, blocked_name,
+):
+    """A mount permission denial is not a missing file or signed approval."""
+    original_read = root._read_protected
+    def read_or_deny(name, maximum_bytes):
+        if name == blocked_name:
+            raise PermissionError("synthetic protected file access denied")
+        return original_read(name, maximum_bytes)
+
+    monkeypatch.setattr(root, "_read_protected", read_or_deny)
+    assert root.register_from_protected_root() == "protected_startup_permission_denied"
+    assert startup.startup_binding_registration_state() == "missing"
+    assert attestation._COLLECTOR is None
+    protected.bridge.build.assert_not_called()
+    protected.wiring.private_call.assert_not_called()
