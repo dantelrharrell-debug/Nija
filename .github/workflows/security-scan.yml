@@ -87,8 +87,31 @@ jobs:
         head="${{ github.event.pull_request.head.sha }}"
         merge_base="$(git merge-base "$base" "$head")"
         test -n "$merge_base"
+        # Retain the same failing exit code, but reveal ONLY value-free
+        # review coordinates to distinguish a real credential from a fixture.
+        set +e
         /tmp/gitleaks git --redact --config .gitleaks.toml --exit-code 2 \
+          --report-format json --report-path "$RUNNER_TEMP/nija-gitleaks-review.json" \
           --log-opts="$merge_base..$head" .
+        gitleaks_status=$?
+        set -e
+        if test -s "$RUNNER_TEMP/nija-gitleaks-review.json"; then
+          python - <<'PY'
+        import json, os
+        from pathlib import Path
+        p = Path(os.environ["RUNNER_TEMP"]) / "nija-gitleaks-review.json"
+        entries = json.loads(p.read_text(encoding="utf-8"))
+        for x in entries:
+            # Never log Secret, Match, entropy, fingerprints or commit contents.
+            print("Gitleaks review coordinate:",
+                  {"file": x.get("File"), "line": x.get("StartLine"),
+                   "rule": x.get("RuleID")})
+        PY
+        fi
+        if test "$gitleaks_status" -ne 0; then
+          echo "Gitleaks remains a blocking security check"
+          exit "$gitleaks_status"
+        fi
         echo "Gitleaks verified PR commit range: $merge_base..$head"
 
     - name: TruffleHog Secret Scan (Pull Request)
