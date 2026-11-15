@@ -430,6 +430,11 @@ def _layout(title, body):
 
 
 def _email_access(email, sid, token, *, delivery=False):
+    # This test-only service can NEVER deliver to an actual customer, even if
+    # an old paid test record is retried or a test webhook is replayed.
+    if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+            and email.strip().lower() != "delivered@resend.dev"):
+        raise RuntimeError("sandbox_simulator_recipient_required")
     key = os.getenv("RESEND_API_KEY", "")
     link = os.getenv("NIJA_COURSE_PUBLIC_URL", "https://nija-billing-api.onrender.com").rstrip("/") + \
         "/course-portal/claim?token=" + quote(token)
@@ -928,7 +933,9 @@ def register_course_portal(app, billing_store):
         return jsonify({"service": "nija-course", "ready": bool(_email_ready(current_app)),
             "access_ready": bool(_enabled(current_app)),
             "assets_present": store.has_bundle(), "email_configured": bool(os.getenv("RESEND_API_KEY")),
-            "access_key_configured": bool(_signer()), "checkout_access_enabled": False}), 200
+            "access_key_configured": bool(_signer()), "checkout_access_enabled": False,
+            "simulator_recipient_only":
+                os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"}), 200
 
     app.register_blueprint(portal)
     return store

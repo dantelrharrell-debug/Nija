@@ -43,7 +43,7 @@ def fake_stripe(*, link=None, price=None, product=None, session_live=False,
         "mode": "payment",
         "status": "complete",
         "payment_status": "paid",
-        "customer_details": {"email": "buyer@example.test"},
+        "customer_details": {"email": "delivered@resend.dev"},
         "amount_subtotal": 9900,
         "amount_total": 9900,
         "total_details": {"amount_tax": 0, "amount_discount": 0},
@@ -169,7 +169,7 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
 
     def send_email(url, *, json, headers, timeout):
         assert url == "https://api.resend.com/emails"
-        assert json["to"] == ["buyer@example.test"]
+        assert json["to"] == ["delivered@resend.dev"]
         assert headers["Idempotency-Key"] == "nija-foundations-delivery-v1-cs_test_foundations_sandbox"
         sent.append(json)
         return SimpleNamespace(status_code=201, json=lambda: {"id": "email_sandbox_fake"})
