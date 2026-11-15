@@ -120,3 +120,25 @@ test("foreign Stripe checkout blocked without ledger changes",async()=>{
  await assert.rejects(f.record(),/reservation_session_mismatch/);
  assert.ok(!f.calls.some(x=>x.sql.includes("UPDATE tiq72_v515_reservations")));
 });
+
+test("owned report recovery accepts paid purchase only",async()=>{
+ const queries=[];
+ const pool={connect:async()=>({query:async()=>({}),release:()=>{}}),
+   query:async(sql,args)=>{queries.push({sql,args});return {rows:[{report:{iq:93}}]};}};
+ const store=new V515PgReportStore(pool);
+ assert.deepEqual(await store.getOwnedPaidReport("test-owner","test-run"),{iq:93});
+ assert.deepEqual(queries[0].args,["test-owner","test-run"]);
+ assert.match(queries[0].sql,/p\.state='paid'/);
+ assert.match(queries[0].sql,/d\.owner_id=\$1/);
+});
+test("owned report recovery returns null for no entitlement",async()=>{
+ const pool={connect:async()=>({}),query:async()=>({rows:[]})};
+ const store=new V515PgReportStore(pool);
+ assert.equal(await store.getOwnedPaidReport("test-owner","test-run"),null);
+});
+test("report recovery rejects empty owner or run before database access",async()=>{
+ const pool={connect:async()=>({}),query:async()=>{throw new Error("query should not run")}};
+ const store=new V515PgReportStore(pool);
+ await assert.rejects(store.getOwnedPaidReport("","test-run"),/authenticated_report_owner_required/);
+ await assert.rejects(store.getOwnedPaidReport("test-owner",""),/authenticated_report_owner_required/);
+});
