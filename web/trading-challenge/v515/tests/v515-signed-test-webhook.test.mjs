@@ -23,13 +23,13 @@ function fixture(eventType="checkout.session.completed") {
        throw new Error("signature verification failed");
      return event;
    }},
-   checkout:{Session:{
+   checkout:{sessions:{
      retrieve:async()=>{providerCalls++;return session;},
      listLineItems:async()=>{providerCalls++;return lines;},
      list:async()=>({data:[{id:sid}],has_more:false})}},
-   PaymentIntent:{retrieve:async()=>{providerCalls++;return intent;}},
-   Charge:{retrieve:async()=>{providerCalls++;return charge;}},
-   Dispute:{retrieve:async()=>{providerCalls++;return dispute;}}
+   paymentIntents:{retrieve:async()=>{providerCalls++;return intent;}},
+   charges:{retrieve:async()=>{providerCalls++;return charge;}},
+   disputes:{retrieve:async()=>{providerCalls++;return dispute;}}
  };
  const store={recordVerifiedProviderEvent:async(x)=>{records.push(x);return {duplicate:false,state:eventType.startsWith("checkout.")?"paid":"refunded"};}};
  const rawBody=Buffer.from('{"id":"evt_fixture"}');
@@ -86,7 +86,7 @@ test("dispute event requires independently matching Stripe dispute",async()=>{
 });
 test("reversal must map to exactly one test checkout",async()=>{
  const f=fixture("charge.refunded");f.charge.refunded=true;f.charge.amount_refunded=100;
- f.stripe.checkout.Session.list=async()=>({data:[{id:f.session.id},{id:"cs_test_other"}],has_more:false});
+ f.stripe.checkout.sessions.list=async()=>({data:[{id:f.session.id},{id:"cs_test_other"}],has_more:false});
  await assert.rejects(f.run(),/unique_checkout_required/);
  assert.equal(f.records.length,0);
 });
