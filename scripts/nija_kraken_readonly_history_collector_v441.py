@@ -167,11 +167,14 @@ def collect_history(
     _history_read_options("TradesHistory", include_ledger_links)
 
     def read_cursor_endpoint(endpoint: str, field: str) -> dict[str, Any]:
-        """Require an explicit cursor envelope; never fall back to offset reads.
+        """Follow an explicit cursor chain; never fall back to offset reads.
 
         Counts are not completion evidence in cursor mode: Kraken returns null
         for Ledgers and zero for ClosedOrders. Only terminal cursor exhaustion
-        completes a pass. Unknown or unsupported response shapes fail closed.
+        completes a pass. A short continuation page may omit the exhausted
+        cursor, as Kraken does in production. Never infer cursor support from
+        a first page without a cursor, a full page, or an explicit malformed
+        cursor. Both complete passes must still agree byte-for-byte.
         """
         records: dict[str, Any] = {}
         seen_cursors: set[str] = set()
@@ -191,6 +194,12 @@ def collect_history(
             if len(batch) > PAGE_SIZE:
                 raise IncompleteHistory(f"{endpoint}: oversized page")
             cursor = result.get("cursor")
+            if "cursor" not in result and seen_cursors and len(batch) < PAGE_SIZE:
+                # Kraken documents cursor.next only when more rows exist.
+                # Accept absence only after this pass followed a real token;
+                # count=0/null is not evidence of terminal exhaustion. Do not
+                # mutate the original page retained by the private journal.
+                cursor = {}
             if not isinstance(cursor, Mapping) or set(cursor) - {"next"}:
                 raise IncompleteHistory(f"{endpoint}: invalid cursor")
             next_cursor = cursor.get("next")
