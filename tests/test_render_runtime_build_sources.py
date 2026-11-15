@@ -31,8 +31,9 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         # Use the exact earlier public, immutable build recipe as a test
         # fixture; do not authorize HEAD or alter production trust pins.
         # CI checkouts may be shallow and omit historical commits. Reverse
-        # only the exact reviewed public PR #3950 insertion and require that
-        # the resulting bytes match the prior allowlisted recipe digest.
+        # only the exact reviewed public PR #3950 insertion and the single
+        # explicit Trixie base-tag change in the isolated test fixture.
+        # This must never approve current Dockerfile bytes for recovery.
         # All changed or unexpected layouts fail closed.
         from scripts.render_runtime_build_sources import DOCKER_SHA256
         current = self.recipe["Dockerfile"]
@@ -44,9 +45,31 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
             b"    id -G nija | tr ' ' '\\n' | grep -qx 1000\n"
         )
         self.assertEqual(current.count(added), 1)
-        self.recipe["Dockerfile"] = current.replace(added, b"", 1)
+        trixie = b"ARG PYTHON_BASE=python:3.11-slim-trixie\n"
+        previous = b"ARG PYTHON_BASE=python:3.11-slim\n"
+        self.assertEqual(current.count(trixie), 1)
+        self.current_unreviewed_dockerfile = current
+        # Reconstruct only the previously allowlisted fixture. The actual
+        # current Trixie recipe remains outside the runtime allowlist.
+        self.recipe["Dockerfile"] = (
+            current.replace(added, b"", 1).replace(trixie, previous, 1)
+        )
         from scripts.render_runtime_build_sources import DOCKER_SHA256
         self.assertIn(hashlib.sha256(self.recipe["Dockerfile"]).hexdigest(), DOCKER_SHA256)
+        # Load immutable, reviewed historical bytes rather than reversing a
+        # growing sequence of production Dockerfile changes. This fixture is
+        # only used by offline positive tests, never by production recovery.
+        fixture = (root / "tests/fixtures/render_reviewed_dockerfile_6e34c616").read_bytes()
+        self.assertNotEqual(current, fixture)
+        self.assertIn(hashlib.sha256(fixture).hexdigest(), DOCKER_SHA256)
+        self.recipe["Dockerfile"] = fixture
+
+    def test_current_trixie_build_recipe_stays_denied(self) -> None:
+        with self.assertRaisesRegex(BuildRecipeDenied, "runtime_build_recipe_unreviewed"):
+            derive_runtime_source_sha256(
+                self.sources, {**self.recipe, "Dockerfile": self.current_unreviewed_dockerfile},
+            )
+
 
     def test_reproduce_build_outputs_without_touching_files_or_approval_inputs(self) -> None:
         original = copy.deepcopy(self.sources)
