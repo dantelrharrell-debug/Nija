@@ -99,3 +99,16 @@ test("nonraw or oversized body rejected before verification",async()=>{
  await assert.rejects(f.run({rawBody:Buffer.alloc(65537)}),/webhook_context_required/);
  assert.equal(f.providerCalls,0);
 });
+
+test("partial refund also revokes payment entitlement",async()=>{
+ const f=fixture("charge.refunded");
+ f.charge.refunded=false;f.charge.amount_refunded=25;
+ assert.deepEqual(await f.run(),{processed:true,duplicate:false,state:"refunded"});
+ assert.equal(f.records.length,1);
+});
+test("invalid refund amount never revokes",async()=>{
+ const f=fixture("charge.refunded");
+ f.charge.amount_refunded=101;
+ await assert.rejects(f.run(),/refund_not_verified/);
+ assert.equal(f.records.length,0);
+});
