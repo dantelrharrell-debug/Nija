@@ -10,7 +10,7 @@ function fixture(){
   const charge={id:"ch_test_fixture",livemode:false,status:"succeeded",paid:true,amount:100,currency:"usd",payment_intent:intent.id,refunded:false,disputed:false,amount_refunded:0};
   let writes=0;
   const store={getOwnedPurchase:async()=>({ownerId,runId,reservationId,sessionId,canonicalRun,state:"paid"}),storeVerifiedReport:async()=>{writes++;}};
-  const stripe={checkout:{Session:{retrieve:async()=>session,listLineItems:async()=>lines}},PaymentIntent:{retrieve:async()=>intent},Charge:{retrieve:async()=>charge}};
+  const stripe={checkout:{sessions:{retrieve:async()=>session,listLineItems:async()=>lines}},paymentIntents:{retrieve:async()=>intent},charges:{retrieve:async()=>charge}};
   return {session,lines,intent,charge,store,stripe,get writes(){return writes;}};
 }
 const call=(f,o={})=>verifyAndBuildPaidReport({ownerId,runId,store:f.store,stripe:f.stripe,...o});
