@@ -69,7 +69,10 @@ def test_apply_checks_all_tables_and_commits_only_on_success():
     with patch.dict("os.environ",{"NIJA_TIQ72_TEST_SCHEMA_APPLY":"APPROVED_TEST_ONLY"}):
         assert module.migrate(url(),apply=True,connect=lambda *a,**k:db)=="isolated_test_schema_installed"
     assert db.commits==1 and db.rollbacks==0 and db.closed==1
-    assert any("CREATE TABLE IF NOT EXISTS tiq72_v515_runs" in q[0] for q in db.c.queries)
+    ddl = [q[0] for q in db.c.queries if "CREATE TABLE IF NOT EXISTS tiq72_v515_runs" in q[0]]
+    assert len(ddl) == 1
+    assert "BEGIN;" not in ddl[0] and "COMMIT;" not in ddl[0]
+    assert db.c.queries[-1][0].startswith("SELECT tablename FROM pg_tables")
 
 def test_missing_table_rolls_back():
     db=Connection(Cursor(tables=[("tiq72_v515_runs",)]))
