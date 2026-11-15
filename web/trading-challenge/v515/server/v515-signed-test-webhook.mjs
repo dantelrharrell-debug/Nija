@@ -69,7 +69,7 @@ export async function processSignedTestWebhook({rawBody,signature,webhookSecret,
       if(dispute?.id!==event.data.object.id||dispute.livemode!==false||
          id(dispute.charge)!==chargeId)
         throw new PaidReportDenied("dispute_not_verified");
-    } else if (charge.refunded!==true||charge.amount_refunded<=0) {
+    } else if (charge.refunded!==true||!Number.isInteger(charge.amount_refunded)||charge.amount_refunded<=0) {
       throw new PaidReportDenied("refund_not_verified");
     }
     const intent=await stripe.PaymentIntent.retrieve(id(charge.payment_intent));
