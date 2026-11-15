@@ -7,15 +7,15 @@
   "commit": null,
   "source_sha256": {
     "bot/kraken_sqlite_readonly_preflight_v488.py": "89a1213bb4048109b3722b3d6f80b3882a8aa8c9975ff789e868e9dd7b8845ae",
-    "bot/kraken_live_history_recovery.py": "e4afeb2e5b61f9ce0613ceda15027ea7a2438268f9adaa37771d74a11a680d7c",
+    "bot/kraken_live_history_recovery.py": "9d20c5ca55911c8cde661dd33c501be170673004f825e156053cd7f2201b374f",
     "bot/kraken_history_response_journal.py": "edc60e27664448e4f3ce78f362fdd9b9c319cd8b5707bd1af00ec5679757854d",
     "bot/universal_broker_exit_supervisor_patch.py": "7970751561b5dfa6dde1542903289c4351ba15c47b84a7ab315abe39c3aa1758",
     "bot/kraken_identity_request_recovery_v491.py": "69e4617711013cad18546edb9ee21832441d88b6b84e26a176bd7cff6bc248ce",
     "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py": "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
-    "bot/broker_manager.py": "2fe509fa53fc0ceafae78467f6121473ce43bd5832e9438705c19aa2c5a97990",
+    "bot/broker_manager.py": "5d7bb04fa40579819c421847e0104db6662a9fd904e7a74c532c9030fbca560c",
     "bot/canonical_broker_startup_convergence_v24.py": "96876ef73948b28be79bb66c2c20bf5ca8dc0c0ef695dc4db8d3aac5f730fe4f",
     "scripts/render_entrypoint.sh": "d5ef1622222b9cb6766e48cf7c257bb62bbb82f7bd79b3c2ff3958a8beebdc78",
     "scripts/production_bootstrap.sh": "708e66a23c0610d920537916631851ab1d0a67fdc6a1badfc68aeddcf7221bd0",
-    "start.sh": "f8483035d0d2ac1bf4eae5e79b9236f0f9733b7cf6dd48d3e7074344b8932a20"
+    "start.sh": "22f72d9ff0eb3bdb47e56542b594c2bc1f51302f0efb27d6a6fbc0c23603d916"
   }
 }
