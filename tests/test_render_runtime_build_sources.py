@@ -56,6 +56,13 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         )
         from scripts.render_runtime_build_sources import DOCKER_SHA256
         self.assertIn(hashlib.sha256(self.recipe["Dockerfile"]).hexdigest(), DOCKER_SHA256)
+        # Load immutable, reviewed historical bytes rather than reversing a
+        # growing sequence of production Dockerfile changes. This fixture is
+        # only used by offline positive tests, never by production recovery.
+        fixture = (root / "tests/fixtures/render_reviewed_dockerfile_6e34c616").read_bytes()
+        self.assertNotEqual(current, fixture)
+        self.assertIn(hashlib.sha256(fixture).hexdigest(), DOCKER_SHA256)
+        self.recipe["Dockerfile"] = fixture
 
     def test_current_trixie_build_recipe_stays_denied(self) -> None:
         with self.assertRaisesRegex(BuildRecipeDenied, "runtime_build_recipe_unreviewed"):
