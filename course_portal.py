@@ -20,8 +20,8 @@ from urllib.parse import quote
 
 import requests
 from flask import Blueprint, current_app, jsonify, make_response, redirect, request, send_file
-from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, insert, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, func, insert, select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from course_fulfillment import expected_course_link, CourseLedger, reconcile_session
 
@@ -40,6 +40,8 @@ ALLOWED = {
 }
 AUDIO = "NIJA_AI_Trading_Foundations_Final_Audiobook_Under_50MB.mp3"
 MAX_ZIP = 58 * 1024 * 1024
+# Limit individual database parameters on constrained isolated Postgres.
+CHUNK_BYTES = 256 * 1024
 
 
 def utcnow():
@@ -85,6 +87,23 @@ class PortalStore:
             Column("sha256", String(64), nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
         )
+        # Staged chunks are invisible to customers until the manifest is committed.
+        # Each chunk is independently hashed; no database write contains the full ZIP.
+        self.asset_chunks = Table(
+            "billing_course_private_asset_chunks", m,
+            Column("bundle_sha256", String(64), primary_key=True),
+            Column("part_index", Integer, primary_key=True),
+            Column("data", LargeBinary, nullable=False),
+            Column("part_sha256", String(64), nullable=False),
+        )
+        self.asset_manifests = Table(
+            "billing_course_private_asset_manifests", m,
+            Column("bundle_id", String(80), primary_key=True),
+            Column("bundle_sha256", String(64), nullable=False),
+            Column("part_count", Integer, nullable=False),
+            Column("byte_length", Integer, nullable=False),
+            Column("updated_at", DateTime(timezone=True), nullable=False),
+        )
         self.outbox = Table(
             "billing_course_mail_outbox", m,
             Column("session_id", String(128), primary_key=True),
@@ -110,23 +129,114 @@ class PortalStore:
         )
         m.create_all(engine)
 
+    @staticmethod
+    def _chunked_mode():
+        # Never silently switch production storage or customer delivery.
+        return (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+                and os.getenv("NIJA_COURSE_ASSET_CHUNKS", "").strip().lower() == "true")
+
+    def _chunk_manifest(self, conn):
+        row = conn.execute(select(self.asset_manifests).where(
+            self.asset_manifests.c.bundle_id == BUNDLE)).first()
+        return dict(row._mapping) if row else None
+
     def has_bundle(self):
         with self.engine.connect() as conn:
-            return conn.execute(select(self.assets.c.bundle_id).where(self.assets.c.bundle_id == BUNDLE)).first() is not None
+            if self._chunked_mode():
+                info = self._chunk_manifest(conn)
+                if info is not None:
+                    count = conn.execute(select(func.count()).select_from(self.asset_chunks).where(
+                        self.asset_chunks.c.bundle_sha256 == info["bundle_sha256"])).scalar_one()
+                    return count == info["part_count"] and info["part_count"] > 0
+            # Existing private bundles remain readable without data migration.
+            return conn.execute(select(self.assets.c.bundle_id).where(
+                self.assets.c.bundle_id == BUNDLE)).first() is not None
+
+    def _import_chunked(self, payload, digest):
+        if not payload or len(payload) > MAX_ZIP or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError("asset_digest_mismatch")
+        count = (len(payload) + CHUNK_BYTES - 1) // CHUNK_BYTES
+        # Each small, independently committed write bounds Postgres worker RAM.
+        # A process crash may leave uncommitted-by-manifest pieces, never visible.
+        for index in range(count):
+            part = payload[index * CHUNK_BYTES:(index + 1) * CHUNK_BYTES]
+            part_hash = hashlib.sha256(part).hexdigest()
+            condition = ((self.asset_chunks.c.bundle_sha256 == digest)
+                         & (self.asset_chunks.c.part_index == index))
+            with self.engine.begin() as conn:
+                previous = conn.execute(select(self.asset_chunks.c.part_sha256).where(
+                    condition)).scalar_one_or_none()
+                if previous == part_hash:
+                    continue
+                values = {"data": part, "part_sha256": part_hash}
+                if previous is None:
+                    conn.execute(insert(self.asset_chunks).values(
+                        bundle_sha256=digest, part_index=index, **values))
+                else:
+                    conn.execute(update(self.asset_chunks).where(condition).values(**values))
+
+        # Independently reconstruct and hash the stored data before publication.
+        restored = self._read_chunks_for_digest(digest, count, len(payload))
+        if restored is None:
+            raise RuntimeError("chunk_storage_verification_failed")
+        with self.engine.begin() as conn:
+            values = {"bundle_sha256": digest, "part_count": count,
+                      "byte_length": len(payload), "updated_at": utcnow()}
+            if self._chunk_manifest(conn) is None:
+                conn.execute(insert(self.asset_manifests).values(bundle_id=BUNDLE, **values))
+            else:
+                conn.execute(update(self.asset_manifests).where(
+                    self.asset_manifests.c.bundle_id == BUNDLE).values(**values))
+
+    def _read_chunks_for_digest(self, digest, expected_count, expected_length):
+        total = 0
+        sequence = 0
+        h = hashlib.sha256()
+        parts = []
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(
+                self.asset_chunks.c.part_index, self.asset_chunks.c.data,
+                self.asset_chunks.c.part_sha256).where(
+                self.asset_chunks.c.bundle_sha256 == digest).order_by(
+                self.asset_chunks.c.part_index))
+            for index, value, part_sha in rows:
+                part = bytes(value)
+                if (index != sequence or not part or len(part) > CHUNK_BYTES
+                        or hashlib.sha256(part).hexdigest() != part_sha):
+                    return None
+                sequence += 1
+                total += len(part)
+                h.update(part)
+                parts.append(part)
+        if sequence != expected_count or total != expected_length or h.hexdigest() != digest:
+            return None
+        return b"".join(parts)
 
     def import_bundle(self, payload, digest):
+        if self._chunked_mode():
+            return self._import_chunked(payload, digest)
+        # Legacy format unchanged when explicit isolated chunk mode is disabled.
         with self.engine.begin() as conn:
             values = {"data": payload, "sha256": digest, "updated_at": utcnow()}
-            if conn.execute(select(self.assets.c.bundle_id).where(self.assets.c.bundle_id == BUNDLE)).first():
-                conn.execute(update(self.assets).where(self.assets.c.bundle_id == BUNDLE).values(**values))
+            if conn.execute(select(self.assets.c.bundle_id).where(
+                    self.assets.c.bundle_id == BUNDLE)).first():
+                conn.execute(update(self.assets).where(
+                    self.assets.c.bundle_id == BUNDLE).values(**values))
             else:
                 conn.execute(insert(self.assets).values(bundle_id=BUNDLE, **values))
 
     def asset_bytes(self, name):
         if name not in ALLOWED and name != "NIJA_Foundations_Customer_Package.zip":
             return None
+        payload = None
         with self.engine.connect() as conn:
-            payload = conn.execute(select(self.assets.c.data).where(self.assets.c.bundle_id == BUNDLE)).scalar_one_or_none()
+            info = self._chunk_manifest(conn) if self._chunked_mode() else None
+            if info is None:
+                payload = conn.execute(select(self.assets.c.data).where(
+                    self.assets.c.bundle_id == BUNDLE)).scalar_one_or_none()
+        if info is not None:
+            payload = self._read_chunks_for_digest(
+                info["bundle_sha256"], info["part_count"], info["byte_length"])
         if payload is None:
             return None
         if name == "NIJA_Foundations_Customer_Package.zip":
@@ -543,7 +653,12 @@ def register_course_portal(app, billing_store):
             digest = validate_bundle(payload)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 422
-        store.import_bundle(payload, digest)
+        try:
+            store.import_bundle(payload, digest)
+        except (SQLAlchemyError, RuntimeError, ValueError) as exc:
+            # Never echo database connection strings, ZIP content or auth tokens.
+            log.error("Protected package storage unavailable: %s", type(exc).__name__)
+            return jsonify({"error": "course_storage_unavailable"}), 503
         # Flush pre-existing paid orders after the private package is available.
         # Failed emails remain durable for subsequent admin retry or buyer recovery.
         attempted = 0
