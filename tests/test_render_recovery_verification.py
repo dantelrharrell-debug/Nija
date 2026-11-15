@@ -660,38 +660,24 @@ class RecoveryVerificationTests(unittest.TestCase):
         for digest in approval["source_sha256"].values():
             self.assertRegex(digest, r"^[0-9a-f]{64}$")
 
-    def test_real_git_inspection_reads_exact_pinned_source_not_control_head(self) -> None:
-        approval = json.loads(MANIFEST.read_bytes())
+    def test_current_unreviewed_git_recipe_denies_runtime_derivation(self) -> None:
+        # Current HEAD contains the non-root Render Secret Files permissions fix.
+        # Unlike older reviewed Dockerfile digests, these new bytes have not
+        # independently passed the immutable build-recipe approval gate.
+        # Never make this synthetic regression self-approve the latest HEAD.
+        from scripts.render_runtime_build_sources import (
+            BuildRecipeDenied, RECIPE_PATHS, derive_runtime_source_sha256,
+        )
         commit = _command(["git", "rev-parse", "HEAD"], "test_checkout_missing").decode().strip()
-        approval.update({
-            "operator_approved": True, "approval_reference": "synthetic-only",
-            "commit": commit, "deployment_id": "dep-synthetic",
-        })
-        from scripts.render_runtime_build_sources import RECIPE_PATHS, derive_runtime_source_sha256
+
         def source(path):
             return _command(["git", "show", commit + ":" + path], "test_source_missing")
-        approval["source_sha256"] = {
-            path: hashlib.sha256(source(path)).hexdigest() for path in SOURCE_PATHS
-        }
-        built = derive_runtime_source_sha256(
-            {path: source(path) for path in SOURCE_PATHS},
-            {path: source(path) for path in RECIPE_PATHS},
-        )
-        runtime = {**self.runtime, "commit": commit, "source_sha256": built}
-        with patch.dict(os.environ, {"GITHUB_REF": REF, "GITHUB_SHA": "c" * 40}, clear=True), patch(
-            "scripts.nija_render_recovery_verification.load_reviewed_approval",
-            return_value=approval,
-        ), patch(
-            "scripts.nija_render_recovery_verification.inspect_render_api",
-            return_value={**self.evidence, "commit": commit},
-        ), patch("scripts.nija_render_recovery_verification._runtime", return_value=runtime), patch(
-            "scripts.nija_render_recovery_verification.derive_runtime_source_sha256",
-            wraps=derive_runtime_source_sha256,
-        ):
-            report = run_verification()
-        self.assertEqual(report["inspected_source_commit"], commit)
-        self.assertNotEqual(report["inspected_source_commit"], report["workflow_source_commit"])
-        self.assertTrue(report["SOURCE_INTEGRITY_VERIFIED"], report)
+
+        with self.assertRaisesRegex(BuildRecipeDenied, "^runtime_build_recipe_unreviewed$"):
+            derive_runtime_source_sha256(
+                {path: source(path) for path in SOURCE_PATHS},
+                {path: source(path) for path in RECIPE_PATHS},
+            )
 
     def test_missing_external_approval_refuses_before_render_api_or_ssh(self) -> None:
         with patch.dict(os.environ, {"GITHUB_REF": REF}, clear=True), patch(
