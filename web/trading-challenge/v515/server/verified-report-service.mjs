@@ -61,3 +61,18 @@ export async function verifyAndBuildPaidReport({ownerId,runId,store,stripe}) {
   await store.storeVerifiedReport({ownerId,runId,sessionId:row.sessionId,report});
   return report;
 }
+
+/**
+ * Test-only paid report recovery with fresh provider proof on every request.
+ * The HTTP adapter MUST supply an independently authenticated owner, never
+ * trust ownerId from query/body or infer ownership from a Stripe session URL.
+ * Running verifyAndBuildPaidReport also guards concurrent local revocations.
+ */
+export async function recoverFreshPaidReport({ownerId,runId,store,stripe}) {
+  if (!store || typeof store.getOwnedPaidReport!=="function")
+    throw new PaidReportDenied("protected_report_store_required");
+  await verifyAndBuildPaidReport({ownerId,runId,store,stripe});
+  const report=await store.getOwnedPaidReport(ownerId,runId);
+  if(!report)throw new PaidReportDenied("paid_report_not_available");
+  return report;
+}
