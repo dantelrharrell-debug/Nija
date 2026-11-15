@@ -1,5 +1,5 @@
 # CI may override this registry without changing the production base image.
-ARG PYTHON_BASE=python:3.11-slim-bookworm
+ARG PYTHON_BASE=python:3.11-slim-trixie
 FROM ${PYTHON_BASE}
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git redis-tools && rm -rf /var/lib/apt/lists/*
