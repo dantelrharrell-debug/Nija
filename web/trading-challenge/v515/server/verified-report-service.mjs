@@ -47,14 +47,14 @@ export async function verifyAndBuildPaidReport({ownerId,runId,store,stripe}) {
   if(!validateRun(row.canonicalRun).ok)
     throw new PaidReportDenied("canonical_run_invalid");
   const [session,lines]=await Promise.all([
-    stripe.checkout.Session.retrieve(row.sessionId),
-    stripe.checkout.Session.listLineItems(row.sessionId)]);
+    stripe.checkout.sessions.retrieve(row.sessionId),
+    stripe.checkout.sessions.listLineItems(row.sessionId)]);
   if(session?.id!==row.sessionId||!ident(idOf(session.payment_intent),"pi_"))
     throw new PaidReportDenied("session_identity_mismatch");
-  const intent=await stripe.PaymentIntent.retrieve(idOf(session.payment_intent));
+  const intent=await stripe.paymentIntents.retrieve(idOf(session.payment_intent));
   if(!ident(idOf(intent?.latest_charge),"ch_"))
     throw new PaidReportDenied("charge_identity_missing");
-  const charge=await stripe.Charge.retrieve(idOf(intent.latest_charge));
+  const charge=await stripe.charges.retrieve(idOf(intent.latest_charge));
   requireProof({session,lines,intent,charge,reservationId:row.reservationId});
   const report=buildReport(row.canonicalRun);
   if(!report)throw new PaidReportDenied("report_generation_failed");
