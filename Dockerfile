@@ -4,6 +4,11 @@ FROM ${PYTHON_BASE}
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git redis-tools && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
+# Render runtime Secret Files are mounted with group 1000 access. Keep the
+# non-root trading process and grant only that supplementary group.
+RUN (getent group 1000 >/dev/null || groupadd --gid 1000 render-secrets) && \
+    usermod -a -G 1000 nija && \
+    id -G nija | tr ' ' '\n' | grep -qx 1000
 WORKDIR /app
 COPY requirements.txt .
 # PyPI/CDN 5xx responses are transient infrastructure failures, not dependency
