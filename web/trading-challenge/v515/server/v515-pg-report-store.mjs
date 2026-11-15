@@ -144,6 +144,27 @@ export class V515PgReportStore {
     finally{client.release();}
   }
 
+  // Protected recovery by authenticated owner + run identity, never by a
+  // bearer session ID in a URL. The caller must establish the user session.
+  // Existing report bytes stay immutable; refund/dispute denies readback.
+  async getOwnedPaidReport(ownerId,runId) {
+    if(!okId(ownerId)||!okId(runId))
+      throw new PaidReportDenied("authenticated_report_owner_required");
+    const result=await this.pool.query(`
+      SELECT d.report
+      FROM tiq72_v515_reports d
+      JOIN tiq72_v515_reservations p
+        ON p.reservation_id=d.reservation_id AND p.run_id=d.run_id
+      JOIN tiq72_v515_runs r
+        ON r.run_id=d.run_id AND r.owner_id=d.owner_id
+      WHERE d.owner_id=$1 AND d.run_id=$2
+        AND p.owner_id=$1 AND p.state='paid'
+        AND p.stripe_session=d.stripe_session
+        AND r.version='v515-72-decisions'
+      LIMIT 1`,[ownerId,runId]);
+    return result.rows?.[0]?.report ?? null;
+  }
+
   // Signed events are verified with fresh Stripe retrieval BEFORE reaching here.
   // A row lock serializes payment, reversal and report creation; a terminal
   // refund/dispute can never be re-granted by a late checkout webhook.
