@@ -321,3 +321,96 @@ def test_course_admin_preview_button_keeps_sensitive_order_data_server_side(tmp_
     denied = client.get("/course-portal/admin/preview")
     assert denied.status_code == 403
     assert denied.get_json() == {"error": "unauthorized"}
+
+
+def _build_test_reconcile_app(tmp_path, monkeypatch):
+    import billing_service as billing
+    import course_portal as course
+    from billing_service_store import BillingServiceStore
+    from types import SimpleNamespace
+
+    db = f"sqlite:///{tmp_path / 'two-tests.db'}"
+    token = "sandbox-operator-token-" * 3
+    monkeypatch.setenv("BILLING_DATABASE_URL", db)
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "false")
+    monkeypatch.setenv("NIJA_COURSE_UPLOAD_SECRET", token)
+    monkeypatch.setattr(course.PortalStore, "has_bundle", lambda self: True)
+    monkeypatch.setattr(course, "expected_course_identity",
+                        lambda: ("plink_test", "price_test", "prod_test", False))
+    ids = ["cs_test_paid_one", "cs_test_paid_two", "cs_test_paid_three"]
+    sessions = [{"id": x, "payment_link": "plink_test", "livemode": False,
+                 "status": "complete", "payment_status": "paid"} for x in ids]
+    session_list = lambda **_kw: {"data": sessions, "has_more": False}
+    fake_stripe = SimpleNamespace(
+        checkout=SimpleNamespace(Session=SimpleNamespace(list=session_list)))
+    monkeypatch.setattr(course, "_stripe", lambda: fake_stripe)
+    app = billing.create_app(BillingServiceStore(db))
+    ledger = app.config["COURSE_LEDGER"]
+    ledger.upsert(ids[0], "test@example.com", None, "pi_test_one", "paid", True)
+    grant_calls = []
+    def verified(_stripe, book, sid):
+        grant_calls.append(sid)
+        book.upsert(sid, "test@example.com", None, "pi_" + sid, "paid", True)
+        return {"session_id": sid, "paid": True}
+    monkeypatch.setattr(course, "reconcile_session", verified)
+    monkeypatch.setattr(course, "on_course_payment",
+                        lambda *_args: pytest.fail("customer email or queue unexpectedly invoked"))
+    monkeypatch.setattr(course, "_email_access",
+                        lambda *_args, **_kw: pytest.fail("outbound email unexpectedly invoked"))
+    return app, token, ids, sessions, grant_calls
+
+
+def test_two_missing_test_entitlements_reconcile_exactly_without_emails(tmp_path, monkeypatch):
+    app, token, ids, _sessions, calls = _build_test_reconcile_app(tmp_path, monkeypatch)
+    client = app.test_client()
+    path = "/course-portal/admin/reconcile-test-missing"
+    headers = {"Authorization": "Bearer " + token}
+    assert client.post(path, json={"expected_session_ids": ids[1:]}).status_code == 403
+    preview = client.get("/course-portal/admin/preview", headers=headers).get_json()
+    assert preview["dry_run"] is True
+    assert preview["counts"]["paid"] == 3
+    assert preview["counts"]["already_reconciled"] == 1
+    assert preview["counts"]["paid_without_entitlement"] == 2
+    assert set(preview["missing_test_session_ids"]) == set(ids[1:])
+
+    response = client.post(path, json={"expected_session_ids": ids[1:]}, headers=headers)
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "reconciled": 2, "email_sent": False,
+        "delivery_enabled": False, "test_mode": True
+    }
+    assert set(calls) == set(ids[1:])
+    recounted = client.get("/course-portal/admin/preview", headers=headers).get_json()
+    assert recounted["counts"]["already_reconciled"] == 3
+    assert recounted["counts"]["paid_without_entitlement"] == 0
+    assert recounted["missing_test_session_ids"] == []
+    assert client.post(path, json={"expected_session_ids": ids[1:]},
+                       headers=headers).status_code == 409
+    assert len(calls) == 2
+
+
+def test_test_grant_reconciliation_fails_closed_on_mode_delivery_or_stale_preview(tmp_path, monkeypatch):
+    import course_portal as course
+    app, token, ids, sessions, calls = _build_test_reconcile_app(tmp_path, monkeypatch)
+    c = app.test_client()
+    p = "/course-portal/admin/reconcile-test-missing"
+    h = {"Authorization": "Bearer " + token}
+    for bad in [None, {}, {"expected_session_ids": ids},
+                {"expected_session_ids": ids[:1]},
+                {"expected_session_ids": [ids[1], ids[1]]},
+                {"expected_session_ids": [ids[1], "cs_live_other"]}]:
+        assert c.post(p, json=bad, headers=h).status_code == 400
+    assert c.post(p, json={"expected_session_ids": [ids[0], ids[1]]},
+                  headers=h).status_code == 409
+
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "true")
+    assert c.post(p, json={"expected_session_ids": ids[1:]}, headers=h).status_code == 503
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "false")
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "false")
+    assert c.post(p, json={"expected_session_ids": ids[1:]}, headers=h).status_code == 503
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    monkeypatch.setattr(course, "expected_course_identity",
+                        lambda: ("plink_live", "price_live", "prod_live", True))
+    assert c.post(p, json={"expected_session_ids": ids[1:]}, headers=h).status_code == 503
+    assert calls == []
