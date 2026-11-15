@@ -300,3 +300,24 @@ def test_protected_course_upload_storage_failure_returns_safe_json(tmp_path, mon
     assert reply.get_json() == {"error": "course_storage_unavailable"}
     assert b"server-private-diagnostic" not in reply.data
     assert not course_store.has_bundle()
+
+
+def test_course_admin_preview_button_keeps_sensitive_order_data_server_side(tmp_path, monkeypatch):
+    """Read-only status UI must require the existing operator token and show only counts."""
+    import billing_service as billing
+    from billing_service_store import BillingServiceStore
+    monkeypatch.setenv("BILLING_DATABASE_URL", f"sqlite:///{tmp_path / 'preview.db'}")
+    monkeypatch.setenv("NIJA_COURSE_DELIVERY_ENABLED", "false")
+    app = billing.create_app(BillingServiceStore(f"sqlite:///{tmp_path / 'preview.db'}"))
+    client = app.test_client()
+
+    html = client.get("/course-portal/admin/").get_data(as_text=True)
+    assert "Review Paid Test Orders (Read Only)" in html
+    assert 'fetch("/course-portal/admin/preview"' in html
+    assert '"Authorization":"Bearer "+input.value' in html
+    assert "DRY RUN — NO ORDERS CHANGED" in html
+    assert "paid_without_entitlement" in html
+    assert "input.value=\"\"" in html
+    denied = client.get("/course-portal/admin/preview")
+    assert denied.status_code == 403
+    assert denied.get_json() == {"error": "unauthorized"}
