@@ -51,7 +51,7 @@ jobs:
         # Use Docker Hub to avoid ECR Public rate limits. 
         # A failed pull still fails this job; scanners remain mandatory. 
         docker build --no-cache \
-          --build-arg PYTHON_BASE=python:3.11-slim-trixie \
+          --build-arg PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
           --build-arg GH_TOKEN="${GH_TOKEN}" \
           -f ${{ matrix.dockerfile }} \
           -t ${{ steps.image-name.outputs.image }} \

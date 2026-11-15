@@ -32,7 +32,7 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         # fixture; do not authorize HEAD or alter production trust pins.
         # CI checkouts may be shallow and omit historical commits. Reverse
         # only the exact reviewed public PR #3950 insertion and the single
-        # explicit Trixie base-tag change in the isolated test fixture.
+        # digest-pinned Trixie base change in the isolated test fixture.
         # This must never approve current Dockerfile bytes for recovery.
         # All changed or unexpected layouts fail closed.
         from scripts.render_runtime_build_sources import DOCKER_SHA256
@@ -45,14 +45,14 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
             b"    id -G nija | tr ' ' '\\n' | grep -qx 1000\n"
         )
         self.assertEqual(current.count(added), 1)
-        trixie = b"ARG PYTHON_BASE=python:3.11-slim-trixie\n"
+        candidate = b"ARG PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535\n"
         previous = b"ARG PYTHON_BASE=python:3.11-slim\n"
-        self.assertEqual(current.count(trixie), 1)
+        self.assertEqual(current.count(candidate), 1)
         self.current_unreviewed_dockerfile = current
         # Reconstruct only the previously allowlisted fixture. The actual
         # current Trixie recipe remains outside the runtime allowlist.
         self.recipe["Dockerfile"] = (
-            current.replace(added, b"", 1).replace(trixie, previous, 1)
+            current.replace(added, b"", 1).replace(candidate, previous, 1)
         )
         from scripts.render_runtime_build_sources import DOCKER_SHA256
         self.assertIn(hashlib.sha256(self.recipe["Dockerfile"]).hexdigest(), DOCKER_SHA256)
@@ -64,7 +64,7 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         self.assertIn(hashlib.sha256(fixture).hexdigest(), DOCKER_SHA256)
         self.recipe["Dockerfile"] = fixture
 
-    def test_current_trixie_build_recipe_stays_denied(self) -> None:
+    def test_current_pinned_trixie_build_recipe_stays_denied(self) -> None:
         with self.assertRaisesRegex(BuildRecipeDenied, "runtime_build_recipe_unreviewed"):
             derive_runtime_source_sha256(
                 self.sources, {**self.recipe, "Dockerfile": self.current_unreviewed_dockerfile},

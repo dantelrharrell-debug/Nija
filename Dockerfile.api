@@ -1,24 +1,17 @@
 # Dockerfile for NIJA FastAPI Backend
-
-# CI may override this registry without changing the production base image.
-ARG PYTHON_BASE=python:3.11-slim-trixie
-FROM ${PYTHON_BASE}
-
+# Security review candidate: OCI base digest resolved by all four 2026-11-15 CI builds; NOT release approved.
+ARG PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+FROM ${PYTHON_BASE} AS deps-builder
 WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get upgrade -y && apt-get install -y \
-    --no-install-recommends \
-    gcc \
-    g++ \
-    libpq-dev \
-    redis-tools \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install Python dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ libpq-dev && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+
+FROM ${PYTHON_BASE}
+ENV PATH="/opt/venv/bin:${PATH}"
+WORKDIR /app
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libpq5 redis-tools curl && rm -rf /var/lib/apt/lists/*
+COPY --from=deps-builder /opt/venv /opt/venv
 
 # Copy application code
 COPY . .
