@@ -37,7 +37,11 @@ _UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _m
 def verify_release_hold(source: str) -> None:
     """Require exactly one trading service with an explicit manual deploy hold."""
     try:
-        document = yaml.load(source, Loader=_UniqueLoader)
+        loader = _UniqueLoader(source)
+        try:
+            document = loader.get_single_data()
+        finally:
+            loader.dispose()
     except yaml.YAMLError as exc:
         raise ValueError("invalid_blueprint_yaml") from exc
     if not isinstance(document, dict):
