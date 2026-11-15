@@ -64,6 +64,15 @@ def test_recursive_yaml_alias_is_refused():
         verify_release_hold(SERVICE + '\ncycle: &cycle\n  child: *cycle\n')
 
 
+@pytest.mark.parametrize("source", [
+    '!!python/object/apply:builtins.str [untrusted]',
+    '!!python/name:builtins.str',
+])
+def test_python_yaml_tags_remain_refused(source):
+    with pytest.raises(ValueError, match="invalid_blueprint_yaml"):
+        verify_release_hold(source)
+
+
 @pytest.mark.parametrize("prefix", [
     'ungrouped:\n',
     'projects:\n  - name: trading\n    environments:\n      - name: production\n',
