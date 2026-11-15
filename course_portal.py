@@ -23,7 +23,7 @@ from flask import Blueprint, current_app, jsonify, make_response, redirect, requ
 from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, func, insert, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from course_fulfillment import expected_course_link, CourseLedger, reconcile_session
+from course_fulfillment import expected_course_identity, expected_course_link, CourseLedger, reconcile_session
 
 log = logging.getLogger("nija.billing.course_portal")
 COOKIE = "nija_foundations_session"
@@ -616,8 +616,10 @@ def register_course_portal(app, billing_store):
         placeholder="Private upload token"></p>
         <button type="button" id="import-button">Upload Protected Package</button>
         <button type="button" id="preview-button">Review Paid Test Orders (Read Only)</button>
+        <button type="button" id="reconcile-test-button" disabled>Reconcile Two Missing TEST Grants (No Emails)</button>
         <pre id="import-result" role="status"></pre></div>
         <script>
+        let missingTestSessions=[];
         document.getElementById("preview-button").addEventListener("click",async()=>{
           const input=document.getElementById("operator-token");
           const output=document.getElementById("import-result");
@@ -631,6 +633,9 @@ def register_course_portal(app, billing_store):
             });
             const result=await res.json();
             if(!res.ok||!result.dry_run){output.textContent="Review unavailable: "+(result.error||res.status);return;}
+            const ids=Array.isArray(result.missing_test_session_ids) ? result.missing_test_session_ids : [];
+            missingTestSessions=(ids.length===2 && ids.every(s=>typeof s==="string" && s.startsWith("cs_test_"))) ? ids : [];
+            document.getElementById("reconcile-test-button").disabled=missingTestSessions.length!==2;
             const counts=result.counts||{};
             const keys=["paid","pending_or_unpaid","already_reconciled","paid_without_entitlement"];
             output.textContent="DRY RUN — NO ORDERS CHANGED\\n"+
@@ -638,6 +643,28 @@ def register_course_portal(app, billing_store):
               (result.has_more?"\\nAdditional Stripe pages exist; totals incomplete.":"");
           } catch(e) {output.textContent="Order preview unavailable; no orders changed.";}
           finally {input.value="";button.disabled=false;}
+        });
+        document.getElementById("reconcile-test-button").addEventListener("click",async()=>{
+          const input=document.getElementById("operator-token");
+          const output=document.getElementById("import-result");
+          if(missingTestSessions.length!==2){output.textContent="Review missing test orders again first.";return;}
+          if(!input.value){output.textContent="Enter the private upload token again.";return;}
+          const button=document.getElementById("reconcile-test-button");
+          button.disabled=true;output.textContent="Verifying two Stripe TEST payments; no emails sent…";
+          try {
+            const res=await fetch("/course-portal/admin/reconcile-test-missing",{
+              method:"POST",
+              headers:{"Authorization":"Bearer "+input.value,"Content-Type":"application/json"},
+              credentials:"same-origin",cache:"no-store",
+              body:JSON.stringify({expected_session_ids:missingTestSessions})
+            });
+            const result=await res.json();
+            output.textContent=res.ok
+              ? "Verified TEST entitlements reconciled: "+Number(result.reconciled||0)+
+                ". Email delivery stayed OFF. Review orders again."
+              : "Reconciliation blocked: "+(result.error||res.status);
+          } catch(e) {output.textContent="Reconciliation unavailable; recheck before retrying.";}
+          finally {input.value="";missingTestSessions=[];button.disabled=true;}
         });
         document.getElementById("import-button").addEventListener("click",async()=>{
           const f=document.getElementById("archive").files[0];
@@ -716,6 +743,7 @@ def register_course_portal(app, billing_store):
             return jsonify({"error": "stripe_history_unavailable"}), 503
         history = {"paid": 0, "pending_or_unpaid": 0, "already_reconciled": 0,
                    "paid_without_entitlement": 0}
+        missing_ids = []
         ledger = current_app.config["COURSE_LEDGER"]
         for session in data:
             sid = session.get("id")
@@ -727,10 +755,81 @@ def register_course_portal(app, billing_store):
                     history["already_reconciled"] += 1
                 else:
                     history["paid_without_entitlement"] += 1
+                    if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").lower() == "true"
+                            and os.getenv("NIJA_COURSE_DELIVERY_ENABLED", "false").lower() != "true"
+                            and session.get("livemode") is False
+                            and session.get("payment_link") == link
+                            and isinstance(sid, str) and sid.startswith("cs_test_")):
+                        missing_ids.append(sid)
             else:
                 history["pending_or_unpaid"] += 1
         return jsonify({"counts": history, "has_more": bool(sessions.get("has_more")),
+                        "missing_test_session_ids": missing_ids
+                        if not bool(sessions.get("has_more")) else [],
                         "dry_run": True})
+
+    @portal.post("/admin/reconcile-test-missing")
+    def reconcile_test_missing():
+        """Only the two browser-previewed, independently paid TEST sessions may be repaired.
+
+        This route cannot send email, enqueue access links, or operate in production.
+        Existing Stripe server reconciliation validates checkout price/product, paid
+        amount, charge status, refunds, disputes, and sandbox identity.
+        """
+        if not _admin_allowed():
+            return jsonify({"error": "unauthorized"}), 403
+        identity = expected_course_identity()
+        if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").lower() != "true"
+                or not identity or identity[3] is not False
+                or os.getenv("NIJA_COURSE_DELIVERY_ENABLED", "false").lower() != "false"
+                or not store.has_bundle()):
+            return jsonify({"error": "isolated_test_reconciliation_not_ready"}), 503
+
+        body = request.get_json(silent=True)
+        wanted = body.get("expected_session_ids") if isinstance(body, dict) else None
+        if (not isinstance(wanted, list) or len(wanted) != 2
+                or len(set(x for x in wanted if isinstance(x, str))) != 2
+                or any(not isinstance(x, str) or not x.startswith("cs_test_")
+                       or len(x) > 128 for x in wanted)):
+            return jsonify({"error": "exactly_two_test_sessions_required"}), 400
+        try:
+            stripe = _stripe()
+            listing = stripe.checkout.Session.list(payment_link=identity[0], limit=100)
+            if listing.get("has_more"):
+                return jsonify({"error": "test_history_incomplete"}), 409
+            ledger = current_app.config["COURSE_LEDGER"]
+            missing = []
+            for session in listing.get("data", []):
+                sid = session.get("id")
+                if (session.get("payment_link") != identity[0]
+                        or session.get("livemode") is not False
+                        or not isinstance(sid, str) or not sid.startswith("cs_test_")
+                        or session.get("status") != "complete"
+                        or session.get("payment_status") != "paid"):
+                    continue
+                row = ledger.get(sid)
+                if not row or not row["granted"] or row["status"] != "paid":
+                    missing.append(sid)
+            if len(missing) != 2 or set(missing) != set(wanted):
+                return jsonify({"error": "test_order_preview_changed"}), 409
+            repaired = 0
+            for sid in sorted(missing):
+                outcome = reconcile_session(stripe, ledger, sid)
+                if not outcome or outcome.get("paid") is not True:
+                    return jsonify({"error": "stripe_payment_not_verified",
+                                    "reconciled": repaired}), 409
+                row = ledger.get(sid)
+                if not row or row["status"] != "paid" or not row["granted"]:
+                    return jsonify({"error": "test_entitlement_not_persisted",
+                                    "reconciled": repaired}), 503
+                repaired += 1
+            # No call to on_course_payment: no outbox queue, email, or access links.
+            return jsonify({"reconciled": repaired, "email_sent": False,
+                            "delivery_enabled": False, "test_mode": True})
+        except Exception as exc:
+            # Keep credentials, buyer addresses and provider failure detail private.
+            log.error("Test reconciliation unavailable: %s", type(exc).__name__)
+            return jsonify({"error": "test_reconciliation_unavailable"}), 503
 
     @portal.post("/admin/reconcile")
     def admin_reconcile():
