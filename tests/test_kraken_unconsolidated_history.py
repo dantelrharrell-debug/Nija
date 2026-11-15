@@ -212,3 +212,59 @@ def test_rejected_closed_order_flags_never_retry_or_fall_back(cursor):
     with pytest.raises(IncompleteHistory):
         collect_history(read, account_scope="platform:kraken", use_cursor=cursor)
     assert calls == ["TradesHistory", "ClosedOrders"]
+
+
+@pytest.mark.parametrize('cursor', [False, True])
+@pytest.mark.parametrize('direct', [False, True])
+def test_requested_ledger_links_survive_every_page_pass_and_transport(cursor, direct, monkeypatch):
+    import scripts.nija_kraken_readonly_history_collector_v441 as collector
+
+    monkeypatch.setattr(collector, 'PAGE_SIZE', 1)
+    calls = []
+    originals = {'fill-a': {'ledgers': ['ledger-a', 'rollover-a'], 'time': 1000},
+                 'fill-b': {'ledgers': ['ledger-b'], 'time': 1001}}
+
+    def read(endpoint, params, *, category):
+        calls.append((endpoint, dict(params)))
+        field = {'TradesHistory': 'trades', 'ClosedOrders': 'closed', 'Ledgers': 'ledger'}[endpoint]
+        if endpoint != 'TradesHistory':
+            assert 'ledgers' not in params
+            return {'error': [], 'result': {field: {}, 'count': 0, 'cursor': {}}}
+        assert params['ledgers'] == ('true' if direct else True)
+        assert params['consolidate_taker'] == ('false' if direct else False)
+        second = params.get('cursor') == 'next' if cursor else params['ofs'] == 1
+        identity = 'fill-b' if second else 'fill-a'
+        return {'error': [], 'result': {'trades': {identity: originals[identity]},
+                                       'count': 2, 'cursor': {} if second else {'next': 'next'}}}
+
+    broker = SimpleNamespace(broker_type='kraken', account_type='platform', user_id=None,
+                             _gateway_url='' if direct else 'https://gateway.example',
+                             _gateway_only_mode=not direct, _kraken_private_call=read)
+    result = collect_from_existing_broker(broker, account_scope='platform:kraken',
+                                         monitoring_category='monitoring', use_cursor=cursor,
+                                         include_ledger_links=True)
+    assert len([c for c in calls if c[0] == 'TradesHistory']) == 4
+    assert result['history']['trades'] == originals
+    assert result['ledger_links_verified'] is False
+    assert result['trading_authorized'] is False
+
+
+@pytest.mark.parametrize('invalid', [None, 1, 'true'])
+def test_invalid_ledger_link_selection_denied_without_reads(invalid):
+    calls = []
+    with pytest.raises(ValueError, match='boolean ledger-link'):
+        collect_history(lambda *args: calls.append(args), account_scope='platform:kraken',
+                        include_ledger_links=invalid)
+    assert calls == []
+
+
+def test_rejected_ledger_link_mode_has_no_fallback_or_retry():
+    calls = []
+
+    def rejected(endpoint, params):
+        calls.append((endpoint, dict(params)))
+        return {'error': ['EGeneral:Invalid arguments']}
+
+    with pytest.raises(IncompleteHistory):
+        collect_history(rejected, account_scope='platform:kraken', include_ledger_links=True)
+    assert calls == [('TradesHistory', {'ofs': 0, 'consolidate_taker': False, 'ledgers': True})]

@@ -131,12 +131,14 @@ def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
     return {"error_code": "history_incomplete_unknown"}
 
 
-def _history_read_options(endpoint: str) -> dict[str, bool]:
+def _history_read_options(endpoint: str, include_ledger_links: bool = False) -> dict[str, bool]:
     """Keep closed-order fill links consistent with unconsolidated history."""
+    if type(include_ledger_links) is not bool:
+        raise ValueError("Explicit boolean ledger-link selection required")
     if endpoint == "ClosedOrders":
         return {"trades": True, "consolidate_taker": False}
     if endpoint == "TradesHistory":
-        return {"consolidate_taker": False}
+        return {"consolidate_taker": False, **({"ledgers": True} if include_ledger_links else {})}
     return {}
 
 
@@ -148,6 +150,7 @@ def collect_history(
     include_balance: bool = False,
     include_open_orders: bool = False,
     use_cursor: bool = False,
+    include_ledger_links: bool = False,
 ) -> dict[str, Any]:
     """Collect repeat-checked history, optionally bracketed by private balances."""
     if not (account_scope == "platform:kraken" or (
@@ -161,6 +164,7 @@ def collect_history(
         raise ValueError("Trusted read callable and bounded max_pages required")
     if type(use_cursor) is not bool:
         raise ValueError("Explicit boolean cursor selection required")
+    _history_read_options("TradesHistory", include_ledger_links)
 
     def read_cursor_endpoint(endpoint: str, field: str) -> dict[str, Any]:
         """Require an explicit cursor envelope; never fall back to offset reads.
@@ -174,7 +178,7 @@ def collect_history(
         # Reconciliation needs individual fill IDs, not Kraken's default
         # consolidation of executions for a taker order. Keep this choice fixed
         # across every page and both verification passes.
-        trade_options = _history_read_options(endpoint)
+        trade_options = _history_read_options(endpoint, include_ledger_links)
         params: dict[str, Any] = {**trade_options, "with_cursor": True}
         for _ in range(max_pages):
             payload = private_read(endpoint, dict(params))
@@ -296,7 +300,7 @@ def collect_history(
             records: dict[str, Any] = {}
             expected: int | None = None
             for index in range(max_pages):
-                params = {"ofs": index * PAGE_SIZE, **_history_read_options(endpoint)}
+                params = {"ofs": index * PAGE_SIZE, **_history_read_options(endpoint, include_ledger_links)}
                 payload = private_read(endpoint, params)
                 if not isinstance(payload, Mapping) or payload.get("error") != []:
                     raise _api_failure(endpoint, payload)
@@ -407,6 +411,7 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  include_balance: bool = False,
                                  include_open_orders: bool = False,
                                  use_cursor: bool = False,
+                                 include_ledger_links: bool = False,
                                  on_private_read: Callable[[str, str], None] | None = None,
                                  on_private_response: Callable[
                                      [str, Mapping[str, Any], float, float], None,
@@ -427,7 +432,7 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         raise ValueError("Authenticated private call and monitoring category required")
 
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
-        trade_options = _history_read_options(endpoint)
+        trade_options = _history_read_options(endpoint, include_ledger_links)
         trade_keys = set(trade_options)
         valid_trade_mode = all(params.get(key) is value for key, value in trade_options.items())
         history_read = (
@@ -484,5 +489,5 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
     return collect_history(
         read, account_scope=account_scope, max_pages=max_pages, include_balance=include_balance,
         include_open_orders=include_open_orders,
-        use_cursor=use_cursor,
+        use_cursor=use_cursor, include_ledger_links=include_ledger_links,
     )
