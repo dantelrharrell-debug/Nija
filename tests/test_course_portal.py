@@ -338,6 +338,7 @@ def _build_test_reconcile_app(tmp_path, monkeypatch):
     monkeypatch.setattr(course.PortalStore, "has_bundle", lambda self: True)
     monkeypatch.setattr(course, "expected_course_identity",
                         lambda: ("plink_test", "price_test", "prod_test", False))
+    monkeypatch.setattr(course, "expected_course_link", lambda: "plink_test")
     ids = ["cs_test_paid_one", "cs_test_paid_two", "cs_test_paid_three"]
     sessions = [{"id": x, "payment_link": "plink_test", "livemode": False,
                  "status": "complete", "payment_status": "paid"} for x in ids]
