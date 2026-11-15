@@ -35,6 +35,19 @@ CREATE TABLE IF NOT EXISTS tiq72_v515_reports (
   report JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS tiq72_v515_verified_events (
+  event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  reservation_id TEXT NOT NULL REFERENCES tiq72_v515_reservations(reservation_id),
+  stripe_session TEXT NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT tiq72_v515_event_type CHECK (event_type IN
+    ('checkout.session.completed', 'checkout.session.async_payment_succeeded',
+     'charge.refunded', 'charge.dispute.created')),
+  CONSTRAINT tiq72_v515_event_test_session CHECK (stripe_session LIKE 'cs_test_%')
+);
+CREATE INDEX IF NOT EXISTS tiq72_v515_events_reservation
+  ON tiq72_v515_verified_events (reservation_id, received_at);
 -- Never delete refunded/disputed reservations; their state revokes access
 -- even if a historical report is retained for accounting.
 COMMIT;
