@@ -448,17 +448,17 @@ if __name__ == "__main__":
 # ============================================================================
 # SECOND MODULE: Exchange Risk Manager with Dataclass Profiles
 # ============================================================================
-"""
-Different risk parameters for each exchange based on:
-- Fee structures
-- Liquidity characteristics
-- Volatility patterns
-- Historical performance
-- Regulatory environment
-
-Version: 1.0
-Author: NIJA Trading Systems
-"""
+# """
+# Different risk parameters for each exchange based on:
+# - Fee structures
+# - Liquidity characteristics
+# - Volatility patterns
+# - Historical performance
+# - Regulatory environment
+#
+# Version: 1.0
+# Author: NIJA Trading Systems
+# """
 
 import logging
 from typing import Dict, Optional

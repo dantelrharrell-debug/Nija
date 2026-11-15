@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Legacy filesystem EMERGENCY_STOP compatibility shim — fail closed.
 
 The original 20260708b repair used marker/state-file text heuristics to decide
@@ -16,6 +14,9 @@ EMERGENCY_STOP marker itself, never flips ``KillSwitch._is_active``, never
 resets the state machine, never grants execution authority, and never forces
 LIVE_ACTIVE.
 """
+
+from __future__ import annotations
+
 
 import importlib
 import logging
