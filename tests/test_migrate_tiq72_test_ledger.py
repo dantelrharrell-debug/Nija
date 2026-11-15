@@ -1,0 +1,85 @@
+"""Offline gates for the disposable TIQ72 PostgreSQL migration."""
+from __future__ import annotations
+import importlib.util
+from pathlib import Path
+from unittest.mock import patch
+import pytest
+
+PATH = Path(__file__).resolve().parents[1] / "scripts/migrate_tiq72_test_ledger.py"
+spec = importlib.util.spec_from_file_location("tiq72_safe_migration", PATH)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+def url(host=module.HOST, db=module.DB, user=module.USER):
+    return f"postgresql://{user}:synthetic@{host}:5432/{db}"
+
+class Cursor:
+    def __init__(self, identity=None, tables=None):
+        self.identity = identity or (module.DB,module.USER)
+        self.tables = tables or [(x,) for x in module.TABLES]
+        self.queries = []
+    def __enter__(self): return self
+    def __exit__(self,*args): return False
+    def execute(self, sql, params=None): self.queries.append((sql,params))
+    def fetchone(self): return self.identity
+    def fetchall(self): return self.tables
+
+class Connection:
+    def __init__(self, cursor=None):
+        self.c = cursor or Cursor()
+        self.commits=0;self.rollbacks=0;self.closed=0
+    def cursor(self): return self.c
+    def commit(self): self.commits+=1
+    def rollback(self): self.rollbacks+=1
+    def close(self): self.closed+=1
+
+@pytest.mark.parametrize("uri",[
+    url(host="external.example"), url(db="nija_billing_db"),
+    url(user="nija_course_sandbox_user"),
+    "postgresql://user:password@127.0.0.1:5432/nija_tiq72_test_ledger_20261115",
+    "https://example.com", "", "postgresql://test:password@broken:bad/db",
+    url()+"?sslmode=disable",
+])
+def test_only_explicit_private_test_database(uri):
+    with pytest.raises(module.MigrationDenied):
+        module.verify_private_url(uri)
+
+def test_readonly_preflight_checks_identity_without_running_schema():
+    db=Connection()
+    assert module.migrate(url(),connect=lambda *a,**k:db)=="identity_verified_no_changes"
+    assert db.commits==0 and db.rollbacks==1 and db.closed==1
+    assert len(db.c.queries)==1
+    assert db.c.queries[0][0]=="SELECT current_database(), current_user"
+
+def test_wrong_connected_database_rejected_even_if_url_claims_right_database():
+    db=Connection(Cursor(identity=("nija_billing_db","nija_billing_db_user")))
+    with pytest.raises(module.MigrationDenied,match="connected_identity_mismatch"):
+        module.migrate(url(),connect=lambda *a,**k:db)
+    assert db.commits==0 and db.rollbacks==1
+
+def test_apply_requires_explicit_env_gate():
+    db=Connection()
+    with patch.dict("os.environ",{"NIJA_TIQ72_TEST_SCHEMA_APPLY":"false"}):
+        with pytest.raises(module.MigrationDenied,match="apply_gate_required"):
+            module.migrate(url(),apply=True,connect=lambda *a,**k:db)
+    assert db.commits==0 and db.rollbacks==1
+
+def test_apply_checks_all_tables_and_commits_only_on_success():
+    db=Connection()
+    with patch.dict("os.environ",{"NIJA_TIQ72_TEST_SCHEMA_APPLY":"APPROVED_TEST_ONLY"}):
+        assert module.migrate(url(),apply=True,connect=lambda *a,**k:db)=="isolated_test_schema_installed"
+    assert db.commits==1 and db.rollbacks==0 and db.closed==1
+    assert any("CREATE TABLE IF NOT EXISTS tiq72_v515_runs" in q[0] for q in db.c.queries)
+
+def test_missing_table_rolls_back():
+    db=Connection(Cursor(tables=[("tiq72_v515_runs",)]))
+    with patch.dict("os.environ",{"NIJA_TIQ72_TEST_SCHEMA_APPLY":"APPROVED_TEST_ONLY"}):
+        with pytest.raises(module.MigrationDenied,match="schema_postcondition_failed"):
+            module.migrate(url(),apply=True,connect=lambda *a,**k:db)
+    assert db.commits==0 and db.rollbacks==1
+
+def test_provider_exception_is_redacted():
+    def connect(*a,**k): raise RuntimeError("secret-in-provider-exception")
+    with pytest.raises(module.MigrationDenied,match="private_database_operation_failed") as e:
+        module.migrate(url(),connect=connect)
+    assert "secret-in-provider-exception" not in str(e.value)
