@@ -51,7 +51,22 @@ def migrate(url, apply=False, connect=None):
                     return "identity_verified_no_changes"
                 if os.getenv("NIJA_TIQ72_TEST_SCHEMA_APPLY")!="APPROVED_TEST_ONLY":
                     raise MigrationDenied("apply_gate_required")
-                cursor.execute(sql)
+                # Source schema is BEGIN/COMMIT wrapped for standalone psql.
+                # Strip only those boundary statements so verification and all
+                # table creation remain within the SAME psycopg transaction.
+                commands = sql.replace("\\r\\n", "\\n")
+                begin_marker = "\\nBEGIN;\\n"
+                end_marker = "\\nCOMMIT;"
+                if commands.count(begin_marker) != 1 or commands.count(end_marker) != 1:
+                    raise MigrationDenied("schema_transaction_boundary_invalid")
+                start = commands.index(begin_marker) + len(begin_marker)
+                finish = commands.index(end_marker)
+                if commands[finish + len(end_marker):].strip():
+                    raise MigrationDenied("schema_trailing_statement_forbidden")
+                commands = commands[start:finish]
+                if "BEGIN;" in commands or "COMMIT;" in commands:
+                    raise MigrationDenied("nested_transaction_disallowed")
+                cursor.execute(commands)
                 cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE %s", ("tiq72_v515_%",))
                 if not TABLES.issubset({row[0] for row in cursor.fetchall()}):
                     raise MigrationDenied("schema_postcondition_failed")
