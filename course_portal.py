@@ -615,8 +615,30 @@ def register_course_portal(app, billing_store):
         <p><input id="operator-token" type="password" autocomplete="off"
         placeholder="Private upload token"></p>
         <button type="button" id="import-button">Upload Protected Package</button>
+        <button type="button" id="preview-button">Review Paid Test Orders (Read Only)</button>
         <pre id="import-result" role="status"></pre></div>
         <script>
+        document.getElementById("preview-button").addEventListener("click",async()=>{
+          const input=document.getElementById("operator-token");
+          const output=document.getElementById("import-result");
+          if(!input.value){output.textContent="Enter the private upload token.";return;}
+          const button=document.getElementById("preview-button");
+          button.disabled=true;output.textContent="Checking test order evidence…";
+          try {
+            const res=await fetch("/course-portal/admin/preview",{
+              method:"GET",headers:{"Authorization":"Bearer "+input.value},
+              credentials:"same-origin",cache:"no-store"
+            });
+            const result=await res.json();
+            if(!res.ok||!result.dry_run){output.textContent="Review unavailable: "+(result.error||res.status);return;}
+            const counts=result.counts||{};
+            const keys=["paid","pending_or_unpaid","already_reconciled","paid_without_entitlement"];
+            output.textContent="DRY RUN — NO ORDERS CHANGED\\n"+
+              keys.map(key=>key+": "+Number(counts[key]||0)).join("\\n")+
+              (result.has_more?"\\nAdditional Stripe pages exist; totals incomplete.":"");
+          } catch(e) {output.textContent="Order preview unavailable; no orders changed.";}
+          finally {input.value="";button.disabled=false;}
+        });
         document.getElementById("import-button").addEventListener("click",async()=>{
           const f=document.getElementById("archive").files[0];
           const input=document.getElementById("operator-token");
