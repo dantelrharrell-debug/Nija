@@ -58,6 +58,8 @@ def test_exact_existing_broker_read_only_evidence_and_permanent_claim(root):
     broker = Broker()
     assert run(root, [broker, broker])
     assert len(broker.calls) == 10  # balances, history and two current open-order reads
+    assert all(params.get("ledgers") is True for endpoint, params in broker.calls
+               if endpoint == "TradesHistory")
     assert all(e in {"Balance", "TradesHistory", "ClosedOrders", "Ledgers", "OpenOrders"} for e, _ in broker.calls)
     out = json.loads((root / (ID + ".evidence.json")).read_text())
     assert out["collection_succeeded"] is True and out["trading_authorized"] is False
@@ -250,7 +252,10 @@ def test_explicit_eleven_page_history_request_retains_fail_closed_authority(root
         if endpoint == "Balance":
             assert params == {}
             return {"error": [], "result": {"ZUSD": "100"}}
-        assert set(params) == {"ofs"}
+        assert set(params) == {
+            "TradesHistory": {"ofs", "consolidate_taker", "ledgers"},
+            "ClosedOrders": {"ofs", "trades", "consolidate_taker"}, "Ledgers": {"ofs"},
+        }[endpoint]
         field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
         count = 501 if endpoint == "TradesHistory" else 0
         offset = params["ofs"]
@@ -288,7 +293,7 @@ def test_history_count_exceeding_explicit_budget_stops_on_first_page(root):
             return {"error": [], "result": {"open": {}}}
         if endpoint == "Balance":
             return {"error": [], "result": {"ZUSD": "100"}}
-        assert endpoint == "TradesHistory" and params == {"ofs": 0}
+        assert endpoint == "TradesHistory" and params == {"ofs": 0, "consolidate_taker": False, "ledgers": True}
         return {"error": [], "result": {"count": 551, "trades": {"first": {"vol": "1"}}}}
 
     broker._kraken_private_call = read
@@ -318,7 +323,7 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
         field = {"TradesHistory": "trades", "ClosedOrders": "closed"}[endpoint]
         if endpoint == "TradesHistory":
             return {"error": [], "result": {"count": 0, field: {}}}
-        assert endpoint == "ClosedOrders" and params == {"ofs": 0}
+        assert endpoint == "ClosedOrders" and params == {"ofs": 0, "trades": True, "consolidate_taker": False}
         return {"error": [], "result": {"count": 552, field: {"order-id": {"vol": "1"}}}}
 
     broker._kraken_private_call = read
@@ -335,8 +340,8 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
     assert "552" not in caplog.text
     assert "order-id" not in caplog.text
     assert calls == [
-        ("Balance", {}), ("TradesHistory", {"ofs": 0}),
-        ("ClosedOrders", {"ofs": 0}),
+        ("Balance", {}), ("TradesHistory", {"ofs": 0, "consolidate_taker": False, "ledgers": True}),
+        ("ClosedOrders", {"ofs": 0, "trades": True, "consolidate_taker": False}),
     ]
     assert (root / (ID + ".claimed.json")).exists()
     assert not run(root, [broker])

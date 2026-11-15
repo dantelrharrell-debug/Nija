@@ -6,5 +6,6 @@ After=network.target
 Type=oneshot
 User=nija
 WorkingDirectory=/opt/nija
-Environment="DATABASE_URL=postgresql://nija:password@localhost/nija"
+# Provision this root-owned mode-0600 file before starting the optional monitor.
+EnvironmentFile=/etc/nija/monitoring.env
 ExecStart=/usr/bin/python3 /opt/nija/status_alerts.py

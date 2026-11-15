@@ -58,6 +58,16 @@ _STRIPE_WEBHOOK_EVENTS = frozenset({
 })
 
 
+_COURSE_SANDBOX_WEBHOOK_EVENTS = frozenset({
+    "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed",
+    "checkout.session.expired",
+    "charge.refunded",
+    "charge.dispute.created",
+})
+
+
 @dataclass(frozen=True)
 class BillingIdentity:
     """Server-signed NIJA identity accepted for Checkout creation."""
@@ -114,11 +124,22 @@ def _normalized_email(value: Any) -> str:
 
 
 def _stripe_module():
-    import stripe
-
     secret = os.getenv("STRIPE_SECRET_KEY", "").strip()
     if not secret:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
+    service_id = os.getenv("RENDER_SERVICE_ID", "").strip()
+    course_sandbox = os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+    staging_service = service_id == "srv-dasmtjfpn0mc73948r10"
+    course_sandbox_service = service_id == "srv-dbc4oe5g1s2s73925fb0"
+    if (staging_service or course_sandbox_service or course_sandbox) and not secret.startswith(
+            ("rk_test_", "sk_test_")):
+        # Never send live, publishable, or unknown keys to Stripe from an
+        # isolated billing or course test environment. Fail before import.
+        reason = ("course_sandbox_requires_stripe_test_key" if course_sandbox_service or course_sandbox
+                  else "billing_staging_requires_stripe_test_key")
+        raise RuntimeError(reason)
+    import stripe
+
     stripe.api_key = secret
     return stripe
 
@@ -581,17 +602,44 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             if not public_url.startswith("https://"):
                 raise RuntimeError("NIJA_BILLING_PUBLIC_URL is not a production HTTPS origin")
 
-            stripe = _stripe_module()
-            offer = _offer_config(FOUNDING_BETA_OFFER)
-            price = stripe.Price.retrieve(offer.price_id, expand=["product"])
-            if _id_value(price) != offer.price_id:
-                raise RuntimeError("Stripe founding Price identity mismatch")
-            if not bool(_obj_value(price, "active", False)):
-                raise RuntimeError("Stripe founding Price is inactive")
-            if str(_obj_value(price, "type", "")).lower() != "recurring":
-                raise RuntimeError("Stripe founding Price is not recurring")
-            if _id_value(_obj_value(price, "product")) != offer.product_id:
-                raise RuntimeError("Stripe founding Price/Product mismatch")
+            sandbox = os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+            if sandbox:
+                # The separate course sandbox deliberately ignores subscription events.
+                # Do not make its readiness depend on Founding 100 membership settings.
+                expected = expected_course_identity()
+                course_url = os.getenv("NIJA_COURSE_PUBLIC_URL", "").strip().rstrip("/")
+                if expected is None or expected[3] is not False or public_url != course_url:
+                    raise RuntimeError("Course sandbox identity and storage isolation not verified")
+                link_id, price_id, product_id, _expected_live = expected
+                stripe = _stripe_module()
+                price = stripe.Price.retrieve(price_id, expand=["product"])
+                if (not _id_value(price) == price_id
+                        or _obj_value(price, "livemode") is not False
+                        or not bool(_obj_value(price, "active", False))
+                        or str(_obj_value(price, "type", "")).lower() != "one_time"
+                        or _id_value(_obj_value(price, "product")) != product_id
+                        or _obj_value(price, "unit_amount") != 9900
+                        or str(_obj_value(price, "currency", "")).lower() != "usd"):
+                    raise RuntimeError("Course sandbox Stripe Price identity mismatch")
+                link = stripe.PaymentLink.retrieve(link_id)
+                if (_id_value(link) != link_id or _obj_value(link, "livemode") is not False
+                        or not bool(_obj_value(link, "active", False))):
+                    raise RuntimeError("Course sandbox Stripe Payment Link identity mismatch")
+                required_webhook_events = _COURSE_SANDBOX_WEBHOOK_EVENTS
+            else:
+                # Production subscription readiness remains unchanged.
+                stripe = _stripe_module()
+                offer = _offer_config(FOUNDING_BETA_OFFER)
+                price = stripe.Price.retrieve(offer.price_id, expand=["product"])
+                if _id_value(price) != offer.price_id:
+                    raise RuntimeError("Stripe founding Price identity mismatch")
+                if not bool(_obj_value(price, "active", False)):
+                    raise RuntimeError("Stripe founding Price is inactive")
+                if str(_obj_value(price, "type", "")).lower() != "recurring":
+                    raise RuntimeError("Stripe founding Price is not recurring")
+                if _id_value(_obj_value(price, "product")) != offer.product_id:
+                    raise RuntimeError("Stripe founding Price/Product mismatch")
+                required_webhook_events = _STRIPE_WEBHOOK_EVENTS
 
             expected_webhook_url = f"{public_url}/api/billing/webhook"
             endpoints = stripe.WebhookEndpoint.list(limit=100)
@@ -607,7 +655,7 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 raise RuntimeError("Authoritative Stripe webhook endpoint is missing or disabled")
 
             enabled_events = set(_obj_value(matching_endpoint, "enabled_events", []) or [])
-            if not _STRIPE_WEBHOOK_EVENTS.issubset(enabled_events):
+            if not required_webhook_events.issubset(enabled_events):
                 raise RuntimeError("Authoritative Stripe webhook event set is incomplete")
         except Exception:
             logger.exception("Billing readiness check failed")

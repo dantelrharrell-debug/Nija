@@ -1,0 +1,27 @@
+name: NIJA Actions runner diagnostic (read-only)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/recovery-runner-triage.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runner-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify runner can start a shell
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner started successfully"
+          echo "RUNNER_OS=${RUNNER_OS}"
+          echo "GITHUB_EVENT_NAME=${GITHUB_EVENT_NAME}"
+          echo "No repository checkout, secrets, network probes or broker calls performed."
+      - name: Write runner diagnostic summary
+        if: always()
+        shell: bash
+        run: |
+          echo '## Runner startup diagnostic' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This isolated job checks runner startup only. It does not certify recovery tests or trading.' >> "$GITHUB_STEP_SUMMARY"

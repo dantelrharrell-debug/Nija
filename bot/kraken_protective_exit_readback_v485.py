@@ -35,6 +35,7 @@ def make_kraken_protective_exit_provider(
     reviewed_provider_id: str, reviewed_ledger_provider_id: str,
     independent_positions: Callable[[], Mapping[str, Any]],
     monitoring_category: Any, clock: Callable[[], float] = time.time,
+    identity_method: str = "response_echo",
 ) -> Callable[[], Mapping[str, Any]]:
     """Verify both exchange-side stop and take-profit orders for every ledger lot.
 
@@ -55,7 +56,7 @@ def make_kraken_protective_exit_provider(
         approved_api_key_sha256=approved_api_key_sha256,
         approved_iban_sha256=approved_iban_sha256,
         reviewed_provider_id=reviewed_provider_id,
-        monitoring_category=monitoring_category, clock=clock,
+        monitoring_category=monitoring_category, clock=clock, identity_method=identity_method,
     )
 
     def ledger_snapshot() -> tuple:

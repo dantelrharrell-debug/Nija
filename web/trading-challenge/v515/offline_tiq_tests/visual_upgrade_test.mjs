@@ -1,0 +1,10 @@
+import fs from "node:fs";
+let p=0,f=0;const ok=(c,n)=>{c?p++:(f++,console.log("FAIL "+n))};
+const g=fs.readFileSync("src/pages/TradingIQChallenge.jsx","utf8"),l=fs.readFileSync("src/components/TiqLab.jsx","utf8"),c=fs.readFileSync("src/index.css","utf8");
+ok(g.includes("Fictional data"),"fictional label");ok(g.includes("not live market prices"),"not live caption");
+ok(l.includes("tiq-meters")&&l.includes("tiq-spark"),"meters and sparklines");
+ok(/prefers-reduced-motion[^}]*tiq-meter-fill/s.test(c),"reduced motion meters");
+ok(!/fetch\(|XMLHttpRequest/.test(g+l),"no network");
+ok(l.includes("illustration only"),"illustration label");
+ok(g.includes("Coming Soon")||fs.existsSync("src/lib/gameLink.js"),"report still coming soon");
+console.log("PASS: "+p+", FAIL: "+f);process.exit(f?1:0);

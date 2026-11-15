@@ -180,6 +180,56 @@ class CommissioningGateTests(unittest.TestCase):
         with self.assertRaisesRegex(AdmissionDenied, "independent_review"):
             self.make_gate(independently_reviewed=False)
 
+    def test_transport_rechecks_consumed_permission_and_current_approval(self):
+        permit = self.consume()
+        self.gate.verify_consumed_first_trade(permit, self.plan)
+        self.status["status"] = "revoked"
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(permit, self.plan)
+        with self.assertRaises(AdmissionDenied):
+            self.consume()
+
+    def test_transport_denies_expired_approval_after_consumption(self):
+        permit = self.consume()
+        self.clock.return_value = NOW + 61
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(permit, self.plan)
+
+    def test_transport_rechecks_writer_and_risk_after_consumption(self):
+        permit = self.consume()
+        self.fence_result = False
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(permit, self.plan)
+        self.fence_result = True
+        self.lost_control = "risk_and_sizing"
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(permit, self.plan)
+
+    def test_transport_denies_revocation_during_pretrade(self):
+        permit = self.consume()
+        def revoke(candidate, conn):
+            self.status["status"] = "revoked"
+            return self.rows
+        self.gate.observations = revoke
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(permit, self.plan)
+
+    def test_transport_cannot_reuse_a_completed_attempt(self):
+        permit = self.consume()
+        self.fill()
+        self.gate.verify_posttrade(self.candidate, self.plan)
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(permit, self.plan)
+
+    def test_transport_denies_replaced_approval_or_wrong_reservation(self):
+        permit = self.consume()
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(replace(permit, token="different-offline-token"), self.plan)
+        self.approval["approval_id"] = "replacement-offline-approval"
+        self.status["approval_id"] = self.approval["approval_id"]
+        with self.assertRaises(AdmissionDenied):
+            self.gate.verify_consumed_first_trade(permit, self.plan)
+
     def test_general_approval_does_not_replace_exact_first_order_approval(self):
         self.assertEqual(self.gate.inspect_pretrade(self.candidate, self.plan).state, "PRETRADE_READY")
         self.gate.read_approval = lambda: {}

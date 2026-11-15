@@ -13,11 +13,23 @@ def create_staging_app():
     from flask import Flask, jsonify
 
     if os.environ.get("NIJA_IQ_SANDBOX_ENABLED") == "true":
-        # from_environment fails closed if Stripe test credentials, manifest,
-        # dedicated persistent disk, exact origin, or report integrity are missing.
+        # Existing Render services can import this WSGI module directly,
+        # bypassing staging_bootstrap.main(). Require its non-root and
+        # private, actually mounted storage checks in both startup paths.
+        from .staging_bootstrap import validate_runtime
+
+        validate_runtime()
+
+        # Initialize the Stripe gateway and entitlement storage only after
+        # the dedicated persistent disk preflight succeeds.
         from .app import from_environment
 
         app = from_environment()
+        # API-only deployments cannot claim to be an installed game. The same
+        # origin UI must be supplied, hash-verified and served before requests.
+        from .preview_assets import install_preview_ui
+
+        assets = install_preview_ui(app)
 
         @app.get("/healthz")
         def enabled_health():
@@ -26,6 +38,8 @@ def create_staging_app():
                 environment="stripe_test_only",
                 live_payments=False,
                 status="sandbox_configured",
+                ui_installed=True,
+                ui_manifest=assets.manifest_sha256,
             )
 
         return app

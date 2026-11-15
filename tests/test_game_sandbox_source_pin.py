@@ -27,6 +27,7 @@ def configure(tmp_path, monkeypatch):
     adapter_path.write_text("def build_report(answers):\n    return {'synthetic_test_only': True, 'n': len(answers)}\n")
     env = {
         "NIJA_IQ_SANDBOX_ENABLED": "true",
+        "NIJA_IQ_SANDBOX_INGRESS_MODE": "direct",
         "NIJA_IQ_SANDBOX_DATABASE": str(tmp_path / "trading_iq_sandbox.sqlite3"),
         "NIJA_IQ_SANDBOX_ORIGIN": "https://sandbox.nija.invalid",
         "NIJA_IQ_SANDBOX_STRIPE_KEY": "rk_test_fixture_not_a_real_key",

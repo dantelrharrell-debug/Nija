@@ -46,10 +46,9 @@ def expected_course_link():
 
 
 def _matches_mode(obj, expected_live):
-    # In sandbox the provider must explicitly attest livemode=false.
-    # Legacy mock fixtures in live-mode tests omit this field.
-    value = obj.get("livemode")
-    return value is not False if expected_live else value is False
+    # Provider objects must explicitly attest the exact configured mode.
+    # Missing/null/non-boolean values cannot prove a real payment.
+    return obj.get("livemode") is expected_live
 
 
 

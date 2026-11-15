@@ -24,6 +24,9 @@ def _sqlite_summary(path: Path, *, forward: bool = False) -> dict:
         # Never attach SQLite to a live WAL database: even mode=ro may create
         # -shm/-wal files, while immutable=1 could silently omit committed WAL.
         # Inspect the header without SQLite first and fail closed for WAL.
+        if source.with_name(source.name + "-journal").exists():
+            summary["read_error"] = "rollback_journal_requires_offline_snapshot"
+            return summary
         if source.with_name(source.name + "-wal").exists() or source.with_name(source.name + "-shm").exists():
             summary["read_error"] = "wal_database_requires_offline_snapshot"
             return summary

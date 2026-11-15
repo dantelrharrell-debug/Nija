@@ -1,5 +1,15 @@
 # Isolated Trading IQ payment sandbox
 
+Current recovery evidence and verified-UI startup contract:
+[STAGING_RECOVERY_20261111.md](STAGING_RECOVERY_20261111.md). The GitHub account
+billing lock, matching frontend package and reviewed paid staging apply remain
+external completion requirements.
+
+Preview client and return-page integration are now available on a review branch;
+see [CLIENT_INTEGRATION.md](CLIENT_INTEGRATION.md) for exact installation, tests
+and current hosting blockers. This is not proof of installation in IONOS or
+operational hosted payments.
+
 Sandbox implementation with the recovered existing 72-decision report; **not deployed or connected to the IONOS preview**. No production entrypoint imports this package. Live keys and live events are rejected regardless of feature flags. Existing free game, Academy, $99 course and trading service are unchanged.
 
 ## Architecture and current evidence
@@ -52,7 +62,7 @@ node --test web/trading-challenge/tests/*.test.mjs
 
 Install Node 22 alongside the isolated Python environment; Node executes the original report without translating its formulas.
 
-`gunicorn --workers 1 --threads 2 'game_sandbox.app:from_environment()'` creates the sandbox API only. Serve the existing exported game at `/` and proxy `/sandbox/` on the **same staging origin**; do not assume IONOS can provide that proxy. Never serve the database, report adapter, manifest or environment files as static assets.
+`python -m game_sandbox.staging_bootstrap` starts the isolated staging process only after enforcing non-root execution and, when enabled, the dedicated private writable mount. It then launches the single-worker Gunicorn service. Serve the existing exported game at `/` and proxy `/sandbox/` on the **same staging origin**; do not assume IONOS can provide that proxy. Never serve the database, report adapter, manifest or environment files as static assets.
 
 All settings are distinct from existing billing/trading environment variables:
 
@@ -88,3 +98,13 @@ Provider references: https://render.com/docs/disks and https://render.com/docs/w
 Browser evidence: completed the publicly served Standard/Beginner game through all 72 Hold decisions in a 1363x936 desktop viewport. Completion showed Trading IQ 50 and six challenge scores of 50, matching server replay. The report remained locked with Adults 18+ Only — $1 — Coming Soon and no payment button. Page width was 1359px within the 1363px viewport. This is desktop flow evidence, not phone/tablet or preview-report layout certification.
 
 The existing prebuild copy-policy check required shortening one adult Academy lesson caption to “Advanced Investing”. The linked lesson ID, age group, score formulas and decision feedback are unchanged; the Academy itself is not edited.
+
+### Required ingress review before enabling
+
+Set `NIJA_IQ_SANDBOX_INGRESS_MODE` explicitly: `direct` only with verified direct
+socket clients, or `proxy` with `NIJA_IQ_SANDBOX_TRUSTED_PROXY_CIDRS` restricted
+to the actual peer. The proxy must strip incoming X-Forwarded-For and overwrite
+it with one verified client address. Unknown peers, missing or multiple addresses
+fail closed; never infer identity from Origin or blindly choose the leftmost
+forwarded value. Without that proof leave staging disabled. See
+[checkout corrections and release review](../docs/trading_iq_checkout_corrections_20261106.md).

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "web/trading-challenge/**"
+      - "game_sandbox/**"
       - ".github/workflows/trading-iq-challenge.yml"
   push:
     branches:
@@ -36,6 +37,18 @@ jobs:
           node --check server/scoring.mjs
       - name: Test scoring and simulated checkout verification
         run: npm test
+      - name: Verify isolated TIQ12 storage constraints (synthetic only)
+        run: python3 -m unittest discover -s tests -p 'test_tiq12_storage.py' -v
+      - name: Verify canonical v515 sandbox report adapter
+        working-directory: .
+        run: python3 -m unittest game_sandbox.test_v515 -v
+      - name: Verify approved v515 standalone game
+        working-directory: web/trading-challenge/v515
+        run: |
+          npm ci
+          npm audit --audit-level=low
+          npm test
+          npm run build
       - name: Ensure no live broker integrations are loaded
         run: |
           if grep -R -n -E "from .*bot/|require\(.*bot/|FORCE_TRADE=true|NIJA_DISABLE_WRITER_LOCK=true" public server; then

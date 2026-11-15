@@ -135,3 +135,43 @@ test("unexpected server receipt does not authorize a run or persist it", async (
     assert.equal(storage.getItem(storageKey), null);
   }, () => json({ run_id: "bad", csrf: CSRF }));
 });
+
+
+test("published 72-decision bridge preserves ordered challenges without client scores", async () => {
+  const storage = storageMock();
+  // Distinct challenge histories: no 12-decision repeating pattern can hide
+  // a dropped, duplicated, or reordered challenge in the browser bridge.
+  const decisions = Array.from({length: 72}, (_, i) => ({
+    action: ["buy", "sell", "hold"][(i * 7 + Math.floor(i / 12) + Math.floor(i / 5)) % 3],
+    stop: (i * 11 + Math.floor(i / 12) * 3) % 7 < 3,
+    portfolio: 10000 + i,
+    clientScore: 99
+  }));
+  await stubbed(storage, async calls => {
+    const client = new SandboxReportClient();
+    await client.start(true);
+    await client.completePublishedGame({ mode: "daily", level: "advanced", dayNum: 20762, decisions });
+    const complete = calls.find(c => c.url.endsWith("/complete"));
+    assert.ok(complete, "server completion request required");
+    const {answers} = JSON.parse(complete.options.body);
+    assert.deepEqual(Object.keys(answers).sort(), ["challenges", "dayNum", "level", "mode"]);
+    assert.equal(answers.challenges.length, 6);
+    assert.ok(answers.challenges.every(challenge => challenge.length === 12));
+    // Every decision in every challenge must match the original sequence,
+    // not only its endpoints or the number of decisions.
+    const expected = decisions.map(({action, stop}) => ({action, stop}));
+    assert.equal(new Set(answers.challenges.map(JSON.stringify)).size, 6);
+    assert.deepEqual(answers.challenges.flat(), expected);
+    assert.equal(JSON.stringify(answers).includes("clientScore"), false);
+    assert.equal(JSON.stringify(answers).includes("portfolio"), false);
+    assert.equal(answers.dayNum, 20762);
+
+    await assert.rejects(
+      client.completePublishedGame({mode: "daily", level: "advanced", dayNum: 20762, decisions: decisions.slice(0, 71)}),
+      /complete_72_decisions_first/
+    );
+    assert.equal(calls.filter(c => c.url.endsWith("/complete")).length, 1);
+  }, url => url.endsWith("/complete")
+    ? json({completed: true})
+    : json({run_id: RUN, csrf: CSRF}));
+});

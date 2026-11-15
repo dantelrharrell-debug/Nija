@@ -7,6 +7,7 @@ the provider's conservative whole-call freshness check.
 """
 from __future__ import annotations
 
+import json
 import math
 import threading
 import time
@@ -34,6 +35,10 @@ class IdentityReadTiming:
     monotonic_started: float | None = None
     response: Any = field(default=None, repr=False)
     api_matched: bool = False
+    inspect_http_fields: bool = field(default=False, repr=False)
+    http_field_presence: dict[str, bool] | None = None
+    inspect_native_identity: bool = field(default=False, repr=False)
+    native_key_digest: str | None = field(default=None, repr=False)
 
     def observation_start(self, response: Any, queued: float, now: float, maximum: float) -> float:
         """Accept exactly one matching transport and its original start time."""
@@ -50,15 +55,61 @@ class IdentityReadTiming:
 
 
 @contextmanager
-def capture_identity_read(api: Any, clock: Callable[[], float]) -> Iterator[IdentityReadTiming]:
+def capture_identity_read(
+    api: Any, clock: Callable[[], float], *, inspect_http_fields: bool = False,
+    inspect_native_identity: bool = False,
+) -> Iterator[IdentityReadTiming]:
     """Scope timing to this thread, exact API object and provider invocation."""
     previous = getattr(_LOCAL, "capture", None)
-    capture = IdentityReadTiming(api, clock)
+    capture = IdentityReadTiming(api, clock, inspect_http_fields=inspect_http_fields,
+                                 inspect_native_identity=inspect_native_identity)
     _LOCAL.capture = capture
     try:
         yield capture
     finally:
         _LOCAL.capture = previous
+
+
+def _http_field_presence(api: Any, previous: Any) -> dict[str, bool] | None:
+    """Inspect only field presence on a new native identity HTTP response.
+
+    This diagnostic is not identity evidence. Never export headers, body values,
+    request data, URLs or exceptions. Stale, redirected, foreign, oversized and
+    ambiguous responses have no diagnostic result. No network call is made.
+    """
+    try:
+        from requests import PreparedRequest, Response
+
+        response = getattr(api, "response", None)
+        endpoint = "https://api.kraken.com/0/private/GetApiKeyInfo"
+        if (type(response) is not Response or response is previous
+                or response.status_code != 200 or response.url != endpoint
+                or response.history or type(response.request) is not PreparedRequest
+                or response.request.method != "POST" or response.request.url != endpoint):
+            return None
+        # Do not consume a streaming body: only inspect bytes already buffered
+        # by the existing native request and decoder.
+        if response._content_consumed is not True:
+            return None
+        body = response._content
+        if type(body) is not bytes or not 0 < len(body) <= 65536:
+            return None
+
+        def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("ambiguous_http_diagnostic")
+                result[key] = value
+            return result
+
+        payload = json.loads(body, object_pairs_hook=unique)
+        if (type(payload) is not dict or payload.get("error") != []
+                or type(payload.get("result")) is not dict):
+            return None
+        return {field: field in payload["result"] for field in ("apiKey", "validUntil")}
+    except Exception:
+        return None
 
 
 def query_identity_with_timing(api: Any, params: Any) -> Any:
@@ -76,8 +127,22 @@ def query_identity_with_timing(api: Any, params: Any) -> Any:
     capture.started = capture.clock()
     started_monotonic = time.monotonic()
     capture.monotonic_started = started_monotonic
+    previous = (getattr(api, "response", None)
+                if capture.inspect_http_fields or capture.inspect_native_identity else None)
+    key_before = getattr(api, "key", None) if capture.inspect_native_identity else None
+    secret_before = getattr(api, "secret", None) if capture.inspect_native_identity else None
+    session_before = getattr(api, "session", None) if capture.inspect_native_identity else None
+    tls_before = getattr(session_before, "verify", None) is True
     result = api.query_private("GetApiKeyInfo", params)
     capture.elapsed = time.monotonic() - started_monotonic
     capture.finished = capture.clock()
     capture.response = result
+    if capture.inspect_http_fields and capture.api_matched and capture.attempts == 1:
+        capture.http_field_presence = _http_field_presence(api, previous)
+    if (capture.inspect_native_identity and capture.api_matched and capture.attempts == 1
+            and tls_before and getattr(api, "session", None) is session_before):
+        from bot.kraken_native_identity_proof import native_identity_key_digest
+        capture.native_key_digest = native_identity_key_digest(
+            api, previous, result, key_before, secret_before,
+        )
     return result

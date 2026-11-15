@@ -226,14 +226,14 @@ class InstanceDiagnosticTests(unittest.TestCase):
 
     def test_recovery_workflows_pin_the_checked_out_history_source(self) -> None:
         repository = Path(__file__).resolve().parents[1]
-        source = repository / "bot/kraken_live_history_recovery.py"
-        digest = hashlib.sha256(source.read_bytes()).hexdigest()
-        for path in (
-            ".github/workflows/render-recovery-access.yml",
-            ".github/workflows/kraken-recovery-gate-diagnostics.yml",
-        ):
-            with self.subTest(workflow=path):
-                self.assertIn(digest, (repository / path).read_text())
+        for source_path in ("bot/kraken_live_history_recovery.py", "bot/kraken_history_response_journal.py"):
+            digest = hashlib.sha256((repository / source_path).read_bytes()).hexdigest()
+            for path in (
+                ".github/workflows/render-recovery-access.yml",
+                ".github/workflows/kraken-recovery-gate-diagnostics.yml",
+            ):
+                with self.subTest(workflow=path, source=source_path):
+                    self.assertIn(digest, (repository / path).read_text())
 
     def test_api_logs_must_match_the_current_instance(self) -> None:
         for observed_instance, accepted in (
@@ -255,7 +255,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
                     }],
                 }] * 9
                 with patch.dict("os.environ", {
-                    "RENDER_API_KEY": "synthetic-only",
+                    "RENDER_API_KEY": "synthetic-only",  # pragma: allowlist secret (offline mocked HTTP fixture)
                     "EXPECTED_RENDER_INSTANCE": SERVICE + "-7d458c8976-zsc58",
                     "NIJA_APPROVED_RENDER_DEPLOYMENT_ID": "dep-synthetic",
                 }, clear=True), patch(
@@ -302,7 +302,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
                     ]},
                 ] + [{"logs": []}] * 8
                 with patch.dict(os.environ, {
-                    "RENDER_API_KEY": "synthetic-only",
+                    "RENDER_API_KEY": "synthetic-only",  # pragma: allowlist secret (offline mocked HTTP fixture)
                     "EXPECTED_RENDER_INSTANCE": expected_instance,
                     "NIJA_APPROVED_RENDER_DEPLOYMENT_ID": "dep-synthetic",
                 }, clear=True), patch(
@@ -319,7 +319,7 @@ class InstanceDiagnosticTests(unittest.TestCase):
             {"id": SERVICE, "branch": RELEASE_BRANCH},
             [{"deploy": {"id": "dep-current", "status": "live", "commit": {"id": "b" * 40}}}],
         ]
-        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-only"}, clear=True), patch(
+        with patch.dict(os.environ, {"RENDER_API_KEY": "synthetic-only"}, clear=True), patch(  # pragma: allowlist secret (offline mocked HTTP fixture)
             "scripts.nija_kraken_instance_diagnostic.urlopen",
             side_effect=[io.BytesIO(json.dumps(row).encode()) for row in responses],
         ) as request:
@@ -347,8 +347,21 @@ class IdentityProbeTests(unittest.TestCase):
         }, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        # Request-publisher behavior uses explicitly approved synthetic source
+        # bytes, independently of changes to the real production consumers.
+        # Never refresh production approval digests merely to make tests pass.
+        from scripts.nija_kraken_instance_diagnostic import IDENTITY_CONSUMER_PINS
+        app_root = self.root / "synthetic-app"
+        fixture_pins = []
+        for relative, _ in IDENTITY_CONSUMER_PINS:
+            source = app_root / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            raw = ("synthetic-reviewed-source:" + relative).encode()
+            source.write_bytes(raw)
+            fixture_pins.append((relative, hashlib.sha256(raw).hexdigest()))
         for name, value in (
-            ("RECOVERY_ROOT", self.root), ("APP_ROOT", Path(__file__).resolve().parents[1]),
+            ("RECOVERY_ROOT", self.root), ("APP_ROOT", app_root),
+            ("IDENTITY_CONSUMER_PINS", tuple(fixture_pins)),
         ):
             change = patch("scripts.nija_kraken_instance_diagnostic." + name, value)
             change.start()
@@ -464,3 +477,14 @@ class IdentityProbeTests(unittest.TestCase):
         self.assertEqual(identity_probe()["reason"], "approved_api_key_identity_mismatch")
         self.receipt(collection_succeeded=False, failure_code="private-credential-canary")
         self.assertEqual(identity_probe()["reason"], "identity_comparison_unverified")
+
+
+class IdentityConsumerSourcePinTests(unittest.TestCase):
+    def test_identity_consumer_pins_match_exact_source_and_inventory(self):
+        from scripts import nija_kraken_instance_diagnostic as diagnostic
+        root = Path(__file__).resolve().parents[1]
+        inventory = json.loads((root / "ops/recovery/render_readonly_baseline.json").read_text())
+        for path, expected in diagnostic.IDENTITY_CONSUMER_PINS:
+            with self.subTest(path=path):
+                self.assertEqual(hashlib.sha256((root / path).read_bytes()).hexdigest(), expected)
+                self.assertEqual(inventory["source_sha256"][path], expected)

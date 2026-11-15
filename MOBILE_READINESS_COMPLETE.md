@@ -1,5 +1,7 @@
 # NIJA Mobile Readiness - Implementation Complete ✅
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 This document provides a comprehensive overview of all mobile readiness features implemented in NIJA.
 
 ## 🎯 Overview
@@ -94,7 +96,7 @@ New dependencies added:
 cp .env.example .env
 
 # Required variables for mobile backend:
-DATABASE_URL=postgresql://user:pass@host:5432/nija
+DATABASE_URL=postgresql://<credentials>@host:5432/nija
 REDIS_URL=redis://host:6379/0
 JWT_SECRET_KEY=your-secure-secret-key
 STRIPE_SECRET_KEY=sk_live_xxxxx

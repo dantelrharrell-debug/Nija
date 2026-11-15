@@ -3,13 +3,21 @@ on:
   pull_request:
     paths:
       - 'game_sandbox/**'
+      - 'nija_game_*.py'
+      - 'tests/test_nija_game*.py'
       - 'tests/test_game_sandbox.py'
       - 'tests/fixtures/ionos_served_ui_reference.mjs'
       - 'tests/test_game_sandbox_source_pin.py'
       - 'tests/test_game_sandbox_provider_receipts.py'
       - 'tests/test_game_sandbox_staging.py'
+      - 'tests/test_game_sandbox_bootstrap.py'
+      - 'tests/test_game_sandbox_assets.py'
+      - 'tests/test_game_sandbox_browser.py'
+      - 'scripts/verify_game_sandbox_container.py'
       - 'tests/fixtures/stripe_iq72_sandbox.py'
       - 'tests/test_game_sandbox_client.mjs'
+      - 'tests/test_game_sandbox_preview.mjs'
+      - 'tests/test_game_sandbox_preview.py'
       - 'game_sandbox/preview_export_parity.test.mjs'
       - '.github/workflows/game-sandbox.yml'
   workflow_dispatch:
@@ -17,7 +25,7 @@ permissions:
   contents: read
 jobs:
   sandbox:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,8 +36,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: pip install -r game_sandbox/requirements.txt pytest bandit detect-secrets pip-audit
+      - run: pip install -r game_sandbox/requirements.txt pytest bandit detect-secrets pip-audit playwright==1.56.0
+      - name: Install browser for hosted confirmation security regression
+        run: python -m playwright install --with-deps chromium
       - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox.py
+      - name: Hosted checkout reservations, abuse controls and customer access
+        run: python -m pytest tests/test_nija_game_billing.py tests/test_nija_game_hosted.py tests/test_nija_game_checkout_protections.py -q
+      - run: python -m py_compile nija_game_billing.py nija_game_hosted_routes.py nija_game_checkout_store.py
+      - run: python -m bandit -q nija_game_billing.py nija_game_hosted_routes.py nija_game_checkout_store.py
+      - run: detect-secrets-hook nija_game_billing.py nija_game_hosted_routes.py nija_game_checkout_store.py tests/test_nija_game_checkout_protections.py
       - run: python -m pytest tests/test_game_sandbox.py -q
       - run: node --test game_sandbox/ionos_parity.test.mjs
       - run: node --test game_sandbox/preview_export_parity.test.mjs
@@ -39,10 +54,27 @@ jobs:
         with:
           node-version: '22'
       - run: python -m py_compile game_sandbox/*.py tests/test_game_sandbox*.py
-      - run: python -m pytest tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_provider_receipts.py tests/test_game_sandbox_staging.py -q
+      - run: python -m pytest tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_provider_receipts.py tests/test_game_sandbox_staging.py tests/test_game_sandbox_bootstrap.py -q
       - run: node --check game_sandbox/client.mjs
       - run: node --check tests/test_game_sandbox_client.mjs
-      - run: node --test tests/test_game_sandbox_client.mjs
+      - run: node --test tests/test_game_sandbox_client.mjs tests/test_game_sandbox_preview.mjs
+      - run: python -m pytest tests/test_game_sandbox_preview.py tests/test_game_sandbox_assets.py tests/test_game_sandbox_browser.py -q
+      - run: detect-secrets-hook game_sandbox/report.html tests/test_game_sandbox_preview.py tests/test_game_sandbox_preview.mjs tests/test_game_sandbox_assets.py tests/test_game_sandbox_browser.py
       - run: python -m bandit -q -r game_sandbox
       - run: detect-secrets-hook game_sandbox/*.py game_sandbox/*.mjs game_sandbox/requirements.txt tests/test_game_sandbox.py tests/test_game_sandbox_source_pin.py tests/test_game_sandbox_provider_receipts.py tests/test_game_sandbox_staging.py tests/fixtures/stripe_iq72_sandbox.py game_sandbox/sandbox_offer.json tests/test_game_sandbox_client.mjs
       - run: pip-audit -r game_sandbox/requirements.txt
+
+  sandbox-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build isolated sandbox image without production sources or secrets
+        run: docker build -f game_sandbox/Dockerfile.staging -t nija-iq-security-test game_sandbox
+      - name: Verify rootless startup and private persistent storage
+        run: python scripts/verify_game_sandbox_container.py --image nija-iq-security-test

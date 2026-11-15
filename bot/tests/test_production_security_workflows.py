@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -112,10 +113,31 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_python_audits_enforce_findings(self) -> None:
         for name in ("security-scan.yml", "artifact-scanning.yml"):
-            text = (ROOT / ".github/workflows" / name).read_text()
-            commands = [line for line in text.splitlines() if "pip-audit --desc" in line]
-            self.assertTrue(commands)
-            self.assertTrue(all("||" not in line for line in commands))
+            workflow = yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+            audit_steps = [
+                step for job in workflow["jobs"].values()
+                for step in job.get("steps", [])
+                if any(line.strip().startswith("pip-audit ")
+                       for line in step.get("run", "").splitlines())
+            ]
+            self.assertTrue(audit_steps, name)
+            for step in audit_steps:
+                self.assertNotIn("continue-on-error", step)
+                self.assertNotIn("if", step)
+                self.assertNotIn("||", step["run"])
+                commands = [
+                    line.strip() for line in step["run"].splitlines()
+                    if line.strip().startswith("pip-audit ")
+                ]
+                for command in commands:
+                    args = shlex.split(command)
+                    self.assertEqual(args[0], "pip-audit")
+                    self.assertIn("--desc", args)
+                    self.assertNotIn("--ignore-vuln", args)
+                    if name == "artifact-scanning.yml":
+                        self.assertIn("-r", args)
+                        self.assertEqual(args[args.index("-r") + 1],
+                                         "${{ matrix.requirements }}")
         workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
         manifests = workflow["jobs"]["python-package-scan"]["strategy"]["matrix"]["requirements"]
         self.assertEqual(set(manifests), {

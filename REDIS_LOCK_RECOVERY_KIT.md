@@ -1,5 +1,7 @@
 # NIJA Redis Lock Issue - Complete Recovery Toolkit
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 **Issue:** NIJA bot stuck in fail-closed standby mode - cannot acquire distributed Redis lock
 
 **Root Cause:** Redis at `maglev.proxy.rlwy.net:31245` is unreachable (timeout)
@@ -185,7 +187,7 @@ python3 scripts/clear_redis_locks.py --clear
 
 | Variable | Required | Example |
 |----------|----------|---------|
-| `NIJA_REDIS_URL` | ✅ Yes | `rediss://default:PWD@host:port/0` |
+| `NIJA_REDIS_URL` | ✅ Yes | `rediss://<credentials>@host:port/0` |
 | `NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK` | ❌ No (emergency only) | `true` |
 | `NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE` | ❌ No (default=true) | `true` |
 | `NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS` | ❌ No (default=12 in live mode, infinite otherwise) | `12` |

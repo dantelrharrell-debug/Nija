@@ -3,6 +3,29 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'scripts/stage_archived_kraken_history.py'
+      - 'tests/test_stage_archived_kraken_history.py'
+      - 'bot.py'
+      - 'bot/redis_env.py'
+      - 'start.sh'
+      - 'tests/test_redis_configuration_error_privacy.py'
+      - 'bot/bot_main.py'
+      - 'bot/kraken_protected_startup_root.py'
+      - 'bot/kraken_startup_receipts.py'
+      - 'bot/kraken_startup_evidence_binding.py'
+      - 'bot/kraken_canonical_startup_factory.py'
+      - 'bot/kraken_native_four_source_binding.py'
+      - 'bot/kraken_margin_cash_reconciliation.py'
+      - 'tests/test_kraken_margin_cash_reconciliation.py'
+      - 'bot/kraken_live_history_recovery.py'
+      - 'bot/kraken_history_response_journal.py'
+      - 'scripts/nija_kraken_readonly_history_collector_v441.py'
+      - 'tests/test_kraken_history_response_journal.py'
+      - 'tests/test_kraken_live_history_recovery.py'
+      - 'tests/test_kraken_native_four_source_binding.py'
+      - 'bot/kraken_collector_composition_v487.py'
+      - 'tests/test_kraken_canonical_native_source_bindings.py'
+      - 'tests/test_kraken_protected_startup_root.py'
       - 'scripts/nija_kraken_instance_diagnostic.py'
       - 'scripts/nija_render_recovery_verification.py'
       - 'scripts/render_runtime_build_sources.py'
@@ -11,6 +34,10 @@ on:
       - 'requirements.txt'
       - 'bot/failure_cluster_engine.py'
       - 'bot/runtime_kraken_native_margin_backup_v380_patch.py'
+      - 'bot/runtime_kraken_openpositions_margin_reconciliation_v364_patch.py'
+      - 'bot/tests/test_runtime_kraken_openpositions_margin_reconciliation_v364.py'
+      - 'bot/tests/test_execution_pipeline_margin_ledger_hooks.py'
+      - 'bot/tests/test_margin_position_ledger.py'
       - 'tests/test_v392_hardened_client_id_patch.py'
       - 'ops/recovery/render_readonly_baseline.json'
       - 'tests/test_kraken_instance_diagnostic.py'
@@ -35,6 +62,9 @@ jobs:
           python-version: '3.11'
       - name: Exercise offline fail-closed deployment, checkout, digest and authority boundaries
         run: |
+          python -B -S -m unittest discover -s tests -p test_stage_archived_kraken_history.py -v
+          python -B -S -m unittest discover -s tests -p test_kraken_margin_cash_reconciliation.py -v
+          python -B -S -m unittest discover -s tests -p test_redis_configuration_error_privacy.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_instance_diagnostic.py -v
           python -B -S -m unittest discover -s tests -p test_render_recovery_verification.py -v
           python -B -S -m unittest discover -s tests -p test_render_runtime_build_sources.py -v
@@ -51,6 +81,9 @@ jobs:
             tests/test_v392_hardened_client_id_patch.py \
             bot/tests/test_failure_cluster_engine.py \
             bot/tests/test_runtime_kraken_native_margin_backup_v380.py \
+            bot/tests/test_runtime_kraken_openpositions_margin_reconciliation_v364.py \
+            bot/tests/test_execution_pipeline_margin_ledger_hooks.py \
+            bot/tests/test_margin_position_ledger.py \
             tests/test_kraken_instance_diagnostic.py \
             tests/test_render_recovery_verification.py \
             tests/test_kraken_collector_composition_v487.py \

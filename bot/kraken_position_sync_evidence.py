@@ -77,6 +77,7 @@ def make_kraken_position_sync_provider(
     independent_positions: Callable[[], Mapping[str, Any]],
     monitoring_category: Any, independently_reviewed: bool = False,
     clock: Callable[[], float] = time.time,
+    identity_method: str = "response_echo",
 ) -> Callable[[], Mapping[str, Any]]:
     """Compare current authenticated holdings with complete ledger and v285 adoption.
 
@@ -96,7 +97,7 @@ OpenPositions are both queried; any unsupported nonzero holding denies.
     identity = make_kraken_account_identity_provider(
         broker, account_scope=account_scope, approved_api_key_sha256=approved_api_key_sha256,
         approved_iban_sha256=approved_iban_sha256, reviewed_provider_id=reviewed_provider_id,
-        monitoring_category=monitoring_category, clock=clock,
+        monitoring_category=monitoring_category, clock=clock, identity_method=identity_method,
     )
 
     def ledger() -> tuple[Mapping[str, Any], dict[str, Decimal], float, float]:

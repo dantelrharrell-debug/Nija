@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import secrets
@@ -58,10 +59,11 @@ class StripeGateway:
 
 def create_app(service: Sandbox) -> Any:
     """Create a same-origin API. No CORS grants or production route registration."""
-    from flask import Flask, jsonify, request
+    from flask import Flask, jsonify, request, send_file
 
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 65536
+    app.config["NIJA_IQ_MANIFEST_SHA256"] = service.manifest.digest
 
     @app.before_request
     def protect() -> Any:
@@ -75,8 +77,23 @@ def create_app(service: Sandbox) -> Any:
             return jsonify(error="origin_required"), 403
         if request.method != "GET" and request.mimetype != "application/json":
             return jsonify(error="json_required"), 415
-        # Dedicated ingress must additionally rate-limit by verified client IP.
-        bucket = digest(request.remote_addr or "unknown")
+        # Explicit ingress policy; never combine visitors under the proxy's IP
+        # or trust arbitrary caller-supplied forwarding headers.
+        mode = os.environ.get("NIJA_IQ_SANDBOX_INGRESS_MODE")
+        try:
+            peer = ipaddress.ip_address(request.environ.get("REMOTE_ADDR", ""))
+            if mode == "direct":
+                client = str(peer)
+            elif mode == "proxy":
+                networks = os.environ.get("NIJA_IQ_SANDBOX_TRUSTED_PROXY_CIDRS", "").split(",")
+                if not any(peer in ipaddress.ip_network(net.strip()) for net in networks if net.strip()):
+                    return jsonify(error="untrusted_ingress"), 403
+                client = str(ipaddress.ip_address(request.headers.get("X-Forwarded-For", "")))
+            else:
+                return jsonify(error="reviewed_ingress_required"), 503
+        except ValueError:
+            return jsonify(error="invalid_ingress_identity"), 403
+        bucket = digest(client)
         now = int(time.time())
         with service.db() as db:
             row = db.execute("SELECT * FROM limits WHERE owner_hash=?", (bucket,)).fetchone()
@@ -98,6 +115,16 @@ def create_app(service: Sandbox) -> Any:
                 "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
             }
         )
+        if request.endpoint in {"preview_root", "preview_game", "preview_asset"}:
+            from .preview_assets import UI_CSP
+
+            response.headers["Content-Security-Policy"] = UI_CSP
+        if request.endpoint == "report_return":
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
+                "connect-src 'self'; frame-src 'self'; base-uri 'none'; "
+                "form-action 'none'; frame-ancestors 'none'"
+            )
         return response
 
     @app.errorhandler(Denied)
@@ -125,6 +152,23 @@ def create_app(service: Sandbox) -> Any:
         if not value:
             raise Denied("csrf_required")
         return value
+
+    # Explicit allowlist only: never expose the module directory or database.
+    ui_files = {name: Path(__file__).parent / name for name in (
+        "client.mjs", "preview-controller.mjs", "preview-panel.mjs", "recovery.mjs"
+    )}
+
+    @app.get("/sandbox-ui/<name>")
+    def sandbox_ui(name: str) -> Any:
+        """Serve reviewed browser modules without allowing arbitrary file reads."""
+        if name not in ui_files:
+            return jsonify(error="not_found"), 404
+        return send_file(ui_files[name], mimetype="text/javascript")
+
+    @app.get("/report")
+    def report_return() -> Any:
+        """Return page is public; its data access remains owner/entitlement gated."""
+        return send_file(Path(__file__).parent / "report.html", mimetype="text/html")
 
     @app.get("/sandbox/health")
     def health() -> Any:
@@ -189,7 +233,12 @@ def from_environment() -> Any:
         enabled=os.environ.get("NIJA_IQ_SANDBOX_ENABLED") == "true",
     )
     config.validate()
-    if os.environ.get("NIJA_IQ_SANDBOX_GAME") == "published72":
+    if os.environ.get("NIJA_IQ_SANDBOX_GAME") == "v515":
+        from .v515 import V515Game, build_v515_report
+
+        manifest = V515Game()
+        report_builder = build_v515_report
+    elif os.environ.get("NIJA_IQ_SANDBOX_GAME") == "published72":
         from .ionos import PublishedGame, build_published_report
 
         manifest = PublishedGame()

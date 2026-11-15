@@ -15,6 +15,14 @@ def inspect_execution_admission(account_scope: str) -> dict[str, Any]:
         _genuine_execution_marker_proof, _strict_authority_ready, _kill_switch_clear,
     )
 
+    # Match the independent collector account-scope contract. A whitespace-
+    # padded or internally whitespace-containing scope is never certified.
+    account_scope_valid = bool(
+        isinstance(account_scope, str)
+        and account_scope
+        and account_scope == account_scope.strip()
+        and not any(character.isspace() for character in account_scope)
+    )
     attestation = inspect_authenticated_attestations(account_scope)
     checks = attestation.get("checks", {})
     independently_certified = bool(
@@ -35,7 +43,7 @@ def inspect_execution_admission(account_scope: str) -> dict[str, Any]:
         independently_certified and writer_ok and kill_clear and execution_proof_ok
     )
     return {
-        "account_scope_configured": bool(account_scope and account_scope.strip() == account_scope),
+        "account_scope_configured": account_scope_valid,
         "collector_installed": attestation.get("collector_installed") is True,
         "pretrade_checks_passed": independently_certified,
         "writer_verified": writer_ok,

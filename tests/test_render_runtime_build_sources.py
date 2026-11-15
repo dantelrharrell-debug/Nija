@@ -34,7 +34,7 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         self.assertEqual(set(built), set(SOURCE_PATHS))
         self.assertEqual(
             built["start.sh"],
-            "40be05c6a4cc21f42bba1a755b3dfad6c33746588800563284013a00f7faf0ca",  # pragma: allowlist secret
+            "be868922a649560144d6e178489e8e955f2b537a3e95c8c74053e2317e8a6866",  # pragma: allowlist secret
         )
         # Public Git-input -> reproduced-output digests for release and main.
         broker_outputs = {
@@ -56,6 +56,17 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         for path in RECIPE_PATHS:
             with self.subTest(path=path), self.assertRaisesRegex(BuildRecipeDenied, "runtime_build_recipe_unreviewed"):
                 derive_runtime_source_sha256(self.sources, {**self.recipe, path: self.recipe[path] + b"\n"})
+
+    def test_security_upgrade_variant_does_not_allow_unreviewed_package_flags(self) -> None:
+        """Recognize exact public bytes, not any recipe containing an upgrade."""
+        recipe = self.recipe["Dockerfile"]
+        self.assertIn(b"apt-get upgrade -y &&", recipe)
+        for flag in (b"--allow-unauthenticated", b"--allow-downgrades"):
+            changed = recipe.replace(b"apt-get upgrade -y &&", b"apt-get upgrade -y " + flag + b" &&", 1)
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                BuildRecipeDenied, "runtime_build_recipe_unreviewed",
+            ):
+                derive_runtime_source_sha256(self.sources, {**self.recipe, "Dockerfile": changed})
 
     def test_derivation_matches_actual_build_script_file_rewrites(self) -> None:
         root = Path(__file__).resolve().parents[1]

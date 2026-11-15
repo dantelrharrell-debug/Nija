@@ -25,11 +25,86 @@ review branch. It defines exactly one Oregon web service with:
 - A pinned 72-decision published-game manifest and a fail-closed entitlement DB.
 - No production Stripe secrets, no test secrets in Git, no trading credentials.
 
+### Non-root image and disk ownership
+
+The image now starts directly as UID/GID **10001:10001**, including its
+launcher. Startup never runs chown, invokes gosu, or elevates privileges.
+Disabled health can run without a disk and still exposes no payment routes.
+Enabled startup requires the exact configured database path
+`/var/data/trading_iq_sandbox.sqlite3`, an actual mount at `/var/data`, ownership
+by the runtime UID, directory permissions **0700**, and a successful temporary
+write/fsync probe. A missing, shared, incorrectly owned or read-only mount
+denies startup; no disposable-storage fallback is permitted.
+
+Before enabling this staging service, establish the dedicated disk's ownership
+and permissions through an approved platform provisioning mechanism and verify
+them under UID 10001. Image-layer ownership does not establish mounted-disk
+ownership. Platform support for provisioning the actual disk is still unverified;
+keep the service disabled if the required ownership cannot be established.
+Do not use root runtime overrides or broad write permissions to make it start.
+No existing Render disk is changed by this source correction.
+
+The sandbox-image CI job rehearses real non-root startup, root-override denial,
+unprovisioned/missing/read-only mount denial, SQLite persistence across two
+processes, and disabled HTTP behavior using a disposable Docker volume with no
+provider credentials and no network. It does not certify a live Render mount.
+
 **Cost**: Render Starter compute and persistent disk are billable. An operator
 must review provider pricing and explicitly authorize the exact costs before
 approving the Blueprint plan. Simply selecting the workspace is not cost
 approval. Render Blueprint `autoSync=false` means future pushes do not
 automatically apply infrastructure changes.
+
+## Verified test-mode boundaries and remaining dependencies (2026-11-05)
+
+The connected NIJA Stripe sandbox account has an active one-time USD 1 price
+`price_1UYToJRS5Ezp77RQVkx96eS5` for product
+`prod_nija_iq72_sandbox_v1` (`unit_amount=100`, `currency=usd`,
+`livemode=false`). These **public identifiers only** are pinned in
+`render.staging.yaml`. The sole registered test webhook belongs to the
+existing Foundations course sandbox and must not be repurposed.
+
+An authenticated read-only Render Blueprint planning attempt reported
+`planningOutcome=failed` with `billing_suspended` for the owner-selected
+Nija workspace. No game service or persistent disk was provisioned. There is
+therefore no service-side evidence that either the **restricted Stripe test
+API key** or dedicated **webhook signing secret** is installed. Configure
+those only in the newly provisioned dedicated Render service using its
+protected environment settings after separate paid-plan cost authorization.
+Never paste or commit either credential; never print it or expose it in logs.
+The new webhook URL must point to that actual HTTPS game service, not an
+existing NIJA course, billing, or trading endpoint.
+
+The 2026-11-05 IONOS technical response states external processor payments
+are not automatically linked to an AI Builder database; the separate
+6B/9B protected-storage review is not an approved migration. Keep all runs,
+checkout attempts, webhook events and entitlements in the isolated backend
+rather than writing to unverified IONOS storage. A GitHub merge is not
+authenticated IONOS preview access, source-parity evidence or publication.
+
+## Guard direct WSGI startup as well as the reviewed launcher (2026-11-06)
+
+The existing `nija-iq72-staging` free Render web service uses
+`gunicorn ... game_sandbox.staging_entrypoint:application` directly, rather
+than the reviewed `staging_bootstrap.main()` launcher. Previously, an enabled
+direct import would not run the bootstrap's verified private-mount, ownership,
+non-root, write/fsync and exact database-path preflight before opening the
+Stripe and entitlement service.
+
+The enabled `create_staging_app()` now invokes that identical
+`validate_runtime()` check **before** `from_environment()`. Regression
+tests cover absent mounts, root identity, and the disabled holding mode.
+The service therefore fails startup if someone enables sandbox payments on
+the existing free no-disk service, even with its direct Gunicorn command.
+The disabled `/healthz` and unavailable checkout remain unchanged.
+
+This is an application-level safety fix, not evidence of a provisioned disk,
+authorized IONOS preview storage, live server-side Stripe test credentials,
+a Trading IQ webhook, or completed hosted checkout QA. Keep the payment
+sandbox disabled until a separately approved isolated persistent-disk
+deployment passes original-report parity, signed webhook, purchase,
+reopen/refund/dispute and backup/restore checks. No deployment is authorized
+by this documentation or PR.
 
 ## After authorized infrastructure creation
 

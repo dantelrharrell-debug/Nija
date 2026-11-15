@@ -1,0 +1,22 @@
+{
+  "name": "nija-trading-iq-v515",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node run-tests.mjs && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router": "7.18.5"
+  },
+  "devDependencies": {
+    "vite": "8.3.8",
+    "tailwindcss": "4.3.5",
+    "@tailwindcss/vite": "4.3.5"
+  }
+}

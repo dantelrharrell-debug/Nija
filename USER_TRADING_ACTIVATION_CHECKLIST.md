@@ -121,9 +121,7 @@ KRAKEN_PLATFORM_API_SECRET=your-api-secret-here
 **For Coinbase** (uncomment and fill these lines):
 ```bash
 COINBASE_API_KEY=organizations/your-org-id/apiKeys/your-key-id
-COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
-YOUR_PRIVATE_KEY_HERE
------END EC PRIVATE KEY-----"
+# Set COINBASE_API_SECRET privately to the complete downloaded PEM value.
 ```
 
 **Checklist**:

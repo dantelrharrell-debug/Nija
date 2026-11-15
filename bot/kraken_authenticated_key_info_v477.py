@@ -69,6 +69,8 @@ def make_kraken_key_permission_provider(
     reviewed_provider_id: str,
     monitoring_category: Any,
     clock: Callable[[], float] = time.time,
+    identity_method: str = "response_echo",
+    approved_iban_sha256: str | None = None,
 ) -> Callable[[], Mapping[str, Any]]:
     """Produce v452 account_permissions only from an authenticated key read.
 
@@ -76,7 +78,14 @@ def make_kraken_key_permission_provider(
     registry; never copy them from response rows or self-reported runtime flags.
     This builder does not authenticate the legal account owner or register the
     resulting callable. The v452 validator still enforces all other providers.
+    Native signed-request selection additionally requires the independently
+    approved account pin and actual transport proof; missing expiry means only
+    valid-at-read. Query-window and permission requirements remain unchanged.
     """
+    if identity_method not in {"response_echo", "native_signed_request_v1"}:
+        raise KeyInfoEvidenceDenied("identity_method_invalid")
+    native = identity_method == "native_signed_request_v1"
+    account_pin = _sha256_fingerprint(approved_iban_sha256) if native else None
     fingerprint = _sha256_fingerprint(approved_api_key_sha256)
     if (not _identifier(account_scope)
             or not (account_scope == "platform:kraken" or
@@ -108,7 +117,7 @@ def make_kraken_key_permission_provider(
             # Never instantiate credentials or a second nonce writer. The
             # existing Kraken client signs this one private read.
             api = getattr(broker, "api", None)
-            with capture_identity_read(api, clock) as timing:
+            with capture_identity_read(api, clock, inspect_native_identity=native) as timing:
                 reply = caller("GetApiKeyInfo", {}, category=monitoring_category)
         except Exception:
             raise KeyInfoEvidenceDenied("authenticated_key_read_failed") from None
@@ -135,10 +144,23 @@ def make_kraken_key_permission_provider(
             raise KeyInfoEvidenceDenied("authenticated_key_read_unverified")
         result = reply["result"]
         actual_key = result.get("apiKey")
-        if not isinstance(actual_key, str) or not actual_key:
+        if native:
+            if (not timing.attempts or timing.native_key_digest is None
+                    or not hmac.compare_digest(timing.native_key_digest, fingerprint)):
+                raise KeyInfoEvidenceDenied("native_credential_binding_unverified")
+            # Local import avoids the existing identity -> permission import cycle.
+            from bot.kraken_authenticated_identity_v480 import _fingerprint_iban
+            try:
+                account_hash = _fingerprint_iban(result.get("iban"))
+            except ValueError:
+                raise KeyInfoEvidenceDenied("authenticated_account_identifier_invalid") from None
+            if not hmac.compare_digest(account_hash, account_pin):
+                raise KeyInfoEvidenceDenied("approved_broker_account_mismatch")
+        if "apiKey" not in result and native:
+            pass
+        elif not isinstance(actual_key, str) or not 0 < len(actual_key) <= 512:
             raise KeyInfoEvidenceDenied("broker_key_identity_missing")
-        actual_fingerprint = hashlib.sha256(actual_key.encode("utf-8")).hexdigest()
-        if not hmac.compare_digest(actual_fingerprint, fingerprint):
+        elif not hmac.compare_digest(hashlib.sha256(actual_key.encode("utf-8")).hexdigest(), fingerprint):
             raise KeyInfoEvidenceDenied("reviewed_key_fingerprint_mismatch")
         perms = result.get("permissions")
         if (not isinstance(perms, list) or not perms
@@ -148,11 +170,14 @@ def make_kraken_key_permission_provider(
         for field, kind in (("validUntil", "valid_until"),
                             ("queryFrom", "query_from"),
                             ("queryTo", "query_to")):
+            if field == "validUntil" and field not in result and native:
+                continue  # Valid at this authenticated read only; never unlimited.
             _unrestricted_time(result.get(field), now_epoch=finished, kind=kind)
         # An evidence ID is a correlation ID, not a signature or a fill marker.
         evidence_id = hashlib.sha256(
             ("kraken-key-info-v477:" + fingerprint + ":" +
-             account_scope + ":" + repr(started)).encode("utf-8")
+             account_scope + ":" + repr(started) +
+             (":native_signed_request_v1" if native else "")).encode("utf-8")
         ).hexdigest()
         # GetApiKeyInfo is one nonpaginated read. Do not use its success as a
         # certificate for any historical orders, fills, ledger or positions.

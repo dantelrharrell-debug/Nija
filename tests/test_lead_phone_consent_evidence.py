@@ -3,6 +3,35 @@ from __future__ import annotations
 from render_lead_intake import normalize_lead_payload
 
 
+def test_native_ionos_consent_channels_remain_separate():
+    lead = normalize_lead_payload({
+        "email": "offline@example.com", "consent_marketing_email": True,
+        "consent_sms": False, "consent_ai_voice": False, "program_consent": True,
+    })
+    assert lead["consent_marketing_email"] == "true"
+    assert lead["consent_sms"] == "false"
+    assert lead["consent_ai_voice"] == "false"
+    assert lead["program_consent"] == "true"
+
+
+def test_generic_checkbox_does_not_grant_channel_or_program_permission():
+    lead = normalize_lead_payload({"email": "offline@example.com", "consent": "on"})
+    for key in ("consent_marketing_email", "consent_sms", "consent_ai_voice", "program_consent"):
+        assert lead[key] == "false"
+
+
+def test_conflicting_native_channel_restrictions_fail_closed():
+    lead = normalize_lead_payload({
+        "email": "offline@example.com", "consent_marketing_email": False,
+        "data": {"marketingConsent": True, "smsConsent": True, "aiVoiceConsent": True},
+        "consent_sms": False, "consent_ai_voice": False,
+    })
+    assert lead["communications_consent"] == "false"
+    assert lead["consent_marketing_email"] == "false"
+    assert lead["consent_sms"] == "false"
+    assert lead["consent_ai_voice"] == "false"
+
+
 def test_apply_phone_and_checked_consent_are_preserved_as_evidence():
     lead = normalize_lead_payload({
         "form_name": "Founding 100 Application",

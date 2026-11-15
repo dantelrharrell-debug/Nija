@@ -131,6 +131,17 @@ def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
     return {"error_code": "history_incomplete_unknown"}
 
 
+def _history_read_options(endpoint: str, include_ledger_links: bool = False) -> dict[str, bool]:
+    """Keep closed-order fill links consistent with unconsolidated history."""
+    if type(include_ledger_links) is not bool:
+        raise ValueError("Explicit boolean ledger-link selection required")
+    if endpoint == "ClosedOrders":
+        return {"trades": True, "consolidate_taker": False}
+    if endpoint == "TradesHistory":
+        return {"consolidate_taker": False, **({"ledgers": True} if include_ledger_links else {})}
+    return {}
+
+
 def collect_history(
     private_read: Callable[[str, dict[str, Any]], Mapping[str, Any]],
     *,
@@ -139,6 +150,7 @@ def collect_history(
     include_balance: bool = False,
     include_open_orders: bool = False,
     use_cursor: bool = False,
+    include_ledger_links: bool = False,
 ) -> dict[str, Any]:
     """Collect repeat-checked history, optionally bracketed by private balances."""
     if not (account_scope == "platform:kraken" or (
@@ -152,6 +164,7 @@ def collect_history(
         raise ValueError("Trusted read callable and bounded max_pages required")
     if type(use_cursor) is not bool:
         raise ValueError("Explicit boolean cursor selection required")
+    _history_read_options("TradesHistory", include_ledger_links)
 
     def read_cursor_endpoint(endpoint: str, field: str) -> dict[str, Any]:
         """Require an explicit cursor envelope; never fall back to offset reads.
@@ -162,7 +175,11 @@ def collect_history(
         """
         records: dict[str, Any] = {}
         seen_cursors: set[str] = set()
-        params: dict[str, Any] = {"with_cursor": True}
+        # Reconciliation needs individual fill IDs, not Kraken's default
+        # consolidation of executions for a taker order. Keep this choice fixed
+        # across every page and both verification passes.
+        trade_options = _history_read_options(endpoint, include_ledger_links)
+        params: dict[str, Any] = {**trade_options, "with_cursor": True}
         for _ in range(max_pages):
             payload = private_read(endpoint, dict(params))
             if not isinstance(payload, Mapping) or payload.get("error") != []:
@@ -198,7 +215,7 @@ def collect_history(
                     raise IncompleteHistory(f"{endpoint}: non-JSON record") from exc
             if next_cursor is None or next_cursor == "":
                 return records
-            params = {"with_cursor": True, "cursor": next_cursor}
+            params = {**trade_options, "with_cursor": True, "cursor": next_cursor}
         raise IncompleteHistory(f"{endpoint}: page limit before all records")
 
     def read_open_orders() -> tuple[dict[str, Any], dict[str, float]]:
@@ -283,7 +300,8 @@ def collect_history(
             records: dict[str, Any] = {}
             expected: int | None = None
             for index in range(max_pages):
-                payload = private_read(endpoint, {"ofs": index * PAGE_SIZE})
+                params = {"ofs": index * PAGE_SIZE, **_history_read_options(endpoint, include_ledger_links)}
+                payload = private_read(endpoint, params)
                 if not isinstance(payload, Mapping) or payload.get("error") != []:
                     raise _api_failure(endpoint, payload)
                 result = payload.get("result")
@@ -393,7 +411,11 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  include_balance: bool = False,
                                  include_open_orders: bool = False,
                                  use_cursor: bool = False,
+                                 include_ledger_links: bool = False,
                                  on_private_read: Callable[[str, str], None] | None = None,
+                                 on_private_response: Callable[
+                                     [str, Mapping[str, Any], float, float], None,
+                                 ] | None = None,
                                  ) -> dict[str, Any]:
     """Reuse Kraken read controls without relabeling another software account."""
     def require_matching_scope() -> None:
@@ -402,18 +424,26 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
 
     if on_private_read is not None and not callable(on_private_read):
         raise ValueError("Read progress callback must be callable")
+    if on_private_response is not None and not callable(on_private_response):
+        raise ValueError("Response archive callback must be callable")
     require_matching_scope()
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call) or monitoring_category is None:
         raise ValueError("Authenticated private call and monitoring category required")
 
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
-        history_read = endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"} and set(params) == {"ofs"}
+        trade_options = _history_read_options(endpoint, include_ledger_links)
+        trade_keys = set(trade_options)
+        valid_trade_mode = all(params.get(key) is value for key, value in trade_options.items())
+        history_read = (
+            endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
+            and set(params) == ({"ofs"} | trade_keys) and valid_trade_mode
+        )
         if use_cursor:
             history_read = (
                 endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
-                and set(params) in ({"with_cursor"}, {"with_cursor", "cursor"})
-                and params.get("with_cursor") is True
+                and set(params) in ({"with_cursor"} | trade_keys, {"with_cursor", "cursor"} | trade_keys)
+                and valid_trade_mode and params.get("with_cursor") is True
                 and ("cursor" not in params or isinstance(params["cursor"], str) and bool(params["cursor"].strip()))
             )
         balance_read = include_balance and endpoint == "Balance" and not params
@@ -431,11 +461,13 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         # the next cursor page. Call the existing client exactly once per read.
         if on_private_read is not None:
             on_private_read(endpoint, "started")
+        started = time.time() if on_private_response is not None else None
         try:
             payload = private_call(
                 endpoint, cursor_read_params(broker, endpoint, params),
                 category=monitoring_category,
             )
+            finished = time.time() if on_private_response is not None else None
         except Exception:
             if on_private_read is not None:
                 on_private_read(endpoint, "raised")
@@ -444,10 +476,18 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
             # Returned describes transport completion, never broker acceptance.
             on_private_read(endpoint, "returned")
         require_matching_scope()
+        if (on_private_response is not None and isinstance(payload, Mapping)
+                and payload.get("error") == [] and isinstance(payload.get("result"), Mapping)):
+            # Archive before the next read, even if later pagination or final
+            # consistency checks fail. Never archive free-text API errors.
+            # Detach twice: a callback cannot change what the collector sees.
+            frozen = json.loads(json.dumps(dict(payload), allow_nan=False))
+            on_private_response(endpoint, json.loads(json.dumps(frozen["result"])), started, finished)
+            return frozen
         return payload
 
     return collect_history(
         read, account_scope=account_scope, max_pages=max_pages, include_balance=include_balance,
         include_open_orders=include_open_orders,
-        use_cursor=use_cursor,
+        use_cursor=use_cursor, include_ledger_links=include_ledger_links,
     )

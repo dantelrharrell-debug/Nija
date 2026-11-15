@@ -12,8 +12,9 @@ Existing schemas:
   retry decisions, NOT an authoritative durable submission inventory.
 
 Consequently existing production data alone can NEVER certify complete order
-history here. No runtime imports this module, no clients are constructed, and
-there is no activation/migration runner. The proposed inventory is opt-in and
+history here. Canonical startup may construct its explicitly reviewed read-only
+reader; it creates no clients and has no inventory activation/migration runner.
+The proposed inventory is opt-in and
 backward-compatible (existing key formats unchanged). Its offline write plan
 must not be deployed without an independent review covering EVERY submission
 and retry route, authoritative historical reconciliation, and an enforced

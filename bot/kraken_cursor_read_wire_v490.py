@@ -20,11 +20,18 @@ def cursor_read_params(broker: Any, endpoint: str, params: Mapping[str, Any]) ->
     """Return a new dict, lowering only supported direct-mode boolean flags."""
     output = dict(params)
     if (endpoint not in _CURSOR_READ_ENDPOINTS
-            or output.get("with_cursor") is not True
             or getattr(broker, "_gateway_url", None) != ""
             or getattr(broker, "_gateway_only_mode", False) is True):
         return output
 
+    if endpoint in {"TradesHistory", "ClosedOrders"} and type(output.get("consolidate_taker")) is bool:
+        output["consolidate_taker"] = "true" if output["consolidate_taker"] else "false"
+    if endpoint == "TradesHistory" and type(output.get("ledgers")) is bool:
+        output["ledgers"] = "true" if output["ledgers"] else "false"
+    if endpoint == "ClosedOrders" and type(output.get("trades")) is bool:
+        output["trades"] = "true" if output["trades"] else "false"
+    if output.get("with_cursor") is not True:
+        return output
     output["with_cursor"] = "true"
     if endpoint == "OpenOrders" and type(output.get("trades")) is bool:
         output["trades"] = "true" if output["trades"] else "false"
