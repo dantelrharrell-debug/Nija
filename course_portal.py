@@ -616,10 +616,31 @@ def register_course_portal(app, billing_store):
         placeholder="Private upload token"></p>
         <button type="button" id="import-button">Upload Protected Package</button>
         <button type="button" id="preview-button">Review Paid Test Orders (Read Only)</button>
+        <button type="button" id="simulated-email-button">Verify Sandbox Email Sender (Simulator Only)</button>
         <button type="button" id="reconcile-test-button" disabled>Reconcile Two Missing TEST Grants (No Emails)</button>
         <pre id="import-result" role="status"></pre></div>
         <script>
         let missingTestSessions=[];
+        document.getElementById("simulated-email-button").addEventListener("click",async()=>{
+          const input=document.getElementById("operator-token");
+          const output=document.getElementById("import-result");
+          const button=document.getElementById("simulated-email-button");
+          if(!input.value){output.textContent="Enter the private upload token.";return;}
+          button.disabled=true;output.textContent="Contacting the Resend simulator; no customer is contacted…";
+          try {
+            const res=await fetch("/course-portal/admin/test-simulator-email",{
+              method:"POST",headers:{"Authorization":"Bearer "+input.value,
+                "Content-Type":"application/json"},
+              credentials:"same-origin",cache:"no-store",
+              body:JSON.stringify({confirmation:"SIMULATOR_ONLY"})
+            });
+            const result=await res.json();
+            output.textContent=res.ok && result.simulated === true && result.provider_accepted === true
+              ? "Resend accepted a SIMULATED delivery to delivered@resend.dev. No purchase or course link was created."
+              : "Sandbox email test unavailable: "+(result.error||res.status);
+          } catch(e) {output.textContent="Sender test unavailable; no customer email sent.";}
+          finally {input.value="";button.disabled=false;}
+        });
         document.getElementById("preview-button").addEventListener("click",async()=>{
           const input=document.getElementById("operator-token");
           const output=document.getElementById("import-result");
@@ -687,6 +708,51 @@ def register_course_portal(app, billing_store):
         });
         </script>
         ''')
+
+    @portal.post("/admin/test-simulator-email")
+    def test_simulator_email():
+        """One strictly simulated sending diagnostic; no Stripe, access or customer data.
+
+        This cannot run in production or while any course email fulfillment is on.
+        Resend's delivered@resend.dev simulator never delivers to a real inbox.
+        """
+        if not _admin_allowed():
+            return jsonify({"error": "unauthorized"}), 403
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("confirmation") != "SIMULATOR_ONLY":
+            return jsonify({"error": "simulator_confirmation_required"}), 400
+        identity = expected_course_identity()
+        if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").lower() != "true"
+                or not identity or identity[3] is not False
+                or os.getenv("NIJA_COURSE_DELIVERY_ENABLED", "false").lower() != "false"
+                or not os.getenv("RESEND_API_KEY")
+                or not store.has_bundle()):
+            return jsonify({"error": "isolated_simulator_unavailable"}), 503
+        # Daily idempotency prevents an admin page double-click sending twice.
+        today = utcnow().strftime("%Y-%m-%d")
+        message = {
+            "from": os.getenv("NIJA_COURSE_SENDER",
+                              "NIJA AI Trading <support@nijaaitrading.com>"),
+            "to": ["delivered@resend.dev"],
+            "subject": "NIJA isolated course sender check (SIMULATED)",
+            "text": ("NIJA sandbox-only email transport check. No payment, customer, "
+                     "purchase entitlement or course access link was created.")
+        }
+        try:
+            response = requests.post("https://api.resend.com/emails",
+                json=message, headers={
+                    "Authorization": "Bearer " + os.environ["RESEND_API_KEY"],
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": "nija-course-simulator-v1-" + today
+                }, timeout=8)
+            if response.status_code not in (200, 201) or not response.json().get("id"):
+                return jsonify({"error": "simulated_provider_not_accepted"}), 503
+        except (requests.RequestException, ValueError):
+            log.warning("Simulated course sender check failed without customer data")
+            return jsonify({"error": "simulated_sender_unavailable"}), 503
+        return jsonify({"provider_accepted": True, "simulated": True,
+                        "email_sent_to_real_customer": False,
+                        "course_access_granted": False, "test_mode": True})
 
     @portal.post("/admin/import")
     def admin_import():
