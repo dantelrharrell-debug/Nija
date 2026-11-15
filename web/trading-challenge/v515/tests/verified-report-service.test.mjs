@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {verifyAndBuildPaidReport,PaidReportDenied,TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
+import {verifyAndBuildPaidReport,recoverFreshPaidReport,PaidReportDenied,TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
 const ownerId="test-owner",runId="test-run",reservationId="test-reservation",sessionId="cs_test_fixture";
 const canonicalRun={mode:"standard",level:"beginner",dayNum:0,challenges:Array.from({length:6},()=>Array.from({length:12},()=>({action:"hold",stop:false})))};
 function fixture(){
@@ -29,3 +29,25 @@ test("rejects wrong product",async()=>{const f=fixture();f.lines.data[0].price.i
 test("rejects unpaid intent",async()=>{const f=fixture();f.intent.status="processing";await deny(f,"payment_not_verified");assert.equal(f.writes,0);});
 for(const field of ["refunded","disputed"])test("rejects "+field,async()=>{const f=fixture();f.charge[field]=true;await deny(f,"charge_not_verified");assert.equal(f.writes,0);});
 test("rejects partial refund",async()=>{const f=fixture();f.charge.amount_refunded=1;await deny(f,"charge_not_verified");assert.equal(f.writes,0);});
+
+test("recovery first re-verifies provider then reads owner-only paid report",async()=>{
+ const f=fixture();let reads=0;
+ f.store.getOwnedPaidReport=async(owner,run)=>{reads++;assert.equal(owner,ownerId);
+   assert.equal(run,runId);assert.equal(f.writes,1);return {iq:93};};
+ const report=await recoverFreshPaidReport({ownerId,runId,store:f.store,stripe:f.stripe});
+ assert.equal(report.iq,93);assert.equal(reads,1);
+});
+test("recovery never reads stored report after provider refund",async()=>{
+ const f=fixture();f.charge.refunded=true;let reads=0;
+ f.store.getOwnedPaidReport=async()=>{reads++;return {iq:93};};
+ await assert.rejects(recoverFreshPaidReport({ownerId,runId,store:f.store,stripe:f.stripe}),/charge_not_verified/);
+ assert.equal(reads,0);assert.equal(f.writes,0);
+});
+test("recovery rejects missing entitlement after fresh verification",async()=>{
+ const f=fixture();f.store.getOwnedPaidReport=async()=>null;
+ await assert.rejects(recoverFreshPaidReport({ownerId,runId,store:f.store,stripe:f.stripe}),/paid_report_not_available/);
+});
+test("recovery rejects unprotected store interface",async()=>{
+ const f=fixture();
+ await assert.rejects(recoverFreshPaidReport({ownerId,runId,store:f.store,stripe:f.stripe}),/protected_report_store_required/);
+});
