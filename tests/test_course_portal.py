@@ -502,3 +502,36 @@ def test_simulated_sender_failure_is_generic_and_does_not_issue_access(tmp_path,
     assert response.status_code == 503
     assert response.get_json() == {"error": "simulated_provider_not_accepted"}
     assert b"internal secret" not in response.data
+
+
+def test_sandbox_course_email_never_leaves_resend_simulated_recipient(monkeypatch):
+    """No existing paid test row or recovery request can email a real recipient."""
+    import course_portal as course
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    monkeypatch.setenv("RESEND_API_KEY", "test-only-unusable-resend-key")
+    monkeypatch.setenv("NIJA_COURSE_PUBLIC_URL",
+                       "https://nija-course-sandbox.onrender.com")
+    calls = []
+
+    def fake_send(url, **kwargs):
+        calls.append((url, kwargs))
+        return SimpleNamespace(status_code=201, json=lambda: {"id": "simulated_accepted"})
+    monkeypatch.setattr(course.requests, "post", fake_send)
+
+    for address in ["previous.test.buyer@example.org", "admin@nijaaitrading.com",
+                    "delivered@resend.dev.evil.example", "bounced@resend.dev"]:
+        with pytest.raises(RuntimeError, match="sandbox_simulator_recipient_required"):
+            course._email_access(address, "cs_test_paid", "fake-token", delivery=True)
+    assert calls == [], "Blocked customer mail must not reach provider"
+
+    provider_id = course._email_access("DELIVERED@RESEND.DEV", "cs_test_paid",
+                                        "fake-token", delivery=True)
+    assert provider_id == "simulated_accepted"
+    assert len(calls) == 1
+    assert calls[0][0] == "https://api.resend.com/emails"
+    assert calls[0][1]["json"]["to"] == ["DELIVERED@RESEND.DEV"]
+    assert calls[0][1]["headers"]["Idempotency-Key"] == (
+        "nija-foundations-delivery-v1-cs_test_paid"
+    )
