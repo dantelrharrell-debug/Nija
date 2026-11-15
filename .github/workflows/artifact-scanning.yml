@@ -45,15 +45,13 @@ jobs:
 
     - name: Build Docker image
       id: build-image
-      env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
+        # Dockerfiles do not accept GH_TOKEN; never pass GitHub secrets as build args.
         # Use Docker Hub to avoid ECR Public rate limits. 
         # A failed pull still fails this job; scanners remain mandatory. 
         docker build --no-cache \
           --build-arg PYTHON_BASE=python:3.11-slim-bookworm \
-          --build-arg GH_TOKEN="${GH_TOKEN}" \
-          -f ${{ matrix.dockerfile }} \
+                    -f ${{ matrix.dockerfile }} \
           -t ${{ steps.image-name.outputs.image }} \
           .
 
