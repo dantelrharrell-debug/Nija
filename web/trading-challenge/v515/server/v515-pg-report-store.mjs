@@ -1,3 +1,4 @@
+import {randomUUID} from "node:crypto";
 // Sandbox-only v515 owner-scoped durable PostgreSQL adapter.
 // The caller supplies an isolated pg.Pool; no connection strings or secrets here.
 // All live APIs remain disabled. Run reviewed SQL migration before use.
@@ -69,6 +70,78 @@ export class V515PgReportStore {
       await client.query("ROLLBACK");
       throw e;
     } finally { client.release(); }
+  }
+
+
+  // One persistent run per authenticated owner + idempotency attempt.
+  // Rejects a reused attempt key with changed decisions, rather than
+  // overwriting the original canonical score or creating a second checkout.
+  async reserveAuthenticatedRun({ownerId,attemptKey,canonicalRun,canonicalDigest}) {
+    if(!okId(ownerId)||!okId(attemptKey)||
+       !/^[a-f0-9]{64}$/.test(canonicalDigest)||
+       !canonicalRun||typeof canonicalRun!=="object"||Array.isArray(canonicalRun))
+      throw new PaidReportDenied("invalid_run_reservation");
+    const client=await this.pool.connect();
+    const runId=randomUUID(),reservationId=randomUUID();
+    try{
+      await client.query("BEGIN");
+      const inserted=await client.query(`
+        INSERT INTO tiq72_v515_runs
+         (run_id,owner_id,canonical_run,canonical_digest,attempt_key,version)
+        VALUES ($1,$2,$3::jsonb,$4,$5,'v515-72-decisions')
+        ON CONFLICT (owner_id,attempt_key) DO NOTHING
+        RETURNING run_id`,
+        [runId,ownerId,JSON.stringify(canonicalRun),canonicalDigest,attemptKey]);
+      if(inserted.rowCount===1){
+        await client.query(`
+          INSERT INTO tiq72_v515_reservations
+          (reservation_id,run_id,owner_id,state)
+          VALUES ($1,$2,$3,'reserved')`,
+          [reservationId,runId,ownerId]);
+        await client.query("COMMIT");
+        return {runId,reservationId,sessionId:null,state:"reserved"};
+      }
+      const original=await client.query(`
+        SELECT r.run_id,r.canonical_digest,p.reservation_id,
+               p.stripe_session,p.state
+        FROM tiq72_v515_runs r JOIN tiq72_v515_reservations p
+          ON p.run_id=r.run_id AND p.owner_id=r.owner_id
+        WHERE r.owner_id=$1 AND r.attempt_key=$2
+        FOR UPDATE OF r,p`,[ownerId,attemptKey]);
+      const row=original.rows?.[0];
+      if(!row||row.canonical_digest!==canonicalDigest)
+        throw new PaidReportDenied("attempt_payload_conflict");
+      await client.query("COMMIT");
+      return {runId:row.run_id,reservationId:row.reservation_id,
+        sessionId:row.stripe_session,state:row.state};
+    }catch(e){await client.query("ROLLBACK");throw e;}
+    finally{client.release();}
+  }
+  async attachVerifiedTestCheckout({reservationId,ownerId,sessionId}) {
+    if(!okId(reservationId)||!okId(ownerId)||
+       !okId(sessionId)||!sessionId.startsWith("cs_test_"))
+      throw new PaidReportDenied("invalid_test_checkout");
+    const client=await this.pool.connect();
+    try{
+      await client.query("BEGIN");
+      const result=await client.query(`
+        SELECT reservation_id,owner_id,stripe_session,state
+        FROM tiq72_v515_reservations
+        WHERE reservation_id=$1 AND owner_id=$2 FOR UPDATE`,
+        [reservationId,ownerId]);
+      const row=result.rows?.[0];
+      if(!row||!["reserved","checkout_created"].includes(row.state)||
+         (row.stripe_session&&row.stripe_session!==sessionId))
+        throw new PaidReportDenied("checkout_reservation_changed");
+      await client.query(`
+        UPDATE tiq72_v515_reservations
+        SET stripe_session=$3,state='checkout_created',updated_at=now()
+        WHERE reservation_id=$1 AND owner_id=$2`,
+        [reservationId,ownerId,sessionId]);
+      await client.query("COMMIT");
+      return {attached:true};
+    }catch(e){await client.query("ROLLBACK");throw e;}
+    finally{client.release();}
   }
 
   // Signed events are verified with fresh Stripe retrieval BEFORE reaching here.
