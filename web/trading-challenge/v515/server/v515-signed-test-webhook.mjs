@@ -42,51 +42,51 @@ export async function processSignedTestWebhook({rawBody,signature,webhookSecret,
   if(payTypes.has(event.type)) {
     if (!named(event.data.object.id,"cs_test_"))
       throw new PaidReportDenied("checkout_event_identity_required");
-    session=await stripe.checkout.Session.retrieve(event.data.object.id);
+    session=await stripe.checkout.sessions.retrieve(event.data.object.id);
     if (session?.id!==event.data.object.id)
       throw new PaidReportDenied("session_identity_mismatch");
     assertSession(session);
     const [lines,intent]=await Promise.all([
-      stripe.checkout.Session.listLineItems(session.id),
-      stripe.PaymentIntent.retrieve(id(session.payment_intent))]);
+      stripe.checkout.sessions.listLineItems(session.id),
+      stripe.paymentIntents.retrieve(id(session.payment_intent))]);
     if(!named(id(intent?.latest_charge),"ch_"))
       throw new PaidReportDenied("charge_identity_missing");
-    const charge=await stripe.Charge.retrieve(id(intent.latest_charge));
+    const charge=await stripe.charges.retrieve(id(intent.latest_charge));
     requireProof({session,lines,intent,charge,reservationId:session.client_reference_id});
   } else {
     const disputeEvent=event.type==="charge.dispute.created";
     const chargeId=disputeEvent?id(event.data.object.charge):event.data.object.id;
     if (!named(chargeId,"ch_"))
       throw new PaidReportDenied("reversal_charge_required");
-    const charge=await stripe.Charge.retrieve(chargeId);
+    const charge=await stripe.charges.retrieve(chargeId);
     if (charge?.id!==chargeId||charge.livemode!==false||
         charge.status!=="succeeded"||charge.paid!==true||
         charge.amount!==100||charge.currency!=="usd"||
         !named(id(charge.payment_intent),"pi_"))
       throw new PaidReportDenied("reversal_not_verified");
     if(disputeEvent){
-      const dispute=await stripe.Dispute.retrieve(event.data.object.id);
+      const dispute=await stripe.disputes.retrieve(event.data.object.id);
       if(dispute?.id!==event.data.object.id||dispute.livemode!==false||
          id(dispute.charge)!==chargeId)
         throw new PaidReportDenied("dispute_not_verified");
     } else if (charge.refunded!==true||!Number.isInteger(charge.amount_refunded)||charge.amount_refunded<=0) {
       throw new PaidReportDenied("refund_not_verified");
     }
-    const intent=await stripe.PaymentIntent.retrieve(id(charge.payment_intent));
+    const intent=await stripe.paymentIntents.retrieve(id(charge.payment_intent));
     if(intent?.id!==id(charge.payment_intent)||intent.livemode!==false||
        intent.amount_received!==100||intent.currency!=="usd"||
        id(intent.latest_charge)!==charge.id)
       throw new PaidReportDenied("reversal_intent_mismatch");
-    const list=await stripe.checkout.Session.list({payment_intent:intent.id,limit:2});
+    const list=await stripe.checkout.sessions.list({payment_intent:intent.id,limit:2});
     if(!Array.isArray(list?.data)||list.data.length!==1||list.has_more)
       throw new PaidReportDenied("unique_checkout_required");
-    session=await stripe.checkout.Session.retrieve(list.data[0].id);
+    session=await stripe.checkout.sessions.retrieve(list.data[0].id);
     if(session?.id!==list.data[0].id)
       throw new PaidReportDenied("reversal_session_mismatch");
     assertSession(session);
     if(id(session.payment_intent)!==intent.id)
       throw new PaidReportDenied("reversal_session_intent_mismatch");
-    assertLineItems(await stripe.checkout.Session.listLineItems(session.id));
+    assertLineItems(await stripe.checkout.sessions.listLineItems(session.id));
   }
   reservationId=session.client_reference_id;
   const result=await store.recordVerifiedProviderEvent({
