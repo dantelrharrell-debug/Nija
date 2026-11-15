@@ -123,7 +123,7 @@ jobs:
           if report.get('sqlite_integrity_ok') is not True:
               raise SystemExit('BLOCKED: ledger integrity required before history request')
           collector_source = Path('/app/bot/kraken_live_history_recovery.py')
-          collector_hash = 'e4afeb2e5b61f9ce0613ceda15027ea7a2438268f9adaa37771d74a11a680d7c'
+          collector_hash = '9d20c5ca55911c8cde661dd33c501be170673004f825e156053cd7f2201b374f'
           if (collector_source.is_symlink()
                   or hashlib.sha256(collector_source.read_bytes()).hexdigest() != collector_hash):
               raise SystemExit('BLOCKED: reviewed history request implementation changed')
