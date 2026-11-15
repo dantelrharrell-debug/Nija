@@ -25,6 +25,17 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         self.sources = {path: (root / path).read_bytes() for path in SOURCE_PATHS}
         self.recipe = {path: (root / path).read_bytes() for path in RECIPE_PATHS}
+        # Positive transformation tests require an independently allowlisted
+        # Dockerfile. HEAD contains the newer Render secrets permission change,
+        # which is intentionally NOT approved by the runtime recipe guard.
+        # Use the exact earlier public, immutable build recipe as a test
+        # fixture; do not authorize HEAD or alter production trust pins.
+        self.recipe["Dockerfile"] = subprocess.run(
+            ["git", "show", "6e34c616:Dockerfile"], cwd=root,
+            check=True, capture_output=True, timeout=15,
+        ).stdout
+        from scripts.render_runtime_build_sources import DOCKER_SHA256
+        self.assertIn(hashlib.sha256(self.recipe["Dockerfile"]).hexdigest(), DOCKER_SHA256)
 
     def test_reproduce_build_outputs_without_touching_files_or_approval_inputs(self) -> None:
         original = copy.deepcopy(self.sources)
