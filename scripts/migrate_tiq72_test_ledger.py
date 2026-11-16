@@ -54,9 +54,9 @@ def migrate(url, apply=False, connect=None):
                 # Source schema is BEGIN/COMMIT wrapped for standalone psql.
                 # Strip only those boundary statements so verification and all
                 # table creation remain within the SAME psycopg transaction.
-                commands = sql.replace("\\r\\n", "\\n")
-                begin_marker = "\\nBEGIN;\\n"
-                end_marker = "\\nCOMMIT;"
+                commands = sql.replace("\r\n", "\n")
+                begin_marker = "\nBEGIN;\n"
+                end_marker = "\nCOMMIT;"
                 if commands.count(begin_marker) != 1 or commands.count(end_marker) != 1:
                     raise MigrationDenied("schema_transaction_boundary_invalid")
                 start = commands.index(begin_marker) + len(begin_marker)

@@ -1,6 +1,7 @@
 """Offline gates for the disposable TIQ72 PostgreSQL migration."""
 from __future__ import annotations
 import importlib.util
+import secrets
 from pathlib import Path
 from unittest.mock import patch
 import pytest
@@ -10,8 +11,10 @@ spec = importlib.util.spec_from_file_location("tiq72_safe_migration", PATH)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-def url(host=module.HOST, db=module.DB, user=module.USER):
-    return f"postgresql://{user}:synthetic@{host}:5432/{db}"
+def url(host=module.HOST, db=module.DB, user=module.USER, port="5432"):
+    # Disposable values only; these tests inject fake connections and never connect.
+    credential = secrets.token_urlsafe(24)
+    return f"postgresql://{user}:{credential}@{host}:{port}/{db}"
 
 class Cursor:
     def __init__(self, identity=None, tables=None):
@@ -36,8 +39,8 @@ class Connection:
 @pytest.mark.parametrize("uri",[
     url(host="external.example"), url(db="nija_billing_db"),
     url(user="nija_course_sandbox_user"),
-    "postgresql://user:password@127.0.0.1:5432/nija_tiq72_test_ledger_20261115",
-    "https://example.com", "", "postgresql://test:password@broken:bad/db",
+    url(host="127.0.0.1", user="user"),
+    "https://example.com", "", url(host="broken", user="test", db="db", port="bad"),
     url()+"?sslmode=disable",
 ])
 def test_only_explicit_private_test_database(uri):
@@ -86,3 +89,31 @@ def test_provider_exception_is_redacted():
     with pytest.raises(module.MigrationDenied,match="private_database_operation_failed") as e:
         module.migrate(url(),connect=connect)
     assert "secret-in-provider-exception" not in str(e.value)
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_schema_line_endings_preserve_one_transaction(tmp_path, monkeypatch, line_ending):
+    schema = tmp_path / "schema.sql"
+    original = module.SCHEMA.read_text()
+    schema.write_bytes(original.replace("\n", line_ending).encode())
+    monkeypatch.setattr(module, "SCHEMA", schema)
+    monkeypatch.setenv("NIJA_TIQ72_TEST_SCHEMA_APPLY", "APPROVED_TEST_ONLY")
+    db = Connection()
+    assert module.migrate(url(), apply=True, connect=lambda *a, **k: db) == "isolated_test_schema_installed"
+    assert db.commits == 1 and db.rollbacks == 0
+    assert "BEGIN;" not in db.c.queries[1][0] and "COMMIT;" not in db.c.queries[1][0]
+
+@pytest.mark.parametrize("change,reason", [
+    (lambda sql: sql.replace("\nBEGIN;\n", "\nBEGIN;\n\nBEGIN;\n"), "schema_transaction_boundary_invalid"),
+    (lambda sql: sql + "\nSELECT 1;", "schema_trailing_statement_forbidden"),
+    (lambda sql: sql.replace("\nCOMMIT;", "\nBEGIN; SELECT 1;\nCOMMIT;"), "nested_transaction_disallowed"),
+])
+def test_unsafe_transaction_boundaries_never_execute_schema(tmp_path, monkeypatch, change, reason):
+    schema = tmp_path / "schema.sql"
+    schema.write_text(change(module.SCHEMA.read_text()))
+    monkeypatch.setattr(module, "SCHEMA", schema)
+    monkeypatch.setenv("NIJA_TIQ72_TEST_SCHEMA_APPLY", "APPROVED_TEST_ONLY")
+    db = Connection()
+    with pytest.raises(module.MigrationDenied, match=reason):
+        module.migrate(url(), apply=True, connect=lambda *a, **k: db)
+    assert db.commits == 0 and db.rollbacks == 1 and db.closed == 1
+    assert len(db.c.queries) == 1
