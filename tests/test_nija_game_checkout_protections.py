@@ -92,7 +92,8 @@ def test_simultaneous_requests_single_provider_call(setup):
         assert entered.wait(5)
         second = submit(buyer(app))
         assert second.status_code == 409
-        assert second.json["error"] == "checkout_in_progress"
+        assert second.json["error"] == "checkout_denied"
+        assert second.headers["Retry-After"] == "120"
         release.set()
         assert first.result(5).status_code == 303
     assert provider.call_count == 1
