@@ -71,3 +71,14 @@ independent review and separate deployment authorization remain required.
 No Render setting, startup file, active collection, ledger or trading authority
 is modified. The production collector and 13 genuine pretrade observations
 are not certified by these offline changes.
+
+## November 16 docstring-only source review
+
+PR #3976 moves the existing first startup print below the module docstring.
+The previous bot.py bytes match this manifest's former fingerprint. Removing
+that one identical print line from each version produces byte-identical files;
+all lines after line 8 are unchanged, including the four reviewed candidate
+contexts. Executable AST comparison also passes. Only the bot.py fingerprint
+is refreshed; candidate identities, baseline entries, detectors and enforcement
+remain unchanged. This is an engineering delta review, not independent approval.
+Independent human review is still required before merge or deployment.
