@@ -122,7 +122,7 @@ class ReceiptOutbox:
             Column("currency", String(3), nullable=False),
             Column("purchase_name", String(100), nullable=False),
             Column("state", String(20), nullable=False),
-            Column("resend_event_id", String(128)),
+            Column("provider_event_acknowledgment", String(128)),
             Column("error_code", Text),
             Column("created_at", DateTime(timezone=True), nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -164,12 +164,12 @@ class ReceiptOutbox:
                 .values(state="sending", updated_at=_now()))
             return result.rowcount == 1
 
-    def finish(self, key: str, *, provider_event_id: str | None = None, error_code: str | None = None) -> None:
-        state = "accepted" if provider_event_id else "uncertain"
+    def finish(self, key: str, *, provider_acknowledgment: str | None = None, error_code: str | None = None) -> None:
+        state = "accepted" if provider_acknowledgment else "uncertain"
         with self.engine.begin() as conn:
             conn.execute(update(self.table).where(
                 (self.table.c.key == key) & (self.table.c.state == "sending"))
-                .values(state=state, resend_event_id=provider_event_id,
+                .values(state=state, provider_event_acknowledgment=provider_acknowledgment,
                         error_code=(error_code or "")[:100], updated_at=_now()))
 
     def status_counts(self) -> dict[str, int]:
@@ -195,10 +195,11 @@ def emit_resend_event(email: str, receipt: VerifiedInvoiceReceipt, *, api_key: s
         if response.status != 202:
             raise RuntimeError("provider_not_accepted")
         returned = json.loads(response.read())
-        event_id = returned.get("id")
-        if not isinstance(event_id, str) or not event_id or len(event_id) > 128:
-            raise RuntimeError("provider_event_id_missing")
-        return event_id
+        # Resend Events /events/send returns {object:"event",event:"<name>"},
+        # not a message ID or proof that email was delivered.
+        if returned.get("object") != "event" or returned.get("event") != EVENT_NAME:
+            raise RuntimeError("provider_event_ack_invalid")
+        return "accepted:" + EVENT_NAME
 
 
 def process_one(outbox: ReceiptOutbox, record: dict, *, sender=None) -> bool:
@@ -209,11 +210,11 @@ def process_one(outbox: ReceiptOutbox, record: dict, *, sender=None) -> bool:
         record["invoice_id"], record["email"], record["amount_cents"],
         record["currency"], record["purchase_name"])
     try:
-        event_id = (sender or (lambda email, rec: emit_resend_event(
+        provider_acknowledgment = (sender or (lambda email, rec: emit_resend_event(
             email, rec, api_key=os.environ.get("RESEND_API_KEY", ""))))(record["email"], receipt)
-        if not isinstance(event_id, str) or not event_id:
-            raise RuntimeError("provider_event_id_missing")
-        outbox.finish(record["key"], provider_event_id=event_id)
+        if not isinstance(provider_acknowledgment, str) or not provider_acknowledgment:
+            raise RuntimeError("provider_event_ack_missing")
+        outbox.finish(record["key"], provider_acknowledgment=provider_acknowledgment)
         return True
     except Exception as exc:
         outbox.finish(record["key"], error_code=type(exc).__name__)
