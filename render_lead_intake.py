@@ -873,13 +873,45 @@ def _send_json(handler: Any, status_code: int, payload_obj: dict[str, Any]) -> N
         return
 
 
+def _validated_forward_url(url: str) -> str:
+    """Allow only NIJA's existing Zapier Catch Hook; never send customer PII elsewhere.
+
+    This destination is an operator-configured server secret, not a browser URL.
+    A malformed value fails closed before any provider request or lead replay.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        valid = (
+            url == url.strip()
+            and not any(ord(char) < 33 or ord(char) == 127 for char in url)
+            and parsed.scheme == "https"
+            and parsed.hostname == "hooks.zapier.com"
+            and parsed.port is None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+            and re.fullmatch(r"/hooks/catch/[0-9]+/[A-Za-z0-9_-]+/?", parsed.path) is not None
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise OSError("Lead forward destination is not an approved Zapier Catch Hook")
+    return url
+
+
+class _NoLeadForwardRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirected POST can leak applicant data to an unapproved origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _forward(canonical: dict[str, str]) -> bool:
-    url = str(os.getenv("NIJA_LEAD_FORWARD_URL", "") or "").strip()
-    if not url:
+    raw_url = str(os.getenv("NIJA_LEAD_FORWARD_URL", "") or "")
+    if not raw_url.strip():
         return False
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        raise OSError("NIJA_LEAD_FORWARD_URL must be an HTTPS URL")
+    url = _validated_forward_url(raw_url)
 
     headers = {
         "Content-Type": "application/json",
@@ -896,7 +928,10 @@ def _forward(canonical: dict[str, str]) -> bool:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10.0) as response:
+        # urllib's default POST redirect handling can change methods and hosts.
+        # Refuse every redirect: a provider must acknowledge the exact hook URL.
+        opener = urllib.request.build_opener(_NoLeadForwardRedirect())
+        with opener.open(request, timeout=10.0) as response:
             status = int(response.status)
             response.read(4096)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
