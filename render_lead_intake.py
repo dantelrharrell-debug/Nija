@@ -908,10 +908,10 @@ class _NoLeadForwardRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _forward(canonical: dict[str, str]) -> bool:
-    url = str(os.getenv("NIJA_LEAD_FORWARD_URL", "") or "").strip()
-    if not url:
+    raw_url = str(os.getenv("NIJA_LEAD_FORWARD_URL", "") or "")
+    if not raw_url.strip():
         return False
-    url = _validated_forward_url(url)
+    url = _validated_forward_url(raw_url)
 
     headers = {
         "Content-Type": "application/json",
