@@ -581,6 +581,9 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     if os.getenv("NIJA_VERIFIED_PAYMENT_OUTBOX_ENABLED", "false") == "true":
         app.config["VERIFIED_PAYMENT_OUTBOX"] = ReceiptOutbox(app.config["BILLING_STORE"].engine)
 
+    from resend_delivery import register_delivery_routes
+    register_delivery_routes(app, app.config["BILLING_STORE"].engine)
+
     allowed_origins = [
         origin.strip()
         for origin in os.getenv(
