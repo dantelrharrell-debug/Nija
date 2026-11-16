@@ -7,6 +7,7 @@ record.
 """
 from __future__ import annotations
 
+import click
 import logging
 import os
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from course_fulfillment import expected_course_identity, handle_course_event, re
 from course_portal import on_course_payment, register_course_portal
 from founding_onboarding_api import register_onboarding_routes
 from member_broker_availability import member_broker_setup_available
+from verified_payment_receipts import ReceiptOutbox, process_batch_from_env, verified_invoice_from_stripe
 from pricing_policy import (
     BETA_TRIAL_DAYS,
     FOUNDING_BETA_OFFER,
@@ -556,6 +558,9 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     app.config["BILLING_STORE"] = store or BillingServiceStore(
         os.getenv("BILLING_DATABASE_URL", "").strip()
     )
+    # Opt-in only: installer creates no new production tables by default.
+    if os.getenv("NIJA_VERIFIED_PAYMENT_OUTBOX_ENABLED", "false") == "true":
+        app.config["VERIFIED_PAYMENT_OUTBOX"] = ReceiptOutbox(app.config["BILLING_STORE"].engine)
 
     allowed_origins = [
         origin.strip()
@@ -962,6 +967,13 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
 
         try:
             _process_event(stripe, event_type, event_obj, event_created)
+            # This is invoked ONLY after Stripe-Signature verification and
+            # membership reconciliation; never trigger from browser input.
+            receipt_outbox = current_app.config.get("VERIFIED_PAYMENT_OUTBOX")
+            if receipt_outbox is not None and event_type in {"invoice.paid", "invoice.payment_succeeded"}:
+                verified_receipt = verified_invoice_from_stripe(stripe, _store(), event_obj)
+                if verified_receipt is not None:
+                    receipt_outbox.enqueue(verified_receipt)
             handle_course_event(stripe, current_app.config["COURSE_LEDGER"], event_type, event_obj)
             if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
                 # Only the verified course ledger can queue this customer-facing delivery.
@@ -983,6 +995,18 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     from nija_game_billing import register_game_routes
     register_game_routes(app)
     register_onboarding_routes(app, app.config["BILLING_STORE"])
+
+    @app.cli.command("verified-payment-receipt-worker")
+    def verified_payment_receipt_worker():
+        """Send an approved bounded batch; never re-drive uncertain sends."""
+        receipt_outbox = app.config.get("VERIFIED_PAYMENT_OUTBOX")
+        if receipt_outbox is None:
+            raise click.ClickException("verified_payment_outbox_disabled")
+        try:
+            outcome = process_batch_from_env(receipt_outbox)
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"accepted={outcome['accepted']} uncertain={outcome['uncertain']}")
 
     # Restricted, GET-only revenue reporting; no changes to Checkout or Stripe webhooks.
     # Unprovisioned report keys/evidence fail closed with HTTP 503.
