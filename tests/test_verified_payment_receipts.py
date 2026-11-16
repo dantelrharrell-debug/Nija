@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from verified_payment_receipts import (
     ReceiptOutbox, VerifiedInvoiceReceipt, process_batch_from_env,
     process_one, verified_invoice_from_stripe, emit_resend_event,
+    require_resend_automation_enabled,
 )
 
 
@@ -152,3 +153,36 @@ def test_legacy_subscription_mapping_still_verifies_paid_invoice(identities):
     legacy.pop("parent", None)
     stripe.Invoice.retrieve = lambda _id: legacy
     assert verified_invoice_from_stripe(stripe, store, legacy) is not None
+
+
+def test_resend_automation_status_is_a_required_sender_gate():
+    import json
+    class Reply:
+        status = 200
+        def __init__(self, enabled): self.enabled = enabled
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self):
+            return json.dumps({
+                "id": "01a1e296-2b78-7251-ad08-62a94b97a892",
+                "status": "enabled" if self.enabled else "disabled",
+            }).encode()
+    require_resend_automation_enabled(api_key="test", opener=lambda _req, timeout: Reply(True))
+    with pytest.raises(RuntimeError, match="not_enabled"):
+        require_resend_automation_enabled(api_key="test", opener=lambda _req, timeout: Reply(False))
+
+
+def test_disabled_automation_does_not_claim_or_consume_invoice(monkeypatch, outbox):
+    monkeypatch.setenv("NIJA_VERIFIED_PAYMENT_SEND_MODE", "controlled")
+    monkeypatch.setenv("NIJA_VERIFIED_PAYMENT_RECEIPT_CERTIFIED", "true")
+    monkeypatch.setenv("NIJA_PAYMENT_TEST_RECIPIENTS", "customer@example.com")
+    monkeypatch.setenv("RESEND_API_KEY", "mock")
+    outbox.enqueue(VerifiedInvoiceReceipt(
+        "in_qa_1", "customer@example.com", 5000, "usd", "NIJA membership"))
+    def disabled(**_kwargs):
+        raise RuntimeError("resend_automation_not_enabled")
+    monkeypatch.setattr("verified_payment_receipts.require_resend_automation_enabled", disabled)
+    with pytest.raises(RuntimeError, match="not_enabled"):
+        process_batch_from_env(outbox)
+    assert len(outbox.pending()) == 1
+    assert outbox.status_counts() == {"queued": 1}
