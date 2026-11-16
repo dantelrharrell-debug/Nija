@@ -1,0 +1,38 @@
+name: Billing invoice compatibility tests
+on:
+  pull_request:
+    paths:
+      - 'billing_service.py'
+      - 'tests/test_billing_service_contract.py'
+      - '.github/workflows/billing-invoice-compatibility-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  invoice-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-billing.txt
+      - name: Install existing billing dependencies for isolated tests
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-billing.txt pytest
+      - name: Compile Stripe billing handler
+        run: |
+          python -m compileall -q billing_service.py
+      - name: Run billing contract and invoice-parent regression tests
+        env:
+          NIJA_VERIFIED_PAYMENT_OUTBOX_ENABLED: 'false'
+          NIJA_VERIFIED_PAYMENT_SEND_MODE: disabled
+          NIJA_VERIFIED_PAYMENT_RECEIPT_CERTIFIED: 'false'
+        run: |
+          python -m pytest -q tests/test_billing_service_contract.py

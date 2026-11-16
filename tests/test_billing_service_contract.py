@@ -687,3 +687,118 @@ def test_staging_guard_does_not_change_production_key_configuration(monkeypatch)
     monkeypatch.setenv("STRIPE_SECRET_KEY", key)
     assert billing._stripe_module() is fake_stripe
     assert fake_stripe.api_key == key
+
+
+def test_current_stripe_invoice_parent_parser_accepts_subscription_only():
+    """Stripe 2026 invoices carry subscriptions under parent.subscription_details."""
+    current = {
+        "id": "in_test_one",
+        "parent": {"type": "subscription_details",
+                   "subscription_details": {"subscription": "sub_1"}},
+    }
+    assert billing._invoice_subscription_id(current) == "sub_1"
+    assert billing._invoice_subscription_id({"subscription": "sub_legacy"}) == "sub_legacy"
+    assert billing._invoice_subscription_id({
+        "parent": {"type": "quote_details",
+                   "subscription_details": {"subscription": "sub_1"}}
+    }) is None
+    assert billing._invoice_subscription_id({
+        "parent": {"type": "subscription_details",
+                   "subscription_details": {"subscription": "pi_untrusted"}}
+    }) is None
+    assert billing._invoice_subscription_id({"subscription": "bogus"}) is None
+    assert billing._invoice_subscription_id({}) is None
+
+
+def test_current_stripe_invoice_paid_updates_authoritative_membership(monkeypatch, tmp_path):
+    """Invoice paid callback must resolve new Stripe parent structure."""
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    state["session"] = _valid_checkout_session()
+    state["event"] = {
+        "id": "evt_checkout_for_invoice_2026",
+        "type": "checkout.session.completed",
+        "created": 601,
+        "data": {"object": {"id": "cs_nija_1"}},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+
+    state["subscription"] = _valid_subscription("active")
+    state["event"] = {
+        "id": "evt_current_invoice_paid",
+        "type": "invoice.paid",
+        "created": 602,
+        "data": {"object": {
+            "id": "in_current_paid",
+            "customer": "cus_1",
+            "parent": {"type": "subscription_details",
+                       "subscription_details": {"subscription": "sub_1"}},
+        }},
+    }
+    response = client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    )
+    assert response.status_code == 200
+    record = store.get_customer("application-123")
+    assert record["status"] == "active"
+    assert record["entitled"] is True
+
+
+def test_current_stripe_failed_invoice_revokes_existing_membership(monkeypatch, tmp_path):
+    """Current Invoice layout must revoke after failure even without top-level subscription."""
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    state["session"] = _valid_checkout_session()
+    state["event"] = {
+        "id": "evt_checkout_for_invoice_failure",
+        "type": "checkout.session.completed",
+        "created": 701,
+        "data": {"object": {"id": "cs_nija_1"}},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+
+    state["event"] = {
+        "id": "evt_valid_membership_active",
+        "type": "customer.subscription.updated",
+        "created": 702,
+        "data": {"object": _valid_subscription("active")},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+    assert store.get_customer("application-123")["entitled"] is True
+
+    state["event"] = {
+        "id": "evt_current_invoice_failed",
+        "type": "invoice.payment_failed",
+        "created": 703,
+        "data": {"object": {
+            "id": "in_current_failed",
+            "customer": "cus_1",
+            "parent": {"type": "subscription_details",
+                       "subscription_details": {"subscription": "sub_1"}},
+        }},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+    record = store.get_customer("application-123")
+    assert record["entitled"] is False
+    assert record["status"] == "payment_failed"

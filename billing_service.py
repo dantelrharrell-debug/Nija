@@ -456,8 +456,27 @@ def _process_checkout_event(stripe: Any, event_type: str, event_obj: Any) -> Non
     )
 
 
+def _invoice_subscription_id(invoice: Any) -> Optional[str]:
+    """Resolve verified Stripe invoice subscription ID across API generations.
+
+    Legacy invoices have a top-level subscription; current Stripe invoices
+    carry it under parent.subscription_details.subscription. Only accept the
+    explicitly subscription-typed parent, not arbitrary invoice metadata.
+    """
+    direct = _id_value(_obj_value(invoice, "subscription"))
+    if direct:
+        return direct if direct.startswith("sub_") else None
+
+    parent = _obj_value(invoice, "parent")
+    if _obj_value(parent, "type") != "subscription_details":
+        return None
+    details = _obj_value(parent, "subscription_details")
+    nested = _id_value(_obj_value(details, "subscription"))
+    return nested if nested and nested.startswith("sub_") else None
+
+
 def _process_invoice_failure(event_obj: Any, event_created: int) -> None:
-    subscription_id = _id_value(_obj_value(event_obj, "subscription"))
+    subscription_id = _invoice_subscription_id(event_obj)
     customer_id = _id_value(_obj_value(event_obj, "customer"))
     user_id = (
         _store().find_user_by_subscription(subscription_id or "")
@@ -482,7 +501,7 @@ def _process_invoice_failure(event_obj: Any, event_created: int) -> None:
 
 
 def _process_invoice_paid(stripe: Any, event_obj: Any, event_created: int) -> None:
-    subscription_id = _id_value(_obj_value(event_obj, "subscription"))
+    subscription_id = _invoice_subscription_id(event_obj)
     if not subscription_id:
         return
     subscription = stripe.Subscription.retrieve(
