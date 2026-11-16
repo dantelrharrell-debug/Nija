@@ -13,9 +13,11 @@ function id(value) {
   return typeof value === 'string' ? value : prop(value, 'id');
 }
 export function checkoutEnabled(key, flag) {
-  return flag === 'true' && typeof key === 'string' && /^sk_(?:test|live)_[A-Za-z0-9_]+$/.test(key);
+  return flag === 'true' && typeof key === 'string' && /^(?:sk|rk)_(?:test|live)_[A-Za-z0-9_]+$/.test(key);
 }
-export function liveKey(key) { return key.startsWith('sk_live_'); }
+export function liveKey(key) {
+  return typeof key === 'string' && /^(?:sk|rk)_live_[A-Za-z0-9_]+$/.test(key);
+}
 export function issueProof() { return randomBytes(32).toString('hex'); }
 export function hashProof(proof) { return createHash('sha256').update(proof, 'utf8').digest('hex'); }
 export function matchesProof(storedHash, proof) {
