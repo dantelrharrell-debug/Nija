@@ -75,11 +75,23 @@ def verified_invoice_from_stripe(stripe: Any, billing_store: Any, event_invoice:
         return None
     if _field(invoice, "currency", "").lower() != "usd":
         return None
-    if _field(invoice, "paid") is not True or _field(invoice, "status") != "paid":
+    # Stripe's current Invoice API omits the legacy 'paid' boolean.
+    # A provider-retrieved paid status plus a recorded paid transition is required.
+    if _field(invoice, "paid", True) is False or _field(invoice, "status") != "paid":
+        return None
+    paid_at = _field(_field(invoice, "status_transitions", {}), "paid_at")
+    if type(paid_at) is not int or paid_at <= 0:
         return None
     if _field(invoice, "amount_remaining", 0) != 0:
         return None
-    subscription_id = _id(_field(invoice, "subscription"))
+    # New Stripe invoices attach the subscription under
+    # parent.subscription_details.subscription; legacy invoices have a flat field.
+    subscription = _field(invoice, "subscription")
+    if not subscription:
+        parent = _field(invoice, "parent", {})
+        if _field(parent, "type") == "subscription_details":
+            subscription = _field(_field(parent, "subscription_details", {}), "subscription")
+    subscription_id = _id(subscription)
     customer_id = _id(_field(invoice, "customer"))
     if not subscription_id.startswith("sub_") or not customer_id.startswith("cus_"):
         return None
