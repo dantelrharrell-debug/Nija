@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 
 from verified_payment_receipts import (
     ReceiptOutbox, VerifiedInvoiceReceipt, process_batch_from_env,
-    process_one, verified_invoice_from_stripe,
+    process_one, verified_invoice_from_stripe, emit_resend_event,
 )
 
 
@@ -118,3 +118,24 @@ def test_worker_is_fail_closed_before_certification(monkeypatch, outbox):
         "in_unit_1", "customer@example.com", 5000, "usd", "NIJA membership"))
     assert process_batch_from_env(outbox) == {"accepted": 0, "uncertain": 0}
     assert len(outbox.pending()) == 1
+
+
+def test_resend_events_acceptance_is_not_an_email_delivery():
+    """The official POST /events/send API echoes a name, NOT a message ID."""
+    import json
+    class Reply:
+        status = 202
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self):
+            return json.dumps({"object": "event", "event": "nija.payment.receipt_verified.v1"}).encode()
+
+    receipt = VerifiedInvoiceReceipt("in_unit_1", "buyer@example.com", 5000, "usd", "NIJA membership")
+    accepted = emit_resend_event("buyer@example.com", receipt, api_key="mock", opener=lambda _req, timeout: Reply())
+    assert accepted == "accepted:nija.payment.receipt_verified.v1"
+
+    class BadReply(Reply):
+        def read(self):
+            return json.dumps({"object": "event", "event": "unexpected"}).encode()
+    with pytest.raises(RuntimeError, match="ack_invalid"):
+        emit_resend_event("buyer@example.com", receipt, api_key="mock", opener=lambda _req, timeout: BadReply())
