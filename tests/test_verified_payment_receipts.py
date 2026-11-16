@@ -59,7 +59,7 @@ def test_identity_and_entitlement_are_required(identities):
     saved["offer_code"] = "unknown"
     assert verified_invoice_from_stripe(stripe, store, invoice) is None
     saved["offer_code"] = "founding_beta"
-    saved["email"] = "customer@example.com\\nBcc:bad@example.com"
+    saved["email"] = "customer@example.com\nBcc:bad@example.com"
     assert verified_invoice_from_stripe(stripe, store, invoice) is None
     saved["email"] = "customer@example.com"
     store.find_user_by_subscription = lambda _id: None
