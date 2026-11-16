@@ -137,3 +137,16 @@ def test_receiver_acknowledges_only_authenticated_durable_writes(monkeypatch):
     assert client.post("/api/email/resend/webhook", data=b"x" * 65537).status_code == 413
     inbound = payload("email.received")
     assert client.post("/api/email/resend/webhook", data=inbound, headers=signed(inbound, key)).status_code == 400
+
+
+@pytest.mark.parametrize("invalid", ["", "wrong_prefix", "whsec_", "whsec_!!!",
+                                     "whsec_" + base64.b64encode(b"short").decode()])
+def test_invalid_signing_configuration_cannot_create_tables(monkeypatch, invalid):
+    from types import SimpleNamespace
+    monkeypatch.setenv("NIJA_RESEND_DELIVERY_ENABLED", "true")
+    monkeypatch.setenv("RESEND_DELIVERY_WEBHOOK_SECRET", invalid)
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+    with patch("resend_delivery.DeliveryEvidence") as storage:
+        with pytest.raises(RuntimeError, match="durable_resend_delivery_configuration_required"):
+            register_delivery_routes(Flask(__name__), engine)
+        storage.assert_not_called()

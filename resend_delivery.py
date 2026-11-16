@@ -20,6 +20,19 @@ EVENTS = frozenset({"email.sent", "email.delivered", "email.bounced", "email.com
 MAX_BODY = 65536
 
 
+def signing_key(secret: str) -> bytes:
+    """Reject unusable signing configuration before touching durable storage."""
+    if not secret.startswith("whsec_"):
+        raise ValueError("invalid_signing_configuration")
+    try:
+        key = base64.b64decode(secret[6:], validate=True)
+    except ValueError as exc:
+        raise ValueError("invalid_signing_configuration") from exc
+    if len(key) < 16:
+        raise ValueError("invalid_signing_configuration")
+    return key
+
+
 def verify_signature(raw: bytes, headers: dict, secret: str, now: float | None = None) -> str:
     """Verify Svix HMAC over exact bytes, including ID and fresh attempt timestamp."""
     event_id = headers.get("svix-id", "")
@@ -31,14 +44,7 @@ def verify_signature(raw: bytes, headers: dict, secret: str, now: float | None =
         raise ValueError("invalid_signature")
     if abs((time.time() if now is None else now) - int(timestamp)) > 300:
         raise ValueError("expired_signature")
-    if not secret.startswith("whsec_"):
-        raise ValueError("invalid_signing_configuration")
-    try:
-        key = base64.b64decode(secret[6:], validate=True)
-    except ValueError as exc:
-        raise ValueError("invalid_signing_configuration") from exc
-    if len(key) < 16:
-        raise ValueError("invalid_signing_configuration")
+    key = signing_key(secret)
     signed = event_id.encode() + b"." + timestamp.encode() + b"." + raw
     expected = base64.b64encode(hmac.digest(key, signed, "sha256")).decode()
     if not any(hmac.compare_digest(item[3:], expected)
@@ -142,8 +148,12 @@ def register_delivery_routes(app, engine) -> None:
     ledger = None
     if enabled:
         # No ephemeral production fallback, and no DDL before configuration validation.
-        if engine.dialect.name != "postgresql" or not secret.startswith("whsec_"):
+        if engine.dialect.name != "postgresql":
             raise RuntimeError("durable_resend_delivery_configuration_required")
+        try:
+            signing_key(secret)
+        except ValueError as exc:
+            raise RuntimeError("durable_resend_delivery_configuration_required") from exc
         ledger = DeliveryEvidence(engine)
     app.config["RESEND_DELIVERY_EVIDENCE"] = ledger
 
