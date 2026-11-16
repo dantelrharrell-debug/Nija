@@ -13,9 +13,12 @@ from verified_payment_receipts import (
 @pytest.fixture()
 def identities():
     invoice = dict(
-        id="in_unit_1", livemode=True, paid=True, status="paid",
+        id="in_unit_1", livemode=True, status="paid",
+        status_transitions={"paid_at": 1720000000},
         amount_paid=5000, amount_remaining=0, currency="usd",
-        subscription="sub_unit_1", customer="cus_unit_1",
+        parent={"type": "subscription_details",
+                "subscription_details": {"subscription": "sub_unit_1"}},
+        customer="cus_unit_1",
     )
     saved = dict(
         stripe_subscription_id="sub_unit_1", stripe_customer_id="cus_unit_1",
@@ -43,9 +46,11 @@ def test_authoritative_paid_invoice_is_required(identities):
     assert receipt.email == "customer@example.com"
     for bad in (
         {"livemode": False}, {"paid": False}, {"status": "open"},
+        {"status_transitions": {"paid_at": None}},
         {"amount_paid": 0}, {"amount_paid": -1},
         {"currency": "eur"}, {"amount_remaining": 1},
-        {"customer": "cus_wrong"}, {"subscription": ""},
+        {"customer": "cus_wrong"},
+        {"parent": {"type": "subscription_details", "subscription_details": {"subscription": ""}}},
     ):
         stripe.Invoice.retrieve = lambda _id, value={**invoice, **bad}: value
         assert verified_invoice_from_stripe(stripe, store, invoice) is None
@@ -139,3 +144,11 @@ def test_resend_events_acceptance_is_not_an_email_delivery():
             return json.dumps({"object": "event", "event": "unexpected"}).encode()
     with pytest.raises(RuntimeError, match="ack_invalid"):
         emit_resend_event("buyer@example.com", receipt, api_key="mock", opener=lambda _req, timeout: BadReply())
+
+
+def test_legacy_subscription_mapping_still_verifies_paid_invoice(identities):
+    invoice, saved, stripe, store = identities
+    legacy = dict(invoice, subscription="sub_unit_1")
+    legacy.pop("parent", None)
+    stripe.Invoice.retrieve = lambda _id: legacy
+    assert verified_invoice_from_stripe(stripe, store, legacy) is not None
