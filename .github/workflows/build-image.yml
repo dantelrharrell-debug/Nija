@@ -25,7 +25,7 @@ jobs:
           # Do not mask compilation, dependency or application build failures.
           set +e
           docker build --no-cache \
-            --build-arg PYTHON_BASE=public.ecr.aws/docker/library/python:3.11-slim-trixie \
+            --build-arg PYTHON_BASE=public.ecr.aws/docker/library/python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
             --build-arg GIT_BRANCH="${GITHUB_REF_NAME}" \
             --build-arg GIT_COMMIT="${GITHUB_SHA}" \
             --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
@@ -34,7 +34,7 @@ jobs:
           if [ "${status}" -ne 0 ] && grep -Eq '429 Too Many Requests|toomanyrequests: Data limit exceeded' "${BUILD_LOG}"; then
             echo "::warning::Public ECR rate limited the base image; retrying from Docker Hub"
             docker build --no-cache \
-              --build-arg PYTHON_BASE=python:3.11-slim-trixie \
+              --build-arg PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
               --build-arg GIT_BRANCH="${GITHUB_REF_NAME}" \
               --build-arg GIT_COMMIT="${GITHUB_SHA}" \
               --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
