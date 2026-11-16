@@ -18,6 +18,7 @@ from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text,
 from sqlalchemy.exc import IntegrityError
 
 EVENT_NAME = "nija.payment.receipt_verified.v1"
+RECEIPT_AUTOMATION_ID = "01a1e296-2b78-7251-ad08-62a94b97a892"
 PURPOSE = "receipt_v1"
 
 
@@ -33,6 +34,27 @@ def _id(obj: Any) -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def require_resend_automation_enabled(*, api_key: str, opener=None) -> None:
+    """Never consume a receipt claim while its recipient automation is disabled.
+
+    Resend Events can accept an event even if no automation will send email.
+    Verify the actual destination workflow is enabled immediately before send.
+    """
+    req = urllib.request.Request(
+        "https://api.resend.com/automations/" + RECEIPT_AUTOMATION_ID,
+        headers={"Authorization": "Bearer " + api_key,
+                 "Accept": "application/json"},
+        method="GET",
+    )
+    with (opener or urllib.request.urlopen)(req, timeout=8) as response:
+        if response.status != 200:
+            raise RuntimeError("resend_automation_unavailable")
+        details = json.loads(response.read())
+        if (details.get("id") != RECEIPT_AUTOMATION_ID
+                or details.get("status") != "enabled"):
+            raise RuntimeError("resend_automation_not_enabled")
 
 
 @dataclass(frozen=True)
@@ -245,10 +267,14 @@ def process_batch_from_env(outbox: ReceiptOutbox) -> dict[str, int]:
     allow = {e.strip().lower() for e in os.getenv("NIJA_PAYMENT_TEST_RECIPIENTS", "").split(",") if e.strip()}
     if mode == "controlled" and not allow:
         raise RuntimeError("controlled_recipient_allowlist_required")
+    candidates = [row for row in outbox.pending(limit=10)
+                  if mode == "enabled" or row["email"] in allow]
+    if not candidates:
+        return {"accepted": 0, "uncertain": 0}
+    # Fail closed BEFORE claiming any invoice if Resend will not run the sender.
+    require_resend_automation_enabled(api_key=os.environ["RESEND_API_KEY"])
     sent = failed = 0
-    for row in outbox.pending(limit=10):
-        if mode == "controlled" and row["email"] not in allow:
-            continue
+    for row in candidates:
         if process_one(outbox, row):
             sent += 1
         else:
