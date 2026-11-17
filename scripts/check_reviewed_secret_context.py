@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 import re
 
 
-MANIFEST = "docs/security/exact-source-secret-review-20261113.json"
+MANIFEST = "docs/security/exact-source-secret-review-20261117.json"
 
 
 def _unique(pairs):
