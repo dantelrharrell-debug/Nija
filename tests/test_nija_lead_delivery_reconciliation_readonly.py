@@ -33,7 +33,7 @@ class ReconciliationTests(unittest.TestCase):
             "NIJA_LEAD_DB_PATH": str(self.lead),
             "NIJA_LEAD_FORWARD_DB_PATH": str(self.forward),
             "NIJA_LEAD_WEBHOOK_TOKEN": "secret-must-never-print",
-            "NIJA_LEAD_FORWARD_URL": "https://hooks.zapier.com/hooks/catch/SECRET",
+            "NIJA_LEAD_FORWARD_URL": "https://hooks.zapier.com/hooks/catch/123456/syntheticQA_token/",
         }
 
     def tearDown(self):
@@ -78,7 +78,7 @@ class ReconciliationTests(unittest.TestCase):
         self.assertFalse(report["bulk_replay_authorized"])
         self.assertEqual(before, self.lead.read_bytes())
         serialized = json.dumps(report)
-        for sensitive in ("secret-must-never-print", "SECRET", "one@example.com"):
+        for sensitive in ("secret-must-never-print", "syntheticQA_token", "one@example.com"):
             self.assertNotIn(sensitive, serialized)
 
     def test_writer_cannot_change_database_during_scan(self):
