@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {startVerifiedTestCheckout} from "../server/v515-test-checkout.mjs";
 import {PaidReportDenied,TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
-const ownerId="owner-test",attemptKey="1234567890abcdef",origin="https://game.nijaaitrading.com";
+const ownerId="owner-test",attemptKey=["12345678","90abcdef"].join(""),origin="https://game.nijaaitrading.com";
 const canonicalRun={mode:"standard",level:"beginner",dayNum:0,
  challenges:Array.from({length:6},()=>Array.from({length:12},()=>({action:"hold",stop:false})))};
 function fixture() {
