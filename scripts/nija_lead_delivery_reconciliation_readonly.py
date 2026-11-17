@@ -11,6 +11,7 @@ import os
 import sqlite3
 from contextlib import closing
 import urllib.parse
+import re
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -18,6 +19,26 @@ REVIEW_CATEGORIES = frozenset(("HTTP_422_email", "HTTP_422_phone", "HTTP_422_rev
 LEAD_STATES = frozenset(("synced", "pending", "needs_review"))
 FORWARD_STATES = frozenset(("pending", "sending", "sent"))
 
+
+
+def _approved_zapier_catch_hook(raw: str) -> bool:
+    """Match the production lead forwarder's destination rules without network I/O."""
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        return bool(
+            raw and raw == raw.strip()
+            and not any(ord(char) < 33 or ord(char) == 127 for char in raw)
+            and parsed.scheme == "https"
+            and parsed.hostname == "hooks.zapier.com"
+            and parsed.port is None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+            and re.fullmatch(r"/hooks/catch/[0-9]+/[A-Za-z0-9_-]+/?", parsed.path)
+        )
+    except ValueError:
+        return False
 
 def _on_disk(path: Path, mount: Path, mounted: bool) -> bool:
     try:
@@ -113,16 +134,10 @@ def inspect(*, environ: Mapping[str, str] | None = None,
     forward = (Path(override) if override else
                disk / "nija_lead_forwarding.sqlite3" if disk.is_dir() else active)
     mounted = bool((mount_check or (lambda path: path.is_mount()))(disk))
-    url = str(env.get("NIJA_LEAD_FORWARD_URL") or "").strip()
-    try:
-        parsed = urllib.parse.urlsplit(url)
-        https_ok = bool(url and parsed.scheme == "https" and parsed.hostname
-                        and not parsed.username and not parsed.password and parsed.port != 0)
-        category = ("zapier" if https_ok and parsed.hostname == "hooks.zapier.com"
-                    else "other_https" if https_ok else "missing_or_invalid")
-    except ValueError:
-        https_ok = False
-        category = "missing_or_invalid"
+    raw_url = str(env.get("NIJA_LEAD_FORWARD_URL") or "")
+    https_ok = _approved_zapier_catch_hook(raw_url)
+    category = "zapier" if https_ok else "missing_or_invalid"
+
     return {
         "mode": "READ_ONLY", "production_pipeline_certified": False,
         "bulk_replay_authorized": False, "zapier_account_verified": False,
