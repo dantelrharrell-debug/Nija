@@ -12,8 +12,10 @@ from pathlib import Path
 
 _FORM_TYPES = {
     "free_assessment": "free_assessment",
+    "free_trader_assessment": "free_assessment",
     "hero-email-optin": "email_opt_in",
     "founding_waitlist": "founding_waitlist",
+    "founding_100_waitlist": "founding_waitlist",
     "founding-100-waitlist": "founding_waitlist",
     "pilot_application": "pilot_application",
     "founding_100_application": "founding_100_application",
