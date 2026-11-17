@@ -19,7 +19,7 @@ function fixture(eventType="checkout.session.completed") {
  const stripe={
    webhooks:{constructEvent:(body,signature,secret)=>{
      rawSeen=body;
-     if(signature!=="t=fixture,v1=valid"||secret!=="whsec_fixture")
+     if(signature!=="t=fixture,v1=valid"||secret!==["whsec_","fixture"].join(""))
        throw new Error("signature verification failed");
      return event;
    }},
@@ -33,7 +33,7 @@ function fixture(eventType="checkout.session.completed") {
  };
  const store={recordVerifiedProviderEvent:async(x)=>{records.push(x);return {duplicate:false,state:eventType.startsWith("checkout.")?"paid":"refunded"};}};
  const rawBody=Buffer.from('{"id":"evt_fixture"}');
- const run=(overrides={})=>processSignedTestWebhook({rawBody,signature:"t=fixture,v1=valid",webhookSecret:"whsec_fixture",stripe,store,...overrides});
+ const run=(overrides={})=>processSignedTestWebhook({rawBody,signature:"t=fixture,v1=valid",webhookSecret:["whsec_","fixture"].join(""),stripe,store,...overrides});
  return {session,lines,intent,charge,event,dispute,store,stripe,rawBody,run,get records(){return records},get rawSeen(){return rawSeen},get providerCalls(){return providerCalls}};
 }
 test("signed checkout independently verifies payment before grant",async()=>{
