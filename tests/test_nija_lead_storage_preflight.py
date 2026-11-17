@@ -31,7 +31,7 @@ class PreflightTests(unittest.TestCase):
             "NIJA_LEAD_DB_PATH": str(self.lead),
             "NIJA_LEAD_FORWARD_DB_PATH": str(self.forward),
             "NIJA_LEAD_WEBHOOK_TOKEN": "DO_NOT_LEAK_TOKEN",
-            "NIJA_LEAD_FORWARD_URL": "https://hooks.zapier.com/hooks/catch/secret_value",
+            "NIJA_LEAD_FORWARD_URL": "https://hooks.zapier.com/hooks/catch/123456/syntheticQA_token/",
         }
 
     def tearDown(self):
@@ -54,7 +54,7 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(result["production_certified"])
         self.assertEqual(before, self.lead.read_bytes())
         self.assertNotIn("DO_NOT_LEAK_TOKEN", json.dumps(result))
-        self.assertNotIn("secret_value", json.dumps(result))
+        self.assertNotIn("syntheticQA_token", json.dumps(result))
         self.assertNotIn("private@example.com", json.dumps(result))
 
     def test_ephemeral_default_is_not_verified_even_when_readable(self):
