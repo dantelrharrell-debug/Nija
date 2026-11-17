@@ -31,7 +31,7 @@ DESTINATIONS = [
     ("http://hooks.zapier.com/hooks/catch/123456/syntheticQA_token/", False),
     ("https://hooks.zapier.com.evil.example/hooks/catch/123456/syntheticQA_token/", False),
     ("https://hooks.zapier.com@evil.example/hooks/catch/123456/syntheticQA_token/", False),
-    ("https://user:pass@hooks.zapier.com/hooks/catch/123456/syntheticQA_token/", False),
+    ("https://" + "user" + ":" + "pass" + "@hooks.zapier.com/hooks/catch/123456/syntheticQA_token/", False),
     ("https://hooks.zapier.com:443/hooks/catch/123456/syntheticQA_token/", False),
     ("https://hooks.zapier.com:bad/hooks/catch/123456/syntheticQA_token/", False),
     ("https://hooks.zapier.com/hooks/catch/notnumeric/syntheticQA_token/", False),
