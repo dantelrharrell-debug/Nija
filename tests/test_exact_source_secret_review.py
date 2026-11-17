@@ -1,5 +1,6 @@
 """Keep exact false-positive reviews from concealing changed credentials."""
 from contextlib import redirect_stdout, redirect_stderr
+import copy
 import hashlib
 import io
 import json
@@ -15,6 +16,71 @@ import yaml
 from scripts.check_reviewed_secret_context import MANIFEST, check_context
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def historical_baseline_before_documentation_removal(current: dict, root: Path) -> dict:
+    """Normalize one source-proven later deletion in a comparison copy only."""
+    name = "GETTING_STARTED.md"
+    source = root / name
+    assert source.resolve() == source.absolute() and source.is_file()
+    expected_source = (
+        "20:28:af:e0:25:13:55:53:88:79:79:e6:e1:bf:cd:f1:"
+        "6d:2a:9d:0d:9f:0c:0a:6b:c7:d4:09:14:d5:21:b6:33"
+    ).replace(":", "")
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == expected_source
+    # The current source has no candidate at this path. The same marker hash
+    # can legitimately remain at other reviewed paths and must not be removed.
+    assert name not in current["results"]
+    comparison = copy.deepcopy(current)
+    comparison["results"][name] = [{
+        "type": "Private Key",
+        "filename": name,
+        "hashed_secret": (
+            "f0:77:8f:3e:14:0a:61:d5:bb:be:d5:43:07:73:e5:2a:f2:f5:fb:a4"
+        ).replace(":", ""),
+        "is_verified": False,
+        "line_number": 62,
+    }]
+    return comparison
+
+
+def test_documentation_removal_normalization_does_not_mutate_or_hide_other_changes(tmp_path):
+    """Only the exact removed path is restored for the older review comparison."""
+    (tmp_path / "GETTING_STARTED.md").write_bytes((ROOT / "GETTING_STARTED.md").read_bytes())
+    current = json.loads((ROOT / ".secrets.baseline").read_text())
+    original = copy.deepcopy(current)
+    comparison = historical_baseline_before_documentation_removal(current, tmp_path)
+    assert current == original
+    restored = comparison["results"].pop("GETTING_STARTED.md")
+    assert comparison == original
+    # Other paths retaining the same detector identity stay exactly unchanged.
+    identity = restored[0]["hashed_secret"]
+    assert any(row["hashed_secret"] == identity
+               for rows in original["results"].values() for row in rows)
+    unrelated = next(iter(current["results"]))
+    del current["results"][unrelated]
+    current["results"]["unreviewed.py"] = [{"type": "Secret Keyword", "line_number": 1}]
+    changed = historical_baseline_before_documentation_removal(current, tmp_path)
+    assert unrelated not in changed["results"]
+    assert changed["results"]["unreviewed.py"] == current["results"]["unreviewed.py"]
+    assert changed != historical_baseline_before_documentation_removal(original, tmp_path)
+
+
+@pytest.mark.parametrize("change", ["source", "path_entry", "symlink"])
+def test_documentation_removal_normalization_rejects_unreviewed_context(tmp_path, change):
+    """Source drift and any restored candidate at the removed path still deny."""
+    source = tmp_path / "GETTING_STARTED.md"
+    source.write_bytes((ROOT / "GETTING_STARTED.md").read_bytes())
+    current = json.loads((ROOT / ".secrets.baseline").read_text())
+    if change == "source":
+        source.write_bytes(source.read_bytes() + b"unreviewed source change\n")
+    elif change == "path_entry":
+        current["results"][source.name] = [{"type": "Private Key", "line_number": 62}]
+    else:
+        source.unlink()
+        source.symlink_to(ROOT / source.name)
+    with pytest.raises(AssertionError):
+        historical_baseline_before_documentation_removal(current, tmp_path)
 
 
 def normalize_reviewed_recovery_pin_replacements(current):
@@ -126,7 +192,9 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
     before = json.loads(subprocess.check_output([
         "git", "show", "15b64ddcb44fa67f33a336b799ee8f89b1bc1fe9:.secrets.baseline",
     ], cwd=ROOT))
-    current = json.loads((ROOT / ".secrets.baseline").read_text())
+    current = historical_baseline_before_documentation_removal(
+        json.loads((ROOT / ".secrets.baseline").read_text()), ROOT,
+    )
     normalize_reviewed_recovery_pin_replacements(current)
     # Normalize only the separately reviewed public source-digest replacement
     # before checking the original 142-candidate review. All other identities,

@@ -122,6 +122,17 @@ OpenPositions are both queried; any unsupported nonzero holding denies.
             pair, quantity = _pair(row.get("pair")), _quantity(row.get("quantity"))
             _require(quantity > 0, "ledger_quantity_invalid")
             totals[pair] = totals.get(pair, Decimal(0)) + quantity
+        # A native ledger read issues a fresh receipt ID even for the same
+        # persisted snapshot. Normalize only that ID in this private comparison
+        # copy; retain its presence and every other field, including snapshot_id,
+        # provenance, original timestamps, expiry, orders and unknown metadata.
+        if "evidence_id" in snap:
+            receipt = snap["evidence_id"]
+            _require(isinstance(receipt, str) and bool(receipt)
+                     and receipt == receipt.strip()
+                     and not any(char.isspace() for char in receipt), "ledger_evidence_identity_invalid")
+            snap = dict(snap)
+            snap["evidence_id"] = None
         return snap, totals, stamp, expiry
 
     def adopted() -> tuple[Any, dict[str, Decimal], float, float]:
