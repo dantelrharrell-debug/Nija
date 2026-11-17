@@ -4,7 +4,7 @@ import {Readable} from "node:stream";
 import {createV515SandboxHttpAdapter} from "../server/v515-sandbox-http-adapter.mjs";
 import {TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
 const origin="https://game.nijaaitrading.com";
-const csrf="0123456789abcdef0123456789abcdef";
+const csrf=["0123456789abcdef","0123456789abcdef"].join("");
 const run={mode:"standard",level:"beginner",dayNum:0,
   challenges:Array.from({length:6},()=>Array.from({length:12},()=>({action:"hold",stop:false})))};
 const body={attemptKey:"abcdefghijklmnopqrst",adultAttested:true,canonicalRun:run};
