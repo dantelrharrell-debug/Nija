@@ -376,10 +376,10 @@ class IdentityProbeTests(unittest.TestCase):
         path.chmod(0o600)
         return path
 
-    def receipt(self, **overrides) -> None:
+    def receipt(self, *, request_id=IDENTITY_REQUEST, **overrides) -> None:
         """Write a synthetic receipt containing no account material."""
         row = {
-            "request_id": IDENTITY_REQUEST, "account_scope": "platform:kraken",
+            "request_id": request_id, "account_scope": "platform:kraken",
             "trading_authorized": False, "diagnostic_only": True, "collector_installed": False,
             "independent_certification_complete": False,
             "collection_succeeded": True, "configured_account_and_key_match": True,
@@ -392,7 +392,89 @@ class IdentityProbeTests(unittest.TestCase):
             "private_canary": "never-export-account-data",
         }
         row.update(overrides)
-        self.write(IDENTITY_REQUEST + ".identity.evidence.json", json.dumps(row).encode())
+        self.write(request_id + ".identity.evidence.json", json.dumps(row).encode())
+
+    def test_explicit_fresh_request_preserves_historical_claim_and_one_read_budget(self) -> None:
+        historical = self.write(IDENTITY_REQUEST + ".identity.claimed.json", b"historical-claim")
+        request_id = "b" * 32
+        report = identity_probe(publish=True, request_id=request_id)
+        self.assertTrue(report["request_created"])
+        self.assertFalse(report["allow_new_orders"])
+        request = json.loads((self.root / "identity_request.json").read_bytes())
+        self.assertEqual(request["request_id"], request_id)
+        self.assertEqual(request["account_scope"], "platform:kraken")
+        self.assertEqual(request["max_pages"], 1)
+        self.assertEqual(historical.read_bytes(), b"historical-claim")
+        self.assertEqual(identity_probe()["reason"], "consumed_request_never_replayed")
+        self.assertEqual(
+            identity_probe(publish=True, request_id="c" * 32)["reason"],
+            "existing_recovery_request_preserved",
+        )
+        self.assertEqual(json.loads((self.root / "identity_request.json").read_bytes()), request)
+
+    def test_explicit_claim_is_never_replayed_or_replaced(self) -> None:
+        request_id = "b" * 32
+        claim = self.write(request_id + ".identity.claimed.json", b"consumed")
+        report = identity_probe(publish=True, request_id=request_id)
+        self.assertEqual(report["reason"], "consumed_request_never_replayed")
+        self.assertFalse(report["request_created"])
+        self.assertEqual(claim.read_bytes(), b"consumed")
+        self.assertFalse((self.root / "identity_request.json").exists())
+
+    def test_invalid_explicit_id_is_rejected_before_any_file_read(self) -> None:
+        for request_id in (None, 1, "", "B" * 32, "a" * 31, "a" * 33,
+                           "../outside", "a" * 31 + "/", "a" * 32 + "\n"):
+            with self.subTest(request_id=request_id), patch.object(Path, "lstat") as read:
+                report = identity_probe(publish=True, request_id=request_id)
+                self.assertEqual(report["reason"], "identity_request_id_invalid")
+                self.assertIsNone(report["request_id"])
+                self.assertFalse(report["request_created"])
+                read.assert_not_called()
+
+    def test_explicit_result_reads_only_matching_receipt_without_publishing(self) -> None:
+        request_id = "b" * 32
+        self.receipt(request_id=request_id)
+        report = identity_probe(request_id=request_id)
+        self.assertTrue(report["configured_account_key_match"])
+        self.assertEqual(report["request_id"], request_id)
+        self.assertFalse(report["request_created"])
+        self.assertNotIn("never-export-account-data", json.dumps(report))
+        self.assertEqual(identity_probe()["reason"], "identity_receipt_not_available")
+        self.assertFalse((self.root / "identity_request.json").exists())
+        path = self.root / (request_id + ".identity.evidence.json")
+        row = json.loads(path.read_bytes())
+        row["request_id"] = IDENTITY_REQUEST
+        path.write_text(json.dumps(row))
+        self.assertEqual(identity_probe(request_id=request_id)["reason"], "identity_receipt_invalid")
+
+    def test_explicit_id_does_not_skip_approved_consumer_pins(self) -> None:
+        from scripts import nija_kraken_instance_diagnostic as diagnostic
+
+        source = diagnostic.APP_ROOT / diagnostic.IDENTITY_CONSUMER_PINS[0][0]
+        source.write_bytes(b"unreviewed-consumer")
+        report = identity_probe(publish=True, request_id="b" * 32)
+        self.assertEqual(report["reason"], "identity_consumer_source_changed")
+        self.assertFalse(report["request_created"])
+        self.assertFalse((self.root / "identity_request.json").exists())
+
+    def test_cli_explicit_identity_ids_fail_closed_without_runtime_or_with_invalid_id(self) -> None:
+        import runpy
+
+        for mode in ("--request-identity", "--identity-result"):
+            for request_id, expected in (("b" * 32, "baseline_instance_unverified"),
+                                         ("../invalid", "identity_request_id_invalid")):
+                with self.subTest(mode=mode, request_id=request_id):
+                    output = io.StringIO()
+                    args = ["scripts/nija_kraken_instance_diagnostic.py",
+                            mode, "--request-id", request_id]
+                    with patch.dict(os.environ, {"NIJA_DEFER_RUNTIME_SITE_HOOKS": "1"}, clear=True), patch.object(
+                        sys, "argv", args,
+                    ), patch.object(sys, "stdout", output), self.assertRaises(SystemExit) as stopped:
+                        runpy.run_path(args[0], run_name="__main__")
+                    self.assertEqual(stopped.exception.code, 2)
+                    report = json.loads(output.getvalue())
+                    self.assertEqual(report["reason"], expected)
+                    self.assertFalse(report["request_created"])
 
     def test_identity_probe_rejects_unreviewed_consumer_source(self) -> None:
         from scripts import nija_kraken_instance_diagnostic as diagnostic
@@ -477,6 +559,97 @@ class IdentityProbeTests(unittest.TestCase):
         self.assertEqual(identity_probe()["reason"], "approved_api_key_identity_mismatch")
         self.receipt(collection_succeeded=False, failure_code="private-credential-canary")
         self.assertEqual(identity_probe()["reason"], "identity_comparison_unverified")
+
+    def test_receipt_diagnostics_preserve_only_known_labels_and_actual_booleans(self) -> None:
+        for method in ("response_echo", "native_signed_request_v1"):
+            with self.subTest(method=method):
+                self.receipt(
+                    collection_succeeded=False, configured_account_and_key_match=False,
+                    observation=None, failure_code="authenticated_api_key_identity_missing",
+                    identity_method=method,
+                    parsed_identity_field_presence={"apiKey": False, "validUntil": True},
+                    http_identity_field_presence={"apiKey": True, "validUntil": False},
+                    identity_response_shape={"raw": "never-export-response-body"},
+                    apiKey="<never-export-key-material>",
+                )
+                path = self.root / (IDENTITY_REQUEST + ".identity.evidence.json")
+                before = path.read_bytes()
+                report = identity_probe(publish=True)
+                self.assertEqual(report["identity_method"], method)
+                self.assertEqual(report["parsed_identity_field_presence"], {"apiKey": False, "validUntil": True})
+                self.assertEqual(report["http_identity_field_presence"], {"apiKey": True, "validUntil": False})
+                self.assertEqual(report["reason"], "authenticated_api_key_identity_missing")
+                self.assertFalse(report["configured_account_key_match"])
+                self.assertFalse(report["fresh"])
+                self.assertFalse(report["request_created"])
+                self.assertFalse(report["allow_new_orders"])
+                self.assertFalse(report["independent_certification_complete"])
+                self.assertFalse(report_succeeded(report))
+                self.assertNotIn("never-export", json.dumps(report))
+                self.assertNotIn("identity_response_shape", report)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse((self.root / "identity_request.json").exists())
+
+    def test_absent_receipt_diagnostics_are_not_invented(self) -> None:
+        self.receipt()
+        report = identity_probe()
+        self.assertTrue(report["configured_account_key_match"])
+        for field in ("identity_method", "parsed_identity_field_presence", "http_identity_field_presence"):
+            self.assertNotIn(field, report)
+
+    def test_unknown_or_malformed_identity_method_is_not_exported(self) -> None:
+        for method in (None, True, 1, [], {}, "", "RESPONSE_ECHO",
+                       "native_signed_request_v1\n", "never-export-method-payload"):
+            with self.subTest(method=method):
+                self.receipt(identity_method=method)
+                report = identity_probe()
+                self.assertNotIn("identity_method", report)
+                self.assertTrue(report["configured_account_key_match"])
+                self.assertNotIn("never-export", json.dumps(report))
+
+    def test_malformed_presence_maps_are_omitted_without_coercion_or_partial_defaults(self) -> None:
+        fields = ("parsed_identity_field_presence", "http_identity_field_presence")
+        valid = {"apiKey": False, "validUntil": True}
+        invalid = (
+            None, [], {}, {"apiKey": False}, {"validUntil": True},
+            {"apiKey": True, "validUntil": False, "extra": "never-export-extra"},
+            {"apiKey": 1, "validUntil": False}, {"apiKey": True, "validUntil": 0},
+            {"apiKey": "<never-export-field-value>", "validUntil": False},
+            {"apiKey": False, "validUntil": "false"},
+            {"apiKey": {"raw": "never-export-nested-value"}, "validUntil": False},
+        )
+        for field in fields:
+            other = next(name for name in fields if name != field)
+            for presence in invalid:
+                with self.subTest(field=field, presence=presence):
+                    self.receipt(**{field: presence, other: valid})
+                    report = identity_probe()
+                    self.assertNotIn(field, report)
+                    self.assertEqual(report[other], valid)
+                    self.assertTrue(report["configured_account_key_match"])
+                    self.assertNotIn("never-export", json.dumps(report))
+
+    def test_diagnostic_metadata_does_not_override_staleness_or_invalid_receipt(self) -> None:
+        diagnostics = {
+            "identity_method": "native_signed_request_v1",
+            "parsed_identity_field_presence": {"apiKey": True, "validUntil": True},
+            "http_identity_field_presence": {"apiKey": True, "validUntil": True},
+        }
+        self.receipt(**diagnostics)
+        path = self.root / (IDENTITY_REQUEST + ".identity.evidence.json")
+        row = json.loads(path.read_bytes())
+        row["observation"]["observed_at_epoch"] = time.time() - 61
+        path.write_text(json.dumps(row))
+        report = identity_probe()
+        self.assertEqual(report["identity_method"], diagnostics["identity_method"])
+        self.assertFalse(report["fresh"])
+        self.assertFalse(report["configured_account_key_match"])
+        self.assertFalse(report_succeeded(report))
+        self.receipt(trading_authorized=True, **diagnostics)
+        report = identity_probe()
+        self.assertEqual(report["reason"], "identity_receipt_invalid")
+        for field in diagnostics:
+            self.assertNotIn(field, report)
 
 
 class IdentityConsumerSourcePinTests(unittest.TestCase):
