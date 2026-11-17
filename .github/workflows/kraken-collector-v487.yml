@@ -38,6 +38,8 @@ on:
       - 'tests/test_kraken_canonical_native_source_bindings.py'
       - 'bot/kraken_kill_switch_evidence.py'
       - 'bot/kraken_position_sync_evidence.py'
+      - 'bot/kraken_protective_exit_readback_v485.py'
+      - 'tests/test_kraken_protective_exit_readback_v485.py'
       - 'bot/tests/test_kraken_kill_switch_evidence.py'
       - 'bot/tests/test_kraken_position_sync_evidence.py'
       - 'tests/test_kraken_startup_receipts.py'
