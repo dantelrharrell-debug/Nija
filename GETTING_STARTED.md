@@ -59,10 +59,15 @@ This creates a `.env` file from the template with placeholder values.
 3. **Fill in Coinbase credentials:**
    ```bash
    COINBASE_ORG_ID=your-org-id-here
-   COINBASE_JWT_PEM="-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_HERE\n-----END EC PRIVATE KEY-----"
+   COINBASE_JWT_PEM=
    COINBASE_JWT_KID=your-kid-here
    COINBASE_JWT_ISSUER=organizations/your-org-id-here
    ```
+
+   Set `COINBASE_JWT_PEM` to the complete private PEM in your private
+   configuration, including its header and footer. Use literal `\n` for
+   embedded newlines when your environment-variable interface requires it.
+   Do not place real credentials in tracked files.
 
 ### Step 4: Run NIJA
 
