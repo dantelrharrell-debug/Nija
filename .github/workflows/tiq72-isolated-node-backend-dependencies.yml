@@ -5,6 +5,8 @@ on:
     paths:
       - 'web/trading-challenge/server/package.json'
       - 'web/trading-challenge/server/package-lock.json'
+      - 'web/trading-challenge/server/tiq72-isolated-v515-runtime.mjs'
+      - 'web/trading-challenge/server/tests/tiq72-isolated-v515-runtime.test.mjs'
       - '.github/workflows/tiq72-isolated-node-backend-dependencies.yml'
   workflow_dispatch:
 
@@ -45,6 +47,8 @@ jobs:
               process.exit(1);
             console.log('Isolated Node Stripe SDK and pg Pool imports verified; no network/payment/database requests');
           "
+      - name: Offline fail-closed runtime composition tests
+        run: node --test tests/tiq72-isolated-v515-runtime.test.mjs
       - name: Enforce high-severity runtime dependency audit
         run: npm audit --omit=dev --audit-level=high
       - name: Publish resolved dependency lock for source review
