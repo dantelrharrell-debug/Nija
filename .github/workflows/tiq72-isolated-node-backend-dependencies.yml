@@ -1,0 +1,57 @@
+name: TIQ72 isolated server Node dependencies (TEST-only)
+
+on:
+  pull_request:
+    paths:
+      - 'web/trading-challenge/server/package.json'
+      - 'web/trading-challenge/server/package-lock.json'
+      - '.github/workflows/tiq72-isolated-node-backend-dependencies.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-node:
+    name: Verify pinned Stripe and PostgreSQL client modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web/trading-challenge/server
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Resolve dependency lock without install scripts
+        run: |
+          set -euo pipefail
+          if test -f package-lock.json; then
+            echo 'Using reviewed checked-in dependency lock'
+          else
+            npm install --package-lock-only --ignore-scripts --no-fund --no-audit
+          fi
+      - name: Verify locked runtime packages without scripts
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-fund --no-audit
+          node --input-type=module -e "
+            import Stripe from 'stripe';
+            import pg from 'pg';
+            if (typeof Stripe !== 'function' || typeof pg.Pool !== 'function')
+              process.exit(1);
+            console.log('Isolated Node Stripe SDK and pg Pool imports verified; no network/payment/database requests');
+          "
+      - name: Enforce high-severity runtime dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Publish resolved dependency lock for source review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiq72-isolated-server-dependency-lock
+          path: web/trading-challenge/server/package-lock.json
+          if-no-files-found: error
+          retention-days: 7
