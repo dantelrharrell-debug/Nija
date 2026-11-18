@@ -1,3 +1,3 @@
 # Isolated TIQ72 private PostgreSQL read-only diagnostic only.
 # Install in the isolated Render service build, not in the trading bot.
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.13
