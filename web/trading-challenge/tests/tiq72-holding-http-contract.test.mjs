@@ -28,13 +28,21 @@ test('isolated holding HTTP never exposes payment, webhook or report endpoints',
       NIJA_GAME_BROWSER_CHECKOUT_ENABLED: 'false',
       TIQ72_LIVE_PAYMENTS_ENABLED: 'false'
     },
-    stdio: 'ignore'
+    stdio: ['ignore', 'ignore', 'pipe']
   });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-4096); });
   t.after(() => { if (!child.killed) child.kill('SIGTERM'); });
   const base = 'http://127.0.0.1:' + port;
   let healthy;
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (child.exitCode !== null) throw new Error('holding service exited before HTTP readiness');
+    if (child.exitCode !== null) {
+      // Only expose an allowlisted error category, never raw stderr or environment values.
+      const reason = /ERR_MODULE_NOT_FOUND/.test(stderr) ? 'module_missing' :
+        /EADDRINUSE/.test(stderr) ? 'port_in_use' :
+        /EACCES|EPERM/.test(stderr) ? 'listen_permission_denied' : 'startup_failed';
+      throw new Error('holding service exited before HTTP readiness: ' + reason + '; code=' + child.exitCode);
+    }
     try {
       healthy = await fetch(base + '/healthz', {signal: AbortSignal.timeout(500)});
       break;
