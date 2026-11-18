@@ -12,7 +12,7 @@ export function inspectTiq72TestConfig(env = process.env) {
   fail('webhook_secret_missing', !has('STRIPE_TEST_WEBHOOK_SECRET') ||
     !/^whsec_/.test(env.STRIPE_TEST_WEBHOOK_SECRET || ''));
   fail('test_price_missing', !/^price_[A-Za-z0-9]+$/.test(env.TIQ72_STRIPE_TEST_PRICE_ID || ''));
-  fail('test_product_missing', !/^prod_[A-Za-z0-9]+$/.test(env.TIQ72_STRIPE_TEST_PRODUCT_ID || ''));
+  fail('test_product_missing', !/^prod_[A-Za-z0-9_]+$/.test(env.TIQ72_STRIPE_TEST_PRODUCT_ID || ''));
   fail('database_url_missing', !has('DATABASE_URL'));
   fail('legacy_checkout_must_be_disabled',
     env.NIJA_GAME_REPORTS_ENABLED === 'true' ||
