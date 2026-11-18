@@ -9,6 +9,7 @@ on:
       - 'web/trading-challenge/server/tests/tiq72-isolated-v515-runtime.test.mjs'
       - 'scripts/tiq72-isolated-render-build.sh'
       - '.github/workflows/tiq72-isolated-node-backend-dependencies.yml'
+      - 'scripts/tiq72_install_isolated_dependencies.sh'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +30,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Check isolated Render install guard without accessing credentials
+        working-directory: .
+        run: |
+          set -euo pipefail
+          sh -n scripts/tiq72_install_isolated_dependencies.sh
+          if RENDER_SERVICE_ID='srv-unrelated' sh scripts/tiq72_install_isolated_dependencies.sh; then
+            echo 'FAIL: isolated build script accepted an unrelated service' >&2
+            exit 1
+          fi
+          echo 'Isolated build script shell syntax and workspace guard passed'
       - name: Resolve dependency lock without install scripts
         run: |
           set -euo pipefail
