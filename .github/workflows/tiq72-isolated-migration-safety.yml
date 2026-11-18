@@ -1,0 +1,29 @@
+name: TIQ72 isolated migration safety (synthetic only)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/migrate_tiq72_upgrade6_isolated.py'
+      - 'tests/test_migrate_tiq72_upgrade6_isolated.py'
+      - '.github/workflows/tiq72-isolated-migration-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    name: Confirm no cross-workspace migration or unapproved DDL
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install local test runner only
+        run: python -m pip install pytest==8.2.2
+      - name: Syntax check (no DB connection)
+        run: python -m py_compile scripts/migrate_tiq72_upgrade6_isolated.py tests/test_migrate_tiq72_upgrade6_isolated.py
+      - name: Mock database identity, backup, transaction and rollback
+        run: python -m pytest -q tests/test_migrate_tiq72_upgrade6_isolated.py
