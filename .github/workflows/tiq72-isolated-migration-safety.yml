@@ -5,6 +5,8 @@ on:
     paths:
       - 'scripts/migrate_tiq72_upgrade6_isolated.py'
       - 'tests/test_migrate_tiq72_upgrade6_isolated.py'
+      - 'tests/test_tiq72_real_postgres18_schema_ci.py'
+      - 'web/trading-challenge/v515/server/sql/tiq72-v515-report-ledger.sql'
       - '.github/workflows/tiq72-isolated-migration-safety.yml'
   workflow_dispatch:
 
@@ -27,3 +29,38 @@ jobs:
         run: python -m py_compile scripts/migrate_tiq72_upgrade6_isolated.py tests/test_migrate_tiq72_upgrade6_isolated.py
       - name: Mock database identity, backup, transaction and rollback
         run: python -m pytest -q tests/test_migrate_tiq72_upgrade6_isolated.py
+
+  ephemeral-postgres18:
+    name: Validate actual v515 DDL on disposable PostgreSQL 18
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: nija_tiq72_ci_scratch
+          POSTGRES_USER: nija_tiq72_ci
+          POSTGRES_PASSWORD: ${{ github.run_id }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U nija_tiq72_ci -d nija_tiq72_ci_scratch"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install pinned isolated PostgreSQL driver for disposable CI
+        run: python -m pip install --only-binary=:all: -r web/trading-challenge/server/requirements-tiq72-preflight.txt
+      - name: Prove schema DDL, uniqueness, foreign keys, constraints, and rollback
+        env:
+          NIJA_TIQ72_CI_EPHEMERAL_POSTGRES: '1'
+          PGHOST: '127.0.0.1'
+          PGPORT: '5432'
+          PGDATABASE: nija_tiq72_ci_scratch
+          PGUSER: nija_tiq72_ci
+          PGPASSWORD: ${{ github.run_id }}
+        run: python -m unittest discover -s tests -p 'test_tiq72_real_postgres18_schema_ci.py' -v
