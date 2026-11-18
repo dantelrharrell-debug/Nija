@@ -17,14 +17,16 @@ def url(host=module.HOST, db=module.DB, user=module.USER, port="5432"):
     return f"postgresql://{user}:{credential}@{host}:{port}/{db}"
 
 class Cursor:
-    def __init__(self, identity=None, tables=None):
+    def __init__(self, identity=None, tables=None, schema="public"):
         self.identity = identity or (module.DB,module.USER)
+        self.schema = schema
         self.tables = tables or [(x,) for x in module.TABLES]
         self.queries = []
     def __enter__(self): return self
     def __exit__(self,*args): return False
     def execute(self, sql, params=None): self.queries.append((sql,params))
-    def fetchone(self): return self.identity
+    def fetchone(self):
+        return (self.schema,) if self.queries[-1][0]=="SELECT current_schema()" else self.identity
     def fetchall(self): return self.tables
 
 class Connection:
@@ -51,12 +53,19 @@ def test_readonly_preflight_checks_identity_without_running_schema():
     db=Connection()
     assert module.migrate(url(),connect=lambda *a,**k:db)=="identity_verified_no_changes"
     assert db.commits==0 and db.rollbacks==1 and db.closed==1
-    assert len(db.c.queries)==1
+    assert len(db.c.queries)==2
     assert db.c.queries[0][0]=="SELECT current_database(), current_user"
+    assert db.c.queries[1][0]=="SELECT current_schema()"
 
 def test_wrong_connected_database_rejected_even_if_url_claims_right_database():
     db=Connection(Cursor(identity=("nija_billing_db","nija_billing_db_user")))
     with pytest.raises(module.MigrationDenied,match="connected_identity_mismatch"):
+        module.migrate(url(),connect=lambda *a,**k:db)
+    assert db.commits==0 and db.rollbacks==1
+
+def test_wrong_current_schema_rejected_before_any_write():
+    db=Connection(Cursor(schema="private"))
+    with pytest.raises(module.MigrationDenied,match="public_schema_required"):
         module.migrate(url(),connect=lambda *a,**k:db)
     assert db.commits==0 and db.rollbacks==1
 
@@ -109,7 +118,7 @@ def test_schema_line_endings_preserve_one_transaction(tmp_path, monkeypatch, lin
     db = Connection()
     assert module.migrate(url(), apply=True, connect=lambda *a, **k: db) == "isolated_test_schema_installed"
     assert db.commits == 1 and db.rollbacks == 0
-    assert "BEGIN;" not in db.c.queries[1][0] and "COMMIT;" not in db.c.queries[1][0]
+    assert "BEGIN;" not in db.c.queries[2][0] and "COMMIT;" not in db.c.queries[2][0]
 
 @pytest.mark.parametrize("change,reason", [
     (lambda sql: sql.replace("\nBEGIN;\n", "\nBEGIN;\n\nBEGIN;\n"), "schema_transaction_boundary_invalid"),
@@ -126,4 +135,4 @@ def test_unsafe_transaction_boundaries_never_execute_schema(tmp_path, monkeypatc
     with pytest.raises(module.MigrationDenied, match=reason):
         module.migrate(url(), apply=True, connect=lambda *a, **k: db)
     assert db.commits == 0 and db.rollbacks == 1 and db.closed == 1
-    assert len(db.c.queries) == 1
+    assert len(db.c.queries) == 2
