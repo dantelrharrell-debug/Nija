@@ -84,8 +84,11 @@ export async function createTiq72InternalSandboxHttpHost({
     res.setHeader('Cache-Control','no-store');
     res.setHeader('X-Content-Type-Options','nosniff');
     res.setHeader('Referrer-Policy','no-referrer');
-    let path;
-    try{path=new URL(req.url,'https://internal.invalid').pathname;}catch{
+    let path, query;
+    try{
+      const parsed=new URL(req.url,'https://internal.invalid');
+      path=parsed.pathname;query=parsed.search;
+    }catch{
       return response(res,400,{error:'invalid_request'});
     }
     if(req.headers.origin===ORIGIN) {
@@ -105,6 +108,10 @@ export async function createTiq72InternalSandboxHttpHost({
       res.statusCode=204;return res.end();
     }
     if(!allowed.has(path))return response(res,404,{error:'not_found'});
+    if(req.method!==allowed.get(path))
+      return response(res,405,{error:'method_not_allowed'});
+    if(path!=='/sandbox/report'&&query)
+      return response(res,400,{error:'unexpected_query'});
     // All browser-supplied identities must still pass the signed owner-proof
     // adapter; the host never exposes a token-issuing endpoint.
     if(req.headers.origin && req.headers.origin!==ORIGIN)
@@ -114,6 +121,9 @@ export async function createTiq72InternalSandboxHttpHost({
       if(!res.writableEnded)res.destroy();
     });
   });
+  server.requestTimeout=12000;
+  server.headersTimeout=10000;
+  server.maxHeadersCount=32;
   return {server,close:()=>dependencies.close()};
 }
 
