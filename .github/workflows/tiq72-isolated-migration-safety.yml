@@ -33,6 +33,16 @@ jobs:
   ephemeral-postgres18:
     name: Validate actual v515 DDL on disposable PostgreSQL 18
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Confirm disposable schema test runner availability
-        run: echo 'Isolated test job initialized; schema tests not yet run'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install isolated driver
+        run: python -m pip install --only-binary=:all: -r web/trading-challenge/server/requirements-tiq72-preflight.txt
+      - name: Generate throwaway local-only database credential
+        run: |
+          ci_credential="$(openssl rand -hex 24)"
+          echo "::add-mask::$ci_credential"
+          printf 'PGPASSWORD=%s\n' "$ci_credential" >> "$GITHUB_ENV"
