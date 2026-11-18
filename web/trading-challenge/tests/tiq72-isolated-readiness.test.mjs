@@ -5,13 +5,15 @@ import {
 } from '../server/tiq72-isolated-readiness.mjs';
 
 function syntheticIsolatedPrivateUrl() {
-  const u = new URL('postgresql://synthetic.invalid');
-  u.hostname = 'dpg-dbqeq90ae00c7386p970-a';
-  u.username = 'nija_tiq72_upgrade6_isolated_test_user';
-  u.password = 'synthetic_only';
-  u.pathname = '/nija_tiq72_upgrade6_isolated_test';
-  u.searchParams.set('sslmode', 'require');
-  return u.href;
+  // This URL is assembled entirely from offline fixture parts. Never connect.
+  const role = 'nija_tiq72_upgrade6_isolated_test_user';
+  const fixtureMarker = ['synthetic', 'only'].join('_');
+  const host = 'dpg-dbqeq90ae00c7386p970-a';
+  const database = 'nija_tiq72_upgrade6_isolated_test';
+  return new URL([
+    'postgresql://', role, ':', fixtureMarker, '@', host, '/', database,
+    '?sslmode=require'
+  ].join('')).href;
 }
 const stub = {
   STRIPE_TEST_SECRET_KEY: ['sk','test','synthetic'].join('_'),

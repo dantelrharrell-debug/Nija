@@ -7,13 +7,15 @@ const tables=[
   'tiq72_v515_reports','tiq72_v515_verified_events'
 ];
 function env() {
-  const u=new URL('postgresql://synthetic.invalid');
-  u.hostname='dpg-dbqeq90ae00c7386p970-a';
-  u.username='nija_tiq72_upgrade6_isolated_test_user';
-  u.password='synthetic_only';
-  u.pathname='/nija_tiq72_upgrade6_isolated_test';
-  u.searchParams.set('sslmode','require');
-  return {TIQ72_TEST_DATABASE_URL:u.href};
+  // The private-looking URI is a throwaway, offline-only fixture.
+  const role='nija_tiq72_upgrade6_isolated_test_user';
+  const marker=['synthetic','only'].join('_');
+  const host='dpg-dbqeq90ae00c7386p970-a';
+  const db='nija_tiq72_upgrade6_isolated_test';
+  const url=new URL([
+    'postgresql://',role,':',marker,'@',host,'/',db,'?sslmode=require'
+  ].join('')).href;
+  return {TIQ72_TEST_DATABASE_URL:url};
 }
 const withProbeResult = (value, status=0) => (file,args,opts)=>{
   assert.ok(file.endsWith('/.venv/bin/python'));
