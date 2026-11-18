@@ -14,6 +14,14 @@ const tableNames = Object.freeze([
 ]);
 const script = fileURLToPath(new URL('../../../scripts/tiq72_isolated_db_readonly_preflight.py', import.meta.url));
 const blocked = reason => ({status:'blocked', reason, migration_verified:false});
+const allowedFailureCodes = new Set([
+  'private_database_identity_mismatch','private_db_driver_unavailable',
+  'private_db_credentials_rejected','private_db_database_unavailable',
+  'private_db_server_unavailable','private_db_dns_unavailable',
+  'private_db_tcp_unavailable','private_db_tls_or_auth_rejected',
+  'private_db_connection_failed','connected_database_identity_mismatch',
+  'private_db_readonly_catalog_query_failed'
+]);
 export function runTiq72IsolatedDatabaseProbe(env=process.env, run=spawnSync) {
   if (!inspectTiq72IsolatedPrivateUrl(env.TIQ72_TEST_DATABASE_URL))
     return blocked('private_database_identity_mismatch');
@@ -23,10 +31,15 @@ export function runTiq72IsolatedDatabaseProbe(env=process.env, run=spawnSync) {
         env, encoding:'utf8', timeout:12000, maxBuffer:4096,
         stdio:['ignore','pipe','ignore']
       });
-    if (result?.error || result?.status!==0 || typeof result.stdout!=='string' ||
+    if (result?.error || typeof result.stdout!=='string' ||
         result.stdout.length>4096)
       return blocked('private_read_only_preflight_failed');
     const found = JSON.parse(result.stdout);
+    if (result.status!==0) {
+      if (found?.status==='blocked' && allowedFailureCodes.has(found.reason))
+        return blocked(found.reason);
+      return blocked('private_read_only_preflight_failed');
+    }
     if (found?.status!=='identity_verified_read_only' ||
         !Array.isArray(found.expected_tables_present) ||
         !Array.isArray(found.expected_tables_missing) ||
