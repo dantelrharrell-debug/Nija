@@ -92,6 +92,11 @@ jobs:
           test "$row_count" = 1
           echo "Disposable schema and one synthetic row restored successfully"
           CI_PG_RESTORE
-      - name: Destroy disposable PostgreSQL instance and volumes
+      - name: Destroy disposable PostgreSQL and ephemeral credential files
         if: always()
-        run: docker rm -f nija-tiq72-ci-postgres >/dev/null 2>&1 || true
+        run: |
+          docker rm -f nija-tiq72-ci-postgres >/dev/null 2>&1 || true
+          if [ -n "${RUNNER_TEMP:-}" ]; then
+            rm -f -- "$RUNNER_TEMP/tiq72-postgres/secret" "$RUNNER_TEMP/tiq72-postgres/client.pgpass"
+            rmdir -- "$RUNNER_TEMP/tiq72-postgres" 2>/dev/null || true
+          fi
