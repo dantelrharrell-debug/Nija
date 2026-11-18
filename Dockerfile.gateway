@@ -10,7 +10,9 @@ RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requ
 FROM ${PYTHON_BASE}
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /app
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends redis-tools && rm -rf /var/lib/apt/lists/*
+# Gateway calls the Redis client library, not redis-cli. Omit redis-tools to
+# remove an unused command-line utility and its independent OS vulnerability.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY --from=deps-builder /opt/venv /opt/venv
 
 # Copy only necessary files for API Gateway
