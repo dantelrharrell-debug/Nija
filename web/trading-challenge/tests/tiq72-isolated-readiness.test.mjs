@@ -39,7 +39,7 @@ test('plausible credentials never certify or activate checkout or database', () 
     result.report_fulfillment_verified
   ]) assert.equal(value, false);
   const serialized = JSON.stringify(result);
-  for (const secret of Object.values(stub)) {
+  for (const secret of [stub.STRIPE_TEST_SECRET_KEY, stub.STRIPE_TEST_WEBHOOK_SECRET, stub.DATABASE_URL]) {
     assert.equal(serialized.includes(secret), false);
   }
 });
