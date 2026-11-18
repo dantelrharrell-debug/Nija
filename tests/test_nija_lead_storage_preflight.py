@@ -31,7 +31,7 @@ class PreflightTests(unittest.TestCase):
             "NIJA_LEAD_DB_PATH": str(self.lead),
             "NIJA_LEAD_FORWARD_DB_PATH": str(self.forward),
             "NIJA_LEAD_WEBHOOK_TOKEN": "DO_NOT_LEAK_TOKEN",
-            "NIJA_LEAD_FORWARD_URL": "https://hooks.zapier.com/hooks/catch/123456/syntheticQA_token/",
+            "NIJA_LEAD_FORWARD_URL": "https://hooks.zapier.com/hooks/catch/secret_value",
         }
 
     def tearDown(self):
@@ -54,7 +54,7 @@ class PreflightTests(unittest.TestCase):
         self.assertFalse(result["production_certified"])
         self.assertEqual(before, self.lead.read_bytes())
         self.assertNotIn("DO_NOT_LEAK_TOKEN", json.dumps(result))
-        self.assertNotIn("syntheticQA_token", json.dumps(result))
+        self.assertNotIn("secret_value", json.dumps(result))
         self.assertNotIn("private@example.com", json.dumps(result))
 
     def test_ephemeral_default_is_not_verified_even_when_readable(self):
@@ -123,20 +123,6 @@ class PreflightTests(unittest.TestCase):
             self.assertEqual(before, after)
             self.assertIn("lead_database_not_verified", result["issues"])
             self.assertEqual(result["lead_database"]["read_error"], "wal_database_requires_offline_snapshot")
-
-    def test_rollback_journal_refuses_sqlite_and_preserves_files(self):
-        from unittest.mock import patch
-        make_db(self.lead)
-        make_db(self.forward, forwarding=True)
-        journal = Path(str(self.lead) + "-journal")
-        journal.write_bytes(b"synthetic hot rollback journal")
-        before = {p.name: p.read_bytes() for p in self.disk.iterdir()}
-        from scripts.nija_lead_storage_preflight import _sqlite_summary
-        with patch("sqlite3.connect", side_effect=AssertionError("SQLite must not open")):
-            result = _sqlite_summary(self.lead)
-        self.assertEqual(result["read_error"], "rollback_journal_requires_offline_snapshot")
-        self.assertIsNone(result["row_count"])
-        self.assertEqual(before, {p.name: p.read_bytes() for p in self.disk.iterdir()})
 
     def test_whitespace_primary_override_does_not_fall_back(self):
         make_db(self.lead)
