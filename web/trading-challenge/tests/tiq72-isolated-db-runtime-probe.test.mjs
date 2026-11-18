@@ -73,3 +73,16 @@ test('inconsistent table inventory and failed child process fail closed',()=>{
   assert.equal(runTiq72IsolatedDatabaseProbe(env(),withProbeResult({},2)).status,'blocked');
   assert.equal(runTiq72IsolatedDatabaseProbe(env(),()=>({status:0,stdout:'not json'})).status,'blocked');
 });
+
+test('known failure codes may be shown without sensitive Python or driver text',()=>{
+  const classified=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'blocked',reason:'private_db_dns_unavailable'
+  },3));
+  assert.equal(classified.reason,'private_db_dns_unavailable');
+  assert.equal(classified.migration_verified,false);
+  const unexpected=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'blocked',reason:'postgresql://synthetic@wrong-host'
+  },3));
+  assert.equal(unexpected.reason,'private_read_only_preflight_failed');
+  assert.ok(!JSON.stringify(unexpected).includes('synthetic@wrong-host'));
+});
