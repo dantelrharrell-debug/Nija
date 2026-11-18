@@ -1,0 +1,36 @@
+name: TIQ72 isolated readiness (no payments)
+
+on:
+  pull_request:
+    paths:
+      - 'web/trading-challenge/server/tiq72-isolated-readiness.mjs'
+      - 'web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs'
+      - 'web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs'
+      - 'web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs'
+      - '.github/workflows/tiq72-isolated-readiness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-readiness:
+    name: Test redacted readiness and payment holds
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check without dependency installation
+        run: |
+          node --check web/trading-challenge/server/tiq72-isolated-readiness.mjs
+          node --check web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs
+          node --check web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
+      - name: Fail-closed readiness and secret redaction tests
+        run: node --test web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs
+      - name: Confirm payment and database routes stay disabled
+        run: |
+          grep -q 'checkout_available:false' web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
+          grep -q 'res.writeHead(503)' web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
