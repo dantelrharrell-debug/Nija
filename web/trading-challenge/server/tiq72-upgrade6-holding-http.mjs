@@ -4,12 +4,20 @@ import http from 'node:http';
 import { TIQ72_DECISIONS, TIQ72_VERSION } from './tiq72-authoritative-adapter.mjs';
 import { safeTiq72IsolatedReadiness } from './tiq72-isolated-readiness.mjs';
 import { runTiq72IsolatedDatabaseProbe } from './tiq72-isolated-db-runtime-probe.mjs';
+import { inspectTiq72StripeTestPrice } from './tiq72-stripe-test-readonly-preflight.mjs';
 
 const port=Number(process.env.PORT||10000);
 // This value-free diagnostic appears only in private Render application logs.
 // It is not a payment-authorizing gate and is deliberately absent from HTTP.
 console.info('TIQ72_ISOLATED_PREFLIGHT '+JSON.stringify(safeTiq72IsolatedReadiness()));
 console.info('TIQ72_PRIVATE_DB_PREFLIGHT '+JSON.stringify(runTiq72IsolatedDatabaseProbe()));
+// Sandbox GET only; no Stripe payment or report endpoint is ever activated.
+void inspectTiq72StripeTestPrice().then(result=>{
+ console.info('TIQ72_STRIPE_TEST_PRICE_PREFLIGHT '+JSON.stringify(result));
+}).catch(()=>{
+ console.info('TIQ72_STRIPE_TEST_PRICE_PREFLIGHT '+JSON.stringify({
+  status:'blocked',reason:'stripe_test_price_verification_failed',checkout_available:false}));
+});
 const server=http.createServer((req,res)=>{
  res.setHeader('Content-Type','application/json; charset=utf-8');
  res.setHeader('Cache-Control','no-store');
