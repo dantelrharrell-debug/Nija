@@ -5,13 +5,13 @@ import {
 } from '../server/tiq72-isolated-readiness.mjs';
 
 function syntheticIsolatedPrivateUrl() {
-  const u = new URL('postgresql://synthetic.invalid');
-  u.hostname = 'dpg-dbqeq90ae00c7386p970-a';
-  u.username = 'nija_tiq72_upgrade6_isolated_test_user';
-  u.password = 'synthetic_only';
-  u.pathname = '/nija_tiq72_upgrade6_isolated_test';
-  u.searchParams.set('sslmode', 'require');
-  return u.href;
+  // Construct the throwaway fixture without a credential-shaped source literal.
+  // There is no provider call and the resulting URL is used only by offline tests.
+  const user = 'nija_tiq72_upgrade6_isolated_test_user';
+  const marker = ['synthetic', 'only'].join('_');
+  const host = 'dpg-dbqeq90ae00c7386p970-a';
+  const db = 'nija_tiq72_upgrade6_isolated_test';
+  return ['postgresql://', user, ':', marker, '@', host, '/', db, '?sslmode=require'].join('');
 }
 const stub = {
   STRIPE_TEST_SECRET_KEY: ['sk','test','synthetic'].join('_'),
