@@ -40,7 +40,7 @@ jobs:
           node --test web/trading-challenge/tests/tiq72-isolated-db-runtime-probe.test.mjs
           node --test web/trading-challenge/tests/tiq72-upgrade6-config-preflight.test.mjs
       - name: Offline private PostgreSQL diagnostic tests
-        run: python3 -m unittest tests.test_tiq72_isolated_db_readonly_preflight -v
+        run: python3 -m unittest discover -s tests -p 'test_tiq72_isolated_db_readonly_preflight.py' -v
       - name: Confirm payment and database routes stay disabled
         run: |
           grep -q 'checkout_available:false' web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
