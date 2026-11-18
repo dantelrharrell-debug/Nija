@@ -4,11 +4,15 @@ on:
   pull_request:
     paths:
       - 'web/trading-challenge/server/tiq72-isolated-readiness.mjs'
+      - 'web/trading-challenge/server/tiq72-signed-owner-proof.mjs'
+      - 'web/trading-challenge/server/tiq72-v515-auth-adapter.mjs'
       - 'web/trading-challenge/server/requirements-tiq72-preflight.txt'
       - 'web/trading-challenge/server/tiq72-isolated-db-runtime-probe.mjs'
       - 'web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs'
       - 'web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs'
       - 'web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs'
+      - 'web/trading-challenge/tests/tiq72-signed-owner-proof.test.mjs'
+      - 'web/trading-challenge/tests/tiq72-v515-auth-adapter.test.mjs'
       - 'web/trading-challenge/tests/tiq72-isolated-db-runtime-probe.test.mjs'
       - 'web/trading-challenge/tests/tiq72-upgrade6-config-preflight.test.mjs'
       - '.github/workflows/tiq72-isolated-readiness.yml'
@@ -32,12 +36,16 @@ jobs:
       - name: Syntax check without dependency installation
         run: |
           node --check web/trading-challenge/server/tiq72-isolated-readiness.mjs
+          node --check web/trading-challenge/server/tiq72-signed-owner-proof.mjs
+          node --check web/trading-challenge/server/tiq72-v515-auth-adapter.mjs
           node --check web/trading-challenge/server/tiq72-isolated-db-runtime-probe.mjs
           node --check web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs
           node --check web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
       - name: Fail-closed readiness and secret redaction tests
         run: |
           node --test web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs
+          node --test web/trading-challenge/tests/tiq72-signed-owner-proof.test.mjs
+          node --test web/trading-challenge/tests/tiq72-v515-auth-adapter.test.mjs
           node --test web/trading-challenge/tests/tiq72-isolated-db-runtime-probe.test.mjs
           node --test web/trading-challenge/tests/tiq72-upgrade6-config-preflight.test.mjs
       - name: Offline private PostgreSQL diagnostic tests
