@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'web/trading-challenge/server/tiq72-isolated-readiness.mjs'
+      - 'web/trading-challenge/server/tiq72-private-db-startup-preflight.mjs'
+      - 'web/trading-challenge/tests/tiq72-private-db-startup-preflight.test.mjs'
+      - 'scripts/tiq72_isolated_db_readonly_preflight.py'
       - 'web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs'
       - 'web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs'
       - 'web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs'
@@ -26,10 +29,13 @@ jobs:
       - name: Syntax check without dependency installation
         run: |
           node --check web/trading-challenge/server/tiq72-isolated-readiness.mjs
+          node --check web/trading-challenge/server/tiq72-private-db-startup-preflight.mjs
           node --check web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs
           node --check web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
       - name: Fail-closed readiness and secret redaction tests
-        run: node --test web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs
+        run: |
+          node --test web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs
+          node --test web/trading-challenge/tests/tiq72-private-db-startup-preflight.test.mjs
       - name: Confirm payment and database routes stay disabled
         run: |
           grep -q 'checkout_available:false' web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
