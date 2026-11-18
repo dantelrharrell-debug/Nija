@@ -39,9 +39,15 @@ test('isolated holding HTTP never exposes payment, webhook or report endpoints',
     if (child.exitCode !== null) {
       // Only expose an allowlisted error category, never raw stderr or environment values.
       const reason = /ERR_MODULE_NOT_FOUND/.test(stderr) ? 'module_missing' :
+        /ERR_[A-Z_]+/.test(stderr) ? (stderr.match(/ERR_[A-Z_]+/) || ['node_error'])[0] :
+        /ReferenceError:/.test(stderr) ? 'reference_error' :
+        /TypeError:/.test(stderr) ? 'type_error' :
+        /SyntaxError:/.test(stderr) ? 'syntax_error' :
         /EADDRINUSE/.test(stderr) ? 'port_in_use' :
         /EACCES|EPERM/.test(stderr) ? 'listen_permission_denied' : 'startup_failed';
-      throw new Error('holding service exited before HTTP readiness: ' + reason + '; code=' + child.exitCode);
+      const locations = [...stderr.matchAll(/(?:file:\/\/)?[^\s()]*\/([a-zA-Z0-9_-]+\.mjs):([0-9]+):([0-9]+)/g)];
+      const origin = locations.length ? locations[0][1] + ':' + locations[0][2] : 'unknown';
+      throw new Error('holding service exited before HTTP readiness: ' + reason + '; source=' + origin + '; code=' + child.exitCode);
     }
     try {
       healthy = await fetch(base + '/healthz', {signal: AbortSignal.timeout(500)});
