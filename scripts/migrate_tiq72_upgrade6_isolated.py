@@ -46,6 +46,9 @@ def migrate(url, apply=False, connect=None):
                 cursor.execute("SELECT current_database(), current_user")
                 if tuple(cursor.fetchone())!=(DB,USER):
                     raise MigrationDenied("connected_identity_mismatch")
+                cursor.execute("SELECT current_schema()")
+                if tuple(cursor.fetchone()) != ("public",):
+                    raise MigrationDenied("public_schema_required")
                 if not apply:
                     db.rollback()
                     return "identity_verified_no_changes"
