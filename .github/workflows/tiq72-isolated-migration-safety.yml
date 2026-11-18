@@ -73,17 +73,17 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_tiq72_real_postgres18_schema_ci.py' -v
       - name: Rehearse logical backup and restoration in disposable container
         run: |
-          docker exec nija-tiq72-ci-postgres sh -euc '
-            psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "INSERT INTO tiq72_v515_runs (run_id,owner_id,canonical_run,canonical_digest,attempt_key) VALUES (\u0027ci-backup-test\u0027,\u0027ci-owner\u0027,\u0027{}\u0027::jsonb,\u0027ci-digest\u0027,\u0027ci-attempt\u0027)"
-            pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-privileges --file=/tmp/tiq72-ci.dump
-            createdb -U "$POSTGRES_USER" nija_tiq72_ci_restore
-            pg_restore -U "$POSTGRES_USER" -d nija_tiq72_ci_restore --exit-on-error --no-owner --no-privileges /tmp/tiq72-ci.dump
-            table_count=$(psql -U "$POSTGRES_USER" -d nija_tiq72_ci_restore -At -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=\u0027public\u0027 AND table_name LIKE \u0027tiq72_v515_%\u0027")
-            row_count=$(psql -U "$POSTGRES_USER" -d nija_tiq72_ci_restore -At -c "SELECT COUNT(*) FROM tiq72_v515_runs WHERE run_id=\u0027ci-backup-test\u0027")
-            test "$table_count" = 4
-            test "$row_count" = 1
-            echo "Disposable schema and one synthetic row restored successfully"
-          '
+          docker exec -i nija-tiq72-ci-postgres sh -eu <<'CI_PG_RESTORE'
+          psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "INSERT INTO tiq72_v515_runs (run_id,owner_id,canonical_run,canonical_digest,attempt_key) VALUES ('ci-backup-test','ci-owner','{}'::jsonb,'ci-digest','ci-attempt')"
+          pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-privileges --file=/tmp/tiq72-ci.dump
+          createdb -U "$POSTGRES_USER" nija_tiq72_ci_restore
+          pg_restore -U "$POSTGRES_USER" -d nija_tiq72_ci_restore --exit-on-error --no-owner --no-privileges /tmp/tiq72-ci.dump
+          table_count=$(psql -U "$POSTGRES_USER" -d nija_tiq72_ci_restore -At -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'tiq72_v515_%'")
+          row_count=$(psql -U "$POSTGRES_USER" -d nija_tiq72_ci_restore -At -c "SELECT COUNT(*) FROM tiq72_v515_runs WHERE run_id='ci-backup-test'")
+          test "$table_count" = 4
+          test "$row_count" = 1
+          echo "Disposable schema and one synthetic row restored successfully"
+          CI_PG_RESTORE
       - name: Destroy disposable PostgreSQL instance and volumes
         if: always()
         run: docker rm -f nija-tiq72-ci-postgres >/dev/null 2>&1 || true
