@@ -77,7 +77,7 @@ def test_apply_requires_separate_backup_restore_gate():
 
 def test_apply_checks_all_tables_and_commits_only_on_success():
     db=Connection()
-    with patch.dict("os.environ",{"NIJA_TIQ72_TEST_SCHEMA_APPLY":"APPROVED_TEST_ONLY"}):
+    with patch.dict("os.environ",{"NIJA_TIQ72_ISOLATED_SCHEMA_APPLY":"APPROVED_TEST_ONLY", "NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED":"APPROVED"}):
         assert module.migrate(url(),apply=True,connect=lambda *a,**k:db)=="isolated_test_schema_installed"
     assert db.commits==1 and db.rollbacks==0 and db.closed==1
     ddl = [q[0] for q in db.c.queries if "CREATE TABLE IF NOT EXISTS tiq72_v515_runs" in q[0]]
@@ -87,7 +87,7 @@ def test_apply_checks_all_tables_and_commits_only_on_success():
 
 def test_missing_table_rolls_back():
     db=Connection(Cursor(tables=[("tiq72_v515_runs",)]))
-    with patch.dict("os.environ",{"NIJA_TIQ72_TEST_SCHEMA_APPLY":"APPROVED_TEST_ONLY"}):
+    with patch.dict("os.environ",{"NIJA_TIQ72_ISOLATED_SCHEMA_APPLY":"APPROVED_TEST_ONLY", "NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED":"APPROVED"}):
         with pytest.raises(module.MigrationDenied,match="schema_postcondition_failed"):
             module.migrate(url(),apply=True,connect=lambda *a,**k:db)
     assert db.commits==0 and db.rollbacks==1
@@ -104,7 +104,8 @@ def test_schema_line_endings_preserve_one_transaction(tmp_path, monkeypatch, lin
     original = module.SCHEMA.read_text()
     schema.write_bytes(original.replace("\n", line_ending).encode())
     monkeypatch.setattr(module, "SCHEMA", schema)
-    monkeypatch.setenv("NIJA_TIQ72_TEST_SCHEMA_APPLY", "APPROVED_TEST_ONLY")
+    monkeypatch.setenv("NIJA_TIQ72_ISOLATED_SCHEMA_APPLY", "APPROVED_TEST_ONLY")
+    monkeypatch.setenv("NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED", "APPROVED")
     db = Connection()
     assert module.migrate(url(), apply=True, connect=lambda *a, **k: db) == "isolated_test_schema_installed"
     assert db.commits == 1 and db.rollbacks == 0
@@ -119,7 +120,8 @@ def test_unsafe_transaction_boundaries_never_execute_schema(tmp_path, monkeypatc
     schema = tmp_path / "schema.sql"
     schema.write_text(change(module.SCHEMA.read_text()))
     monkeypatch.setattr(module, "SCHEMA", schema)
-    monkeypatch.setenv("NIJA_TIQ72_TEST_SCHEMA_APPLY", "APPROVED_TEST_ONLY")
+    monkeypatch.setenv("NIJA_TIQ72_ISOLATED_SCHEMA_APPLY", "APPROVED_TEST_ONLY")
+    monkeypatch.setenv("NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED", "APPROVED")
     db = Connection()
     with pytest.raises(module.MigrationDenied, match=reason):
         module.migrate(url(), apply=True, connect=lambda *a, **k: db)
