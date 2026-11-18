@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {runTiq72PrivateDbPreflight} from '../server/tiq72-private-db-startup-preflight.mjs';
 
-const secret = 'NEVER_DISPLAY_THIS_SYNTHETIC_ONLY';
-const url = 'postgresql://nija_tiq72_upgrade6_isolated_test_user:' + secret +
+const syntheticMarker = 'NEVER_DISPLAY_THIS_SYNTHETIC_ONLY';
+const url = 'postgresql://nija_tiq72_upgrade6_isolated_test_user:' + syntheticMarker +
   '@dpg-dbqeq90ae00c7386p970-a/nija_tiq72_upgrade6_isolated_test?sslmode=require';
 const allTables = [
   'tiq72_v515_runs', 'tiq72_v515_reservations',
@@ -36,7 +36,7 @@ test('reports authenticated table presence only, not schema or payment certifica
   assert.equal(report.expected_tables_missing.length, 3);
   assert.equal(report.schema_certified, false);
   assert.equal(report.payment_certified, false);
-  assert.ok(!JSON.stringify(report).includes(secret));
+  assert.ok(!JSON.stringify(report).includes(syntheticMarker));
 });
 
 test('all tables still does not certify columns, backup, or payments', () => {
@@ -47,23 +47,23 @@ test('all tables still does not certify columns, backup, or payments', () => {
   assert.equal(report.payment_certified, false);
 });
 
-test('redacts unexpected stdout, injection and secret-containing errors', () => {
+test('redacts unexpected stdout, injection and syntheticMarker-containing errors', () => {
   for (const p of [
     {...valid, expected_tables_present: [...allTables, 'wrong_table'], expected_tables_missing: []},
     {...valid, expected_tables_present: [...allTables, allTables[0]], expected_tables_missing: []},
     {...valid, migration_applied: true},
-    {...valid, secret: secret, expected_tables_present: [secret]},
-    {status: 'error', reason: secret},
+    {...valid, syntheticMarker: syntheticMarker, expected_tables_present: [syntheticMarker]},
+    {status: 'error', reason: syntheticMarker},
   ]) {
     const report = runTiq72PrivateDbPreflight({env: {TIQ72_TEST_DATABASE_URL: url}, invoke: fake(p)});
     assert.equal(report.status, 'blocked');
-    assert.ok(!JSON.stringify(report).includes(secret));
+    assert.ok(!JSON.stringify(report).includes(syntheticMarker));
   }
 });
 
 test('failed read-only result cannot become a certification', () => {
   const result = runTiq72PrivateDbPreflight({env: {TIQ72_TEST_DATABASE_URL: url},
-    invoke: fake({status: 'blocked', reason: 'private_read_only_preflight_failed', detail: secret}, 3)});
+    invoke: fake({status: 'blocked', reason: 'private_read_only_preflight_failed', detail: syntheticMarker}, 3)});
   assert.deepEqual([result.status, result.reason, result.payment_certified],
     ['blocked','private_read_only_preflight_failed',false]);
 });
@@ -71,14 +71,14 @@ test('failed read-only result cannot become a certification', () => {
 test('throws, timeouts and malformed output fail closed', () => {
   const env = {TIQ72_TEST_DATABASE_URL: url};
   for (const invoke of [
-    () => {throw Error(secret);},
-    () => ({status: null, error: new Error(secret), stdout: ''}),
+    () => {throw Error(syntheticMarker);},
+    () => ({status: null, error: new Error(syntheticMarker), stdout: ''}),
     () => ({status: 0, signal: 'SIGTERM', stdout: JSON.stringify(valid)}),
-    () => ({status: 0, stdout: secret}),
-    () => ({status: 0, stdout: JSON.stringify(valid) + '\n' + secret})
+    () => ({status: 0, stdout: syntheticMarker}),
+    () => ({status: 0, stdout: JSON.stringify(valid) + '\n' + syntheticMarker})
   ]) {
     const report = runTiq72PrivateDbPreflight({env, invoke});
     assert.equal(report.status, 'blocked');
-    assert.ok(!JSON.stringify(report).includes(secret));
+    assert.ok(!JSON.stringify(report).includes(syntheticMarker));
   }
 });
