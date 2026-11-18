@@ -44,3 +44,18 @@ test('legacy checkout cannot be enabled',()=>{
  const r=inspectTiq72TestConfig({...good,NIJA_GAME_BROWSER_CHECKOUT_ENABLED:'true'});
  assert.ok(r.errors.includes('legacy_checkout_must_be_disabled'));
 });
+
+test('verified NIJA sandbox product identifier is valid without accepting a malformed ID', () => {
+ const match = inspectTiq72TestConfig({
+  ...good,
+  TIQ72_STRIPE_TEST_PRICE_ID:'price_1UYToJRS5Ezp77RQVkx96eS5',
+  TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_nija_iq72_sandbox_v1'
+ });
+ assert.equal(match.config_ready,true);
+ assert.ok(!match.errors.includes('test_product_missing'));
+ for (const invalid of ['prod_nija iQ72', 'prod_nija/iQ72', 'prod_', 'prod_abc\\nX']) {
+  const failed=inspectTiq72TestConfig({...good,TIQ72_STRIPE_TEST_PRODUCT_ID:invalid});
+  assert.equal(failed.config_ready,false);
+  assert.ok(failed.errors.includes('test_product_missing'));
+ }
+});
