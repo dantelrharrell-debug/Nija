@@ -7,6 +7,7 @@ on:
       - 'web/trading-challenge/server/package-lock.json'
       - 'web/trading-challenge/server/tiq72-isolated-v515-runtime.mjs'
       - 'web/trading-challenge/server/tests/tiq72-isolated-v515-runtime.test.mjs'
+      - 'scripts/tiq72-isolated-render-build.sh'
       - '.github/workflows/tiq72-isolated-node-backend-dependencies.yml'
   workflow_dispatch:
 
@@ -51,6 +52,28 @@ jobs:
         run: node --test tests/tiq72-isolated-v515-runtime.test.mjs
       - name: Enforce high-severity runtime dependency audit
         run: npm audit --omit=dev --audit-level=high
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Reject wrong isolated Render build role before any install
+        working-directory: .
+        run: |
+          set -euo pipefail
+          bash -n scripts/tiq72-isolated-render-build.sh
+          if bash scripts/tiq72-isolated-render-build.sh; then
+            echo 'Build unexpectedly accepted missing isolated scope' >&2
+            exit 1
+          fi
+          if TIQ72_ISOLATED_BUILD_SCOPE=holding-test-only RENDER_SERVICE_ID=srv-not-allowed bash scripts/tiq72-isolated-render-build.sh; then
+            echo 'Build unexpectedly accepted wrong service identity' >&2
+            exit 1
+          fi
+      - name: Install both pinned runtime stacks in isolated CI
+        working-directory: .
+        env:
+          TIQ72_ISOLATED_BUILD_SCOPE: holding-test-only
+          RENDER_SERVICE_ID: ''
+        run: bash scripts/tiq72-isolated-render-build.sh
       - name: Publish resolved dependency lock for source review
         if: always()
         uses: actions/upload-artifact@v4
