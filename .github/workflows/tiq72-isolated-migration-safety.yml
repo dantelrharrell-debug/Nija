@@ -42,18 +42,26 @@ jobs:
       - name: Install isolated PostgreSQL driver for offline CI
         run: |
           python -m pip install --only-binary=:all: -r web/trading-challenge/server/requirements-tiq72-preflight.txt
-      - name: Generate throwaway local-only database credential
+      - name: Create isolated, ephemeral database password file
         run: |
-          ci_credential="$(openssl rand -hex 24)"
-          echo "::add-mask::$ci_credential"
-          printf 'PGPASSWORD=%s\n' "$ci_credential" >> "$GITHUB_ENV"
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/tiq72-postgres"
+          openssl rand -hex 32 > "$RUNNER_TEMP/tiq72-postgres/secret"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/tiq72-postgres/secret")"
+          printf '127.0.0.1:5432:nija_tiq72_ci_scratch:nija_tiq72_ci:%s\n' \
+            "$(cat "$RUNNER_TEMP/tiq72-postgres/secret")" > "$RUNNER_TEMP/tiq72-postgres/client.pgpass"
+          chmod 600 "$RUNNER_TEMP/tiq72-postgres/client.pgpass"
+          printf 'PGPASSFILE=%s\n' "$RUNNER_TEMP/tiq72-postgres/client.pgpass" >> "$GITHUB_ENV"
       - name: Start PostgreSQL 18 bound only to runner loopback
         run: |
+          set -euo pipefail
           docker run -d --rm --name nija-tiq72-ci-postgres \
             --publish 127.0.0.1:5432:5432 \
+            --mount "type=bind,src=$RUNNER_TEMP/tiq72-postgres/secret,dst=/run/secrets/tiq72-db-password,readonly" \
             --env POSTGRES_DB=nija_tiq72_ci_scratch \
             --env POSTGRES_USER=nija_tiq72_ci \
-            --env POSTGRES_PASSWORD="$PGPASSWORD" \
+            --env POSTGRES_PASSWORD_FILE=/run/secrets/tiq72-db-password \
             postgres:18
           for attempt in $(seq 1 30); do
             if docker exec nija-tiq72-ci-postgres pg_isready -U nija_tiq72_ci -d nija_tiq72_ci_scratch; then
@@ -84,6 +92,11 @@ jobs:
           test "$row_count" = 1
           echo "Disposable schema and one synthetic row restored successfully"
           CI_PG_RESTORE
-      - name: Destroy disposable PostgreSQL instance and volumes
+      - name: Destroy disposable PostgreSQL and ephemeral credential files
         if: always()
-        run: docker rm -f nija-tiq72-ci-postgres >/dev/null 2>&1 || true
+        run: |
+          docker rm -f nija-tiq72-ci-postgres >/dev/null 2>&1 || true
+          if [ -n "${RUNNER_TEMP:-}" ]; then
+            rm -f -- "$RUNNER_TEMP/tiq72-postgres/secret" "$RUNNER_TEMP/tiq72-postgres/client.pgpass"
+            rmdir -- "$RUNNER_TEMP/tiq72-postgres" 2>/dev/null || true
+          fi
