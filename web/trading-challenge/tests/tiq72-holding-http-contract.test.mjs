@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { fileURLToPath } from 'node:url';
 
 async function availablePort() {
   const server = createServer();
@@ -18,7 +19,10 @@ async function availablePort() {
 
 test('isolated holding HTTP never exposes payment, webhook or report endpoints', {timeout: 30000}, async t => {
   const port = await availablePort();
-  const child = spawn(process.execPath, ['web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs'], {
+  // npm test runs from web/trading-challenge while CI may run from the repo root.
+  // Resolve relative to this test file, never the caller's working directory.
+  const holdingSource = fileURLToPath(new URL('../server/tiq72-upgrade6-holding-http.mjs', import.meta.url));
+  const child = spawn(process.execPath, [holdingSource], {
     cwd: process.cwd(),
     env: {
       PATH: process.env.PATH,
