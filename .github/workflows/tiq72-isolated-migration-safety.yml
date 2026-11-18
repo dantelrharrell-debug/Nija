@@ -34,20 +34,6 @@ jobs:
     name: Validate actual v515 DDL on disposable PostgreSQL 18
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_DB: nija_tiq72_ci_scratch
-          POSTGRES_USER: nija_tiq72_ci
-          POSTGRES_PASSWORD: ${{ github.run_id }}
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U nija_tiq72_ci -d nija_tiq72_ci_scratch"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,6 +41,27 @@ jobs:
           python-version: '3.14'
       - name: Install pinned isolated PostgreSQL driver for disposable CI
         run: python -m pip install --only-binary=:all: -r web/trading-challenge/server/requirements-tiq72-preflight.txt
+      - name: Generate throwaway local-only database credential
+        run: |
+          ci_credential="$(openssl rand -hex 24)"
+          echo "::add-mask::$ci_credential"
+          printf 'PGPASSWORD=%s\n' "$ci_credential" >> "$GITHUB_ENV"
+      - name: Start PostgreSQL 18 bound only to runner loopback
+        run: |
+          docker run -d --rm --name nija-tiq72-ci-postgres \
+            --publish 127.0.0.1:5432:5432 \
+            --env POSTGRES_DB=nija_tiq72_ci_scratch \
+            --env POSTGRES_USER=nija_tiq72_ci \
+            --env POSTGRES_PASSWORD="$PGPASSWORD" \
+            postgres:18
+          for attempt in $(seq 1 30); do
+            if docker exec nija-tiq72-ci-postgres pg_isready -U nija_tiq72_ci -d nija_tiq72_ci_scratch; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'Disposable PostgreSQL failed to become ready' >&2
+          exit 1
       - name: Prove schema DDL, uniqueness, foreign keys, constraints, and rollback
         env:
           NIJA_TIQ72_CI_EPHEMERAL_POSTGRES: '1'
@@ -62,5 +69,7 @@ jobs:
           PGPORT: '5432'
           PGDATABASE: nija_tiq72_ci_scratch
           PGUSER: nija_tiq72_ci
-          PGPASSWORD: ${{ github.run_id }}
         run: python -m unittest discover -s tests -p 'test_tiq72_real_postgres18_schema_ci.py' -v
+      - name: Destroy disposable PostgreSQL instance and volumes
+        if: always()
+        run: docker rm -f nija-tiq72-ci-postgres >/dev/null 2>&1 || true
