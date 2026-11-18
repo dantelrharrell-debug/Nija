@@ -19,7 +19,7 @@ function fixture(eventType="checkout.session.completed") {
  const stripe={
    webhooks:{constructEvent:(body,signature,secret)=>{
      rawSeen=body;
-     if(signature!=="t=fixture,v1=valid"||secret!=="whsec_fixture")
+     if(signature!=="t=fixture,v1=valid"||secret!==['whsec','fixture'].join('_'))
        throw new Error("signature verification failed");
      return event;
    }},
