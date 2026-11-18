@@ -11,6 +11,8 @@ on:
       - 'web/trading-challenge/tests/tiq72-isolated-db-runtime-probe.test.mjs'
       - 'web/trading-challenge/tests/tiq72-upgrade6-config-preflight.test.mjs'
       - '.github/workflows/tiq72-isolated-readiness.yml'
+      - 'scripts/tiq72_isolated_db_readonly_preflight.py'
+      - 'tests/test_tiq72_isolated_db_readonly_preflight.py'
   workflow_dispatch:
 
 permissions:
@@ -37,6 +39,8 @@ jobs:
           node --test web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs
           node --test web/trading-challenge/tests/tiq72-isolated-db-runtime-probe.test.mjs
           node --test web/trading-challenge/tests/tiq72-upgrade6-config-preflight.test.mjs
+      - name: Offline private PostgreSQL diagnostic tests
+        run: python3 -m unittest tests.test_tiq72_isolated_db_readonly_preflight -v
       - name: Confirm payment and database routes stay disabled
         run: |
           grep -q 'checkout_available:false' web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
