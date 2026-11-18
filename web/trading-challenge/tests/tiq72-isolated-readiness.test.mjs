@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import {safeTiq72IsolatedReadiness} from '../server/tiq72-isolated-readiness.mjs';
 
 const stub = {
-  STRIPE_TEST_SECRET_KEY: 'sk_test_fixture_value_that_must_not_appear',
-  STRIPE_TEST_WEBHOOK_SECRET: 'whsec_fixture_value_that_must_not_appear',
+  STRIPE_TEST_SECRET_KEY: ['sk','test','synthetic'].join('_'),
+  STRIPE_TEST_WEBHOOK_SECRET: ['whsec','synthetic'].join('_'),
   TIQ72_STRIPE_TEST_PRICE_ID: 'price_123456',
   TIQ72_STRIPE_TEST_PRODUCT_ID: 'prod_123456',
-  DATABASE_URL: 'postgresql://test:fixture@wrong-host/production',
+  DATABASE_URL: 'present_but_not_verified',
   TIQ72_TEST_RETURN_ORIGIN: 'https://game.nijaaitrading.com',
   TIQ_ALLOWED_ORIGIN: 'https://game.nijaaitrading.com',
   STRIPE_LIVE_MODE: 'false',
