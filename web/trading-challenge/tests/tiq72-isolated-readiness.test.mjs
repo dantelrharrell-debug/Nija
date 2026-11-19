@@ -18,6 +18,7 @@ function syntheticIsolatedPrivateUrl() {
 const stub = {
   STRIPE_TEST_SECRET_KEY: ['sk','test','synthetic'].join('_'),
   STRIPE_TEST_WEBHOOK_SECRET: ['whsec','synthetic'].join('_'),
+  TIQ72_TEST_OWNER_SIGNING_KEY_B64URL:Buffer.alloc(32,7).toString('base64url'),
   TIQ72_STRIPE_TEST_PRICE_ID: 'price_123456',
   TIQ72_STRIPE_TEST_PRODUCT_ID: 'prod_123456',
   TIQ72_TEST_DATABASE_URL: syntheticIsolatedPrivateUrl(),
@@ -35,7 +36,8 @@ test('missing secrets and isolated DB deny readiness without displaying values',
   assert.equal(result.checkout_available, false);
   assert.equal(result.report_fulfillment_verified, false);
   assert.equal(result.test_configuration, 'incomplete');
-  assert.ok(result.check_codes.includes('test_secret_missing_or_wrong_mode'));
+  assert.ok(result.check_codes.includes('test_secret_missing'));
+  assert.ok(result.check_codes.includes('owner_signing_key_missing'));
   assert.ok(result.check_codes.includes('webhook_secret_missing'));
   assert.ok(result.check_codes.includes('isolated_private_db_identity_format_unconfirmed'));
 });
@@ -54,7 +56,7 @@ test('plausible credentials never certify or activate checkout or database', () 
     result.report_fulfillment_verified
   ]) assert.equal(value, false);
   const serialized = JSON.stringify(result);
-  for (const secret of [stub.STRIPE_TEST_SECRET_KEY, stub.STRIPE_TEST_WEBHOOK_SECRET, stub.TIQ72_TEST_DATABASE_URL]) {
+  for (const secret of [stub.STRIPE_TEST_SECRET_KEY, stub.STRIPE_TEST_WEBHOOK_SECRET, stub.TIQ72_TEST_DATABASE_URL, stub.TIQ72_TEST_OWNER_SIGNING_KEY_B64URL]) {
     assert.equal(serialized.includes(secret), false);
   }
 });
