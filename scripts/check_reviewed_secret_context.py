@@ -79,7 +79,7 @@ def check_all_context(root: Path) -> bool:
         identities = set()
         for item in entries:
             path, line, kind, hashed = (
-                item["path"], item["line"], item["type"], item["hashed_secret"]
+                item["path"], item["line"], item["type"], item["detector_sha1"]
             )
             if (not isinstance(line, int) or line < 1 or
                     not isinstance(hashed, str) or
@@ -105,7 +105,7 @@ def check_all_context(root: Path) -> bool:
         if any(
             row.get("line_number") == stale["line"]
             and row.get("type") == stale["type"]
-            and row.get("hashed_secret") == stale["old_hashed_secret"].replace(":", "")
+            and row.get("hashed_secret") == stale["previous_detector_sha1"].replace(":", "")
             for row in rows
         ):
             return False
