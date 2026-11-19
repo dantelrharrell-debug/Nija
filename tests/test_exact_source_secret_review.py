@@ -217,7 +217,7 @@ def normalize_additional_tiq72_review_for_historical_comparison(current):
             stale["path"], stale["line"], stale["type"]
         ):
             assert hashed == stale["current_detector_sha1"]
-            candidate["detector_sha1"] = stale["previous_detector_sha1"].replace(":", "")
+            candidate["hashed_secret"] = stale["previous_detector_sha1"].replace(":", "")
         else:
             rows.remove(candidate)
             if not rows:
