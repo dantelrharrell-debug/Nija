@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {startVerifiedTestCheckout} from "../server/v515-test-checkout.mjs";
-import {PaidReportDenied,TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
+import {PaidReportDenied,TEST_PRICE,TEST_PRODUCT,ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT} from "../server/verified-report-service.mjs";
 const ownerId="owner-test",attemptKey=["12345678","90abcdef"].join(""),origin="https://game.nijaaitrading.com";
 const canonicalRun={mode:"standard",level:"beginner",dayNum:0,
  challenges:Array.from({length:6},()=>Array.from({length:12},()=>({action:"hold",stop:false})))};
-function fixture() {
+function fixture(testOffer) {
+ const expectedPrice=testOffer?.price??TEST_PRICE;
+ const expectedProduct=testOffer?.product??TEST_PRODUCT;
  let priceCalls=0,created=0,attached=0,reserved=0,previous=null;
- const price={id:TEST_PRICE,livemode:false,active:true,product:TEST_PRODUCT,
+ const price={id:expectedPrice,livemode:false,active:true,product:expectedProduct,
    unit_amount:100,currency:"usd",type:"one_time"};
  const session={id:"cs_test_fixture",livemode:false,mode:"payment",status:"open",
    payment_status:"unpaid",client_reference_id:"reservation-test",
@@ -29,7 +31,7 @@ function fixture() {
      create:async(params,opts)=>{
        created++;
        assert.equal(params.client_reference_id,"reservation-test");
-       assert.equal(params.line_items[0].price,TEST_PRICE);
+       assert.equal(params.line_items[0].price,expectedPrice);
        assert.equal(params.metadata.tiq72_version,"v515-72-decisions");
        assert.ok(opts.idempotencyKey.includes("reservation-test"));
        return session;
@@ -38,7 +40,7 @@ function fixture() {
    }}
  };
  const run=(opts={})=>startVerifiedTestCheckout({ownerId,attemptKey,
-   adultAttested:true,canonicalRun,trustedOrigin:origin,store,stripe,...opts});
+   adultAttested:true,canonicalRun,trustedOrigin:origin,store,stripe,testOffer,...opts});
  return {run,price,session,get created(){return created},
    get priceCalls(){return priceCalls},get attached(){return attached},
    get reserved(){return reserved},set previous(x){previous=x;}};
@@ -86,4 +88,21 @@ test("rejects live Checkout session before attaching",async()=>{
 test("rejects non-Stripe hosted payment URL",async()=>{
  const f=fixture();f.session.url="https://example.net/pay";
  await assert.rejects(f.run(),/hosted_checkout_url_required/);assert.equal(f.attached,0);
+});
+
+test("approved isolated TEST offer is used for pricing and Checkout, legacy default retained",async()=>{
+ const f=fixture({price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT});
+ const result=await f.run();
+ assert.equal(f.priceCalls,1);
+ assert.equal(f.created,1);
+ assert.equal(result.runId,"run-test");
+ const legacy=fixture();
+ await legacy.run();
+ assert.equal(legacy.created,1);
+});
+test("unapproved TEST offer is rejected before any provider requests",async()=>{
+ const f=fixture({price:"price_untrusted",product:ISOLATED_TEST_PRODUCT});
+ await assert.rejects(f.run(),/test_product_mismatch/);
+ assert.equal(f.priceCalls,0);
+ assert.equal(f.created,0);
 });
