@@ -43,6 +43,23 @@ test('missing secrets fail without exposing secret values', () => {
  assert.ok(r.errors.includes('test_secret_wrong_mode'));
  assert.ok(!JSON.stringify(r).includes(wrongMode));
 });
+test('legacy Stripe env name is diagnosed without being used or exposed', () => {
+ const legacyValue=credential('sk_test_');
+ const r=inspectTiq72TestConfig({
+  ...good, STRIPE_TEST_SECRET_KEY:'', STRIPE_SECRET_KEY:legacyValue
+ });
+ assert.equal(r.config_ready,false);
+ assert.ok(r.errors.includes('test_secret_missing'));
+ assert.ok(r.errors.includes('test_secret_legacy_name_present'));
+ assert.equal(JSON.stringify(r).includes(legacyValue),false);
+ const noLegacy=inspectTiq72TestConfig({...good,STRIPE_TEST_SECRET_KEY:'',
+  STRIPE_SECRET_KEY:''});
+ assert.ok(!noLegacy.errors.includes('test_secret_legacy_name_present'));
+ const correct=inspectTiq72TestConfig({...good,STRIPE_SECRET_KEY:legacyValue});
+ assert.equal(correct.config_ready,true);
+ assert.ok(!correct.errors.includes('test_secret_legacy_name_present'));
+});
+
 test('unsafe return origins and live flags fail closed', () => {
  for(const origin of ['http://nija.example','https://nija.example.evil.test/path',
   'https://nija.example/path','https://user@nija.example','https://nija.example:8443']) {

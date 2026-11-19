@@ -9,6 +9,11 @@ export function inspectTiq72TestConfig(env = process.env) {
   const fail = (code, condition) => { if (condition) errors.push(code); };
   // Value-free diagnostic only; never authorizes checkout.
   fail('test_secret_missing', !has('STRIPE_TEST_SECRET_KEY'));
+  // Historical billing uses a different env name. Diagnose the presence of that
+  // alias without displaying, copying, accepting, or authenticating with its value.
+  // Even a valid TEST key stored under the legacy name must fail closed.
+  fail('test_secret_legacy_name_present',
+    !has('STRIPE_TEST_SECRET_KEY') && has('STRIPE_SECRET_KEY'));
   fail('test_secret_wrong_mode', has('STRIPE_TEST_SECRET_KEY') &&
     !/^(sk_test_|rk_test_)/.test(env.STRIPE_TEST_SECRET_KEY));
   fail('webhook_secret_missing', !has('STRIPE_TEST_WEBHOOK_SECRET') ||
