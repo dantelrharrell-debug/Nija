@@ -13,7 +13,7 @@ fi
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 SERVER="$ROOT/web/trading-challenge/server"
 REQ="$SERVER/requirements-tiq72-preflight.txt"
-[ -f "$SERVER/package.json" ] && [ -f "$SERVER/package-lock.json" ] && [ -f "$REQ" ] || {
+[ -s "$SERVER/package.json" ] && [ -s "$SERVER/package-lock.json" ] && [ -s "$REQ" ] || {
   echo 'TIQ72 isolated dependency installation denied: reviewed files absent' >&2
   exit 2
 }
@@ -26,6 +26,11 @@ const base = process.argv[2];
 const pkg = JSON.parse(fs.readFileSync(path.join(base, 'package.json'), 'utf8'));
 const lock = JSON.parse(fs.readFileSync(path.join(base, 'package-lock.json'), 'utf8'));
 const expected = {stripe: '23.1.0', pg: '8.23.1'};
+const nodeMajor = Number(process.versions.node.split('.')[0]);
+if (!Number.isInteger(nodeMajor) || nodeMajor < 22 || nodeMajor > 26) {
+  process.stderr.write('TIQ72 isolated dependency installation denied: unsupported Node major\n');
+  process.exit(2);
+}
 const names = Object.keys(pkg.dependencies || {}).sort();
 if (names.join(',') !== ['pg','stripe'].join(',') ||
     !Object.entries(expected).every(([name, version]) =>
@@ -37,13 +42,17 @@ if (names.join(',') !== ['pg','stripe'].join(',') ||
 }
 NODE
 
-grep -Fqx 'psycopg2-binary==2.9.13' "$REQ" || {
+# Comments and empty lines are allowed; every installable requirement must be reviewed.
+# A simple grep is insufficient: it would allow additional unapproved packages.
+PINNED_PYTHON=$(awk 'NF && $1 !~ /^#/ { print }' "$REQ")
+[ "$PINNED_PYTHON" = 'psycopg2-binary==2.9.13' ] || {
   echo 'TIQ72 isolated dependency installation denied: unreviewed Python dependency' >&2
   exit 2
 }
 
 python3 -m venv "$ROOT/.venv"
-"$ROOT/.venv/bin/python" -m pip install --disable-pip-version-check --requirement "$REQ"
+"$ROOT/.venv/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: --requirement "$REQ"
+"$ROOT/.venv/bin/python" -c 'import psycopg2; assert psycopg2.__version__.startswith("2.9.13")'
 npm --prefix "$SERVER" ci --ignore-scripts --omit=dev --no-fund --no-audit
 npm --prefix "$SERVER" audit --omit=dev --audit-level=high
 (
