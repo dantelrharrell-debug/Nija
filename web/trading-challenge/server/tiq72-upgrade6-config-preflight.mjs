@@ -13,6 +13,18 @@ export function inspectTiq72TestConfig(env = process.env) {
     !/^(sk_test_|rk_test_)/.test(env.STRIPE_TEST_SECRET_KEY));
   fail('webhook_secret_missing', !has('STRIPE_TEST_WEBHOOK_SECRET') ||
     !/^whsec_/.test(env.STRIPE_TEST_WEBHOOK_SECRET || ''));
+  // Match the non-routed runtime's canonical 32..128-byte base64url owner key.
+  // Do not decode, log, echo, or expose any key material in this diagnostic.
+  const signing = env.TIQ72_TEST_OWNER_SIGNING_KEY_B64URL;
+  let signingValid = false;
+  if (typeof signing === 'string' && /^[A-Za-z0-9_-]{43,171}$/.test(signing)) {
+    const bytes = Buffer.from(signing, 'base64url');
+    signingValid = bytes.length >= 32 && bytes.length <= 128 &&
+      bytes.toString('base64url') === signing;
+  }
+  fail('owner_signing_key_missing', !has('TIQ72_TEST_OWNER_SIGNING_KEY_B64URL'));
+  fail('owner_signing_key_invalid', has('TIQ72_TEST_OWNER_SIGNING_KEY_B64URL') &&
+    !signingValid);
   fail('test_price_missing', !/^price_[A-Za-z0-9]+$/.test(env.TIQ72_STRIPE_TEST_PRICE_ID || ''));
   fail('test_product_missing', !/^prod_[A-Za-z0-9_]+$/.test(env.TIQ72_STRIPE_TEST_PRODUCT_ID || ''));
   fail('database_url_missing', !has('DATABASE_URL'));
