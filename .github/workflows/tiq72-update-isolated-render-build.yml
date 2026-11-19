@@ -38,7 +38,7 @@ jobs:
       - name: Syntax and exact-workspace readback test without Render credentials
         run: |
           python -m py_compile scripts/tiq72_update_isolated_render_build.py tests/test_tiq72_update_isolated_render_build.py
-          python -m unittest tests.test_tiq72_update_isolated_render_build -v
+          python -m unittest discover -s tests -p 'test_tiq72_update_isolated_render_build.py' -v
 
   operator-review:
     name: Explicit owner-initiated Render test-only configuration
