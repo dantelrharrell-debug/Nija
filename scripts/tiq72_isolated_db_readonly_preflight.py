@@ -257,12 +257,22 @@ def main():
                 "WHERE table_schema='public' AND table_type='BASE TABLE'"
             )
             public_table_count = int(cur.fetchone()[0])
+            # Inventory non-system schemas without exposing names or row contents.
+            cur.execute(
+                "SELECT count(*) FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE c.relkind IN ('r','p') "
+                "AND n.nspname NOT IN ('public','information_schema') "
+                "AND n.nspname NOT LIKE 'pg_%'"
+            )
+            other_schema_table_count = int(cur.fetchone()[0])
             missing = sorted(set(TABLES) - found)
             contract = not missing and schema_contract_verified(cur)
         print(json.dumps({
             "status": "identity_verified_read_only",
             "expected_tables_present": sorted(found),
             "public_base_table_count": public_table_count,
+            "other_schema_table_count": other_schema_table_count,
             "expected_tables_missing": missing,
             "schema_contract_verified": bool(contract),
             "migration_applied": bool(contract),
