@@ -202,7 +202,7 @@ def normalize_additional_tiq72_review_for_historical_comparison(current):
     stale = review["replaced_stale_identity"]
     for item in review["entries"]:
         path, line, kind, hashed = (
-            item["path"], item["line"], item["type"], item["hashed_secret"]
+            item["path"], item["line"], item["type"], item["detector_sha1"]
         )
         rows = current["results"][path]
         candidates = [
@@ -216,8 +216,8 @@ def normalize_additional_tiq72_review_for_historical_comparison(current):
         if (path, line, kind) == (
             stale["path"], stale["line"], stale["type"]
         ):
-            assert hashed == stale["new_hashed_secret"]
-            candidate["hashed_secret"] = stale["old_hashed_secret"].replace(":", "")
+            assert hashed == stale["current_detector_sha1"]
+            candidate["detector_sha1"] = stale["previous_detector_sha1"].replace(":", "")
         else:
             rows.remove(candidate)
             if not rows:
@@ -235,7 +235,7 @@ def test_supplemental_tiq72_review_is_source_bound_and_exact():
     assert len(review["files"]) == 6
     assert check_context(ROOT, TIQ72_MANIFEST)
     observed = {
-        (e["path"], e["line"], e["type"], e["hashed_secret"])
+        (e["path"], e["line"], e["type"], e["detector_sha1"])
         for e in review["entries"]
     }
     assert len(observed) == 6
