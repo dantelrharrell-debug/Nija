@@ -63,6 +63,25 @@ class IsolatedBuildRepairTests(unittest.TestCase):
                          update.START)
         self.assertEqual(api.state["autoDeployTrigger"], "off")
 
+    def test_previous_less_restrictive_build_is_replaced_without_touching_start(self):
+        api = FakeRender(service(update.PREVIOUS_BUILD))
+        result = update.reconcile_build(
+            apply=True, approval=update.APPROVAL,
+            request=api, token="inert_test_token_value")
+        self.assertEqual(result, "isolated_test_build_setting_updated_deploy_still_required")
+        self.assertEqual(api.state["serviceDetails"]["envSpecificDetails"]["buildCommand"],
+                         "sh scripts/tiq72_install_isolated_dependencies.sh")
+        self.assertEqual(api.state["serviceDetails"]["envSpecificDetails"]["startCommand"],
+                         update.START)
+        self.assertEqual([method for method, _ in api.calls],
+                         ["GET", "PATCH", "GET"])
+
+    def test_build_target_is_strict_installer_only(self):
+        self.assertEqual(update.NEW_BUILD, "sh scripts/tiq72_install_isolated_dependencies.sh")
+        self.assertEqual(update.PREVIOUS_BUILD, "bash scripts/tiq72-isolated-render-build.sh")
+        self.assertNotEqual(update.NEW_BUILD, update.OLD_BUILD)
+        self.assertNotEqual(update.NEW_BUILD, update.PREVIOUS_BUILD)
+
     def test_missing_approval_refuses_before_patch(self):
         api = FakeRender()
         with self.assertRaisesRegex(update.GuardDenied, "operator_review_required"):
