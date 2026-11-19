@@ -13,9 +13,10 @@ export function resolveTestOffer(offer) {
   if(offer!==null && typeof offer==='object' && !Array.isArray(offer) &&
      Object.getPrototypeOf(offer)===Object.prototype &&
      Object.keys(offer).length===2 &&
-     offer.price===ISOLATED_TEST_PRICE &&
-     offer.product===ISOLATED_TEST_PRODUCT)
-    return Object.freeze({price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT});
+     ((offer.price===TEST_PRICE && offer.product===TEST_PRODUCT) ||
+      (offer.price===ISOLATED_TEST_PRICE &&
+       offer.product===ISOLATED_TEST_PRODUCT)))
+    return Object.freeze({price:offer.price,product:offer.product});
   throw new PaidReportDenied('test_product_mismatch');
 }
 const idOf=x=>typeof x==="string"?x:x?.id;
