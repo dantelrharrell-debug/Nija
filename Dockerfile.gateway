@@ -19,6 +19,8 @@ RUN /usr/local/bin/python -m pip install --no-cache-dir --disable-pip-version-ch
     && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA
 # Gateway calls the Redis client library, not redis-cli. Omit redis-tools to
 # remove an unused command-line utility and its independent OS vulnerability.
+# Gateway calls the Redis client library, not redis-cli. Omit redis-tools to
+# remove an unused command-line utility and its independent OS vulnerability.
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY --from=deps-builder /opt/venv /opt/venv
 
