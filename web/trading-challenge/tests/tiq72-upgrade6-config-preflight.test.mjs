@@ -10,6 +10,7 @@ databaseUrl.username = 'fixture';
 databaseUrl.password = credential('');
 const good = {
  STRIPE_TEST_SECRET_KEY:credential('sk_test_'), STRIPE_TEST_WEBHOOK_SECRET:credential('whsec_'),
+ TIQ72_TEST_OWNER_SIGNING_KEY_B64URL:randomBytes(32).toString('base64url'),
  TIQ72_STRIPE_TEST_PRICE_ID:'price_test123',TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_test123',
  DATABASE_URL:databaseUrl.href,
  TIQ72_TEST_RETURN_ORIGIN:'https://nija.example',
@@ -23,12 +24,23 @@ test('valid synthetic config never claims payment certification', () => {
  assert.equal(r.migration_verified,false);
  assert.equal(r.sandbox_e2e_verified,false);
 });
+test('owner signing key missing and malformed values fail closed without leaking material', () => {
+ const missing=inspectTiq72TestConfig({...good, TIQ72_TEST_OWNER_SIGNING_KEY_B64URL:''});
+ assert.ok(missing.errors.includes('owner_signing_key_missing'));
+ const invalid='not_valid_key';
+ const bad=inspectTiq72TestConfig({...good, TIQ72_TEST_OWNER_SIGNING_KEY_B64URL:invalid});
+ assert.ok(bad.errors.includes('owner_signing_key_invalid'));
+ assert.equal(JSON.stringify(bad).includes(invalid),false);
+ const tooLong=randomBytes(129).toString('base64url');
+ assert.ok(inspectTiq72TestConfig({...good, TIQ72_TEST_OWNER_SIGNING_KEY_B64URL:tooLong}).errors.includes('owner_signing_key_invalid'));
+ assert.equal(inspectTiq72TestConfig(good).config_ready,true);
+});
 test('missing secrets fail without exposing secret values', () => {
  const wrongMode = credential('sk_live_');
  const r=inspectTiq72TestConfig({...good,STRIPE_TEST_SECRET_KEY:wrongMode,
  STRIPE_TEST_WEBHOOK_SECRET:''});
  assert.equal(r.config_ready,false);
- assert.ok(r.errors.includes('test_secret_missing_or_wrong_mode'));
+ assert.ok(r.errors.includes('test_secret_wrong_mode'));
  assert.ok(!JSON.stringify(r).includes(wrongMode));
 });
 test('unsafe return origins and live flags fail closed', () => {
