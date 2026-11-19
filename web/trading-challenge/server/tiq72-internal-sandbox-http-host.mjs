@@ -68,6 +68,7 @@ export async function createTiq72InternalSandboxHttpHost({
   const db=databaseProbe(env);
   if(db?.status!=='identity_verified_read_only' ||
      db.expected_schema_present!==true ||
+     db.schema_contract_verified!==true ||
      !Array.isArray(db.expected_tables_missing) ||
      db.expected_tables_missing.length!==0)
     throw new TypeError('isolated_sandbox_schema_unavailable');
