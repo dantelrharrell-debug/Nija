@@ -46,7 +46,9 @@ export function runTiq72IsolatedDatabaseProbe(env=process.env, run=spawnSync) {
         typeof found.migration_applied!=='boolean' ||
         typeof found.schema_contract_verified!=='boolean' ||
         !Number.isSafeInteger(found.public_base_table_count) ||
-        found.public_base_table_count<0 || found.public_base_table_count>1000000)
+        found.public_base_table_count<0 || found.public_base_table_count>1000000 ||
+        !Number.isSafeInteger(found.other_schema_table_count) ||
+        found.other_schema_table_count<0 || found.other_schema_table_count>1000000)
       return blocked('invalid_preflight_result');
     const present=found.expected_tables_present,missing=found.expected_tables_missing;
     if (present.some(x=>!tableNames.includes(x)) ||
@@ -62,6 +64,7 @@ export function runTiq72IsolatedDatabaseProbe(env=process.env, run=spawnSync) {
     return {
       status:'identity_verified_read_only',
       public_base_table_count:found.public_base_table_count,
+      other_schema_table_count:found.other_schema_table_count,
       expected_tables_present: [...present].sort(),
       expected_tables_missing: [...missing].sort(),
       expected_schema_present:missing.length===0 && found.schema_contract_verified,
