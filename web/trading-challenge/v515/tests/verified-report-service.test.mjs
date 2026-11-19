@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {verifyAndBuildPaidReport,recoverFreshPaidReport,PaidReportDenied,TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
+import {verifyAndBuildPaidReport,recoverFreshPaidReport,PaidReportDenied,TEST_PRICE,TEST_PRODUCT,ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT} from "../server/verified-report-service.mjs";
 const ownerId="test-owner",runId="test-run",reservationId="test-reservation",sessionId="cs_test_fixture";
 const canonicalRun={mode:"standard",level:"beginner",dayNum:0,challenges:Array.from({length:6},()=>Array.from({length:12},()=>({action:"hold",stop:false})))};
-function fixture(){
+function fixture(testOffer){
   const session={id:sessionId,livemode:false,mode:"payment",status:"complete",payment_status:"paid",client_reference_id:reservationId,metadata:{tiq72_reservation_id:reservationId},amount_subtotal:100,amount_total:100,currency:"usd",payment_intent:"pi_test_fixture"};
-  const lines={data:[{quantity:1,price:{id:TEST_PRICE,product:TEST_PRODUCT,unit_amount:100,currency:"usd"}}],has_more:false};
+  const lines={data:[{quantity:1,price:{id:testOffer?.price??TEST_PRICE,product:testOffer?.product??TEST_PRODUCT,unit_amount:100,currency:"usd"}}],has_more:false};
   const intent={id:"pi_test_fixture",livemode:false,status:"succeeded",amount_received:100,currency:"usd",latest_charge:"ch_test_fixture"};
   const charge={id:"ch_test_fixture",livemode:false,status:"succeeded",paid:true,amount:100,currency:"usd",payment_intent:intent.id,refunded:false,disputed:false,amount_refunded:0};
   let writes=0;
@@ -50,4 +50,14 @@ test("recovery rejects missing entitlement after fresh verification",async()=>{
 test("recovery rejects unprotected store interface",async()=>{
  const f=fixture();
  await assert.rejects(recoverFreshPaidReport({ownerId,runId,store:f.store,stripe:f.stripe}),/protected_report_store_required/);
+});
+
+test("isolated TEST offer reports require the current verified product and price",async()=>{
+ const testOffer={price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT};
+ const f=fixture(testOffer);
+ const report=await call(f,{testOffer});
+ assert.ok(report);assert.equal(f.writes,1);
+ const old=fixture();
+ await deny(old,"test_product_mismatch",{testOffer});
+ assert.equal(old.writes,0);
 });
