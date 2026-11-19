@@ -100,7 +100,7 @@ def normalized_catalog_definition(value):
     """Normalize only harmless PostgreSQL formatting, never remove predicates."""
     if not isinstance(value, str):
         return ""
-    return re.sub(r"[\\s()]", "", value.lower()).replace("~~", "like").replace("::text", "")
+    return re.sub(r"[\s()]", "", value.lower()).replace("~~", "like").replace("::text", "")
 
 
 
