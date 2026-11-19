@@ -90,9 +90,9 @@ REQUIRED_CHECK_DEFINITIONS = {
 }
 REQUIRED_INDEX_DEFINITIONS = {
     ("tiq72_v515_reservations", "tiq72_v515_res_owner_run"):
-        "usingbtree(owner_id,run_id)",
+        "usingbtreeowner_id,run_id",
     ("tiq72_v515_verified_events", "tiq72_v515_events_reservation"):
-        "usingbtree(reservation_id,received_at)",
+        "usingbtreereservation_id,received_at",
 }
 
 
