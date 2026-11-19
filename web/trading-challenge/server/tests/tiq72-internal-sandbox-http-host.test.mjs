@@ -22,7 +22,7 @@ const scope=Object.freeze({
   TIQ72_TEST_RETURN_ORIGIN:ORIGIN
 });
 const fakeDb=()=>({status:'identity_verified_read_only',
-  expected_schema_present:true,expected_tables_missing:[]});
+  expected_schema_present:true,schema_contract_verified:true,expected_tables_missing:[]});
 const fakePrice=async()=>({status:'price_verified_test_mode_read_only',
   stripe_test_price_verified:true});
 
@@ -61,6 +61,11 @@ test('missing reviewed schema or validated Stripe TEST price rejects before depe
       status:'blocked',stripe_test_price_verified:false}),
     dependenciesFactory:()=>{dependencies++;throw Error('no');}
   }),{message:'isolated_sandbox_stripe_price_unavailable'});
+  await assert.rejects(()=>createTiq72InternalSandboxHttpHost({
+    env:scope,databaseProbe:()=>({...fakeDb(),schema_contract_verified:false}),
+    priceProbe:()=>{throw Error('price_must_not_be_checked_after_invalid_contract');},
+    dependenciesFactory:()=>{dependencies++;throw Error('no');}
+  }),{message:'isolated_sandbox_schema_unavailable'});
   assert.equal(dependencies,0);
 });
 
