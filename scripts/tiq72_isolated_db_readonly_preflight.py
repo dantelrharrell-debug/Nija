@@ -7,6 +7,7 @@ Never executes DDL/DML and never certifies payment or database backup safety.
 """
 import json
 import os
+import re
 import socket
 import sys
 from urllib.parse import unquote, urlsplit
@@ -76,6 +77,32 @@ INDEXES = (
     ("tiq72_v515_verified_events", "tiq72_v515_events_reservation"),
 )
 
+# Constraint existence alone is insufficient: a same-named CHECK (true)
+# does not enforce the intended test-only ledger restrictions. These are
+# canonical PostgreSQL 18 forms of security-critical public schema checks.
+REQUIRED_CHECK_DEFINITIONS = {
+    ("tiq72_v515_runs", "tiq72_v515_run_version"):
+        "checkversion='v515-72-decisions'",
+    ("tiq72_v515_reservations", "tiq72_v515_session_test_only"):
+        "checkstripe_sessionisnullorstripe_sessionlike'cs_test_%'",
+    ("tiq72_v515_verified_events", "tiq72_v515_event_test_session"):
+        "checkstripe_sessionlike'cs_test_%'",
+}
+REQUIRED_INDEX_DEFINITIONS = {
+    ("tiq72_v515_reservations", "tiq72_v515_res_owner_run"):
+        "usingbtreeowner_id,run_id",
+    ("tiq72_v515_verified_events", "tiq72_v515_events_reservation"):
+        "usingbtreereservation_id,received_at",
+}
+
+
+def normalized_catalog_definition(value):
+    """Normalize only harmless PostgreSQL formatting, never remove predicates."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[\s()]", "", value.lower()).replace("~~", "like").replace("::text", "")
+
+
 
 def schema_contract_verified(cursor):
     """Check checked-in ledger structure using read-only system catalogs.
@@ -101,7 +128,8 @@ def schema_contract_verified(cursor):
         return False
 
     cursor.execute(
-        "SELECT t.relname, con.conname, con.contype, ref.relname "
+        "SELECT t.relname, con.conname, con.contype, ref.relname, "
+        "pg_catalog.pg_get_constraintdef(con.oid) "
         "FROM pg_catalog.pg_constraint con "
         "JOIN pg_catalog.pg_class t ON t.oid=con.conrelid "
         "JOIN pg_catalog.pg_namespace ns ON ns.oid=t.relnamespace "
@@ -110,17 +138,24 @@ def schema_contract_verified(cursor):
         (list(TABLES),),
     )
     constraints = {
-        (table, name): (kind, foreign)
-        for table, name, kind, foreign in cursor.fetchall()
+        (table, name): (kind, foreign, definition)
+        for table, name, kind, foreign, definition in cursor.fetchall()
     }
     if any(
-        constraints.get((table, name)) != (kind, reference)
+        (table, name) not in constraints or
+        constraints[(table, name)][:2] != (kind, reference)
         for table, name, kind, reference in CONSTRAINTS
+    ):
+        return False
+    if any(
+        normalized_catalog_definition(constraints[pair][2]) != expected
+        for pair, expected in REQUIRED_CHECK_DEFINITIONS.items()
     ):
         return False
 
     cursor.execute(
-        "SELECT t.relname, i.relname, ix.indisvalid, ix.indisready "
+        "SELECT t.relname, i.relname, ix.indisvalid, ix.indisready, "
+        "pg_catalog.pg_get_indexdef(ix.indexrelid) "
         "FROM pg_catalog.pg_index ix "
         "JOIN pg_catalog.pg_class t ON t.oid=ix.indrelid "
         "JOIN pg_catalog.pg_class i ON i.oid=ix.indexrelid "
@@ -129,10 +164,15 @@ def schema_contract_verified(cursor):
         (list(TABLES),),
     )
     indexes = {
-        (table, index): (valid, ready)
-        for table, index, valid, ready in cursor.fetchall()
+        (table, index): (valid, ready, definition)
+        for table, index, valid, ready, definition in cursor.fetchall()
     }
-    return all(indexes.get(pair) == (True, True) for pair in INDEXES)
+    return all(
+        indexes.get(pair, (False, False, ""))[:2] == (True, True)
+        and normalized_catalog_definition(indexes[pair][2]).endswith(
+            REQUIRED_INDEX_DEFINITIONS[pair])
+        for pair in INDEXES
+    )
 
 
 

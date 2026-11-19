@@ -118,6 +118,29 @@ class EphemeralPostgresSchemaTests(unittest.TestCase):
         from scripts.tiq72_isolated_db_readonly_preflight import schema_contract_verified
         self.assertTrue(schema_contract_verified(self.cursor))
 
+    def test_same_named_but_weakened_constraint_fails_catalog_attestation(self):
+        # DDL occurs only in the disposable GitHub Actions PostgreSQL 18 database.
+        # The test transaction is rolled back by tearDown.
+        from scripts.tiq72_isolated_db_readonly_preflight import schema_contract_verified
+        self.cursor.execute(
+            "ALTER TABLE tiq72_v515_reservations "
+            "DROP CONSTRAINT tiq72_v515_session_test_only"
+        )
+        self.cursor.execute(
+            "ALTER TABLE tiq72_v515_reservations "
+            "ADD CONSTRAINT tiq72_v515_session_test_only CHECK (true)"
+        )
+        self.assertFalse(schema_contract_verified(self.cursor))
+
+    def test_same_named_but_reversed_index_fails_catalog_attestation(self):
+        from scripts.tiq72_isolated_db_readonly_preflight import schema_contract_verified
+        self.cursor.execute("DROP INDEX tiq72_v515_res_owner_run")
+        self.cursor.execute(
+            "CREATE INDEX tiq72_v515_res_owner_run "
+            "ON tiq72_v515_reservations (run_id, owner_id)"
+        )
+        self.assertFalse(schema_contract_verified(self.cursor))
+
     def test_owner_attempt_key_is_unique(self):
         self.insert_run()
         with self.assertRaises(self.driver.errors.UniqueViolation):
