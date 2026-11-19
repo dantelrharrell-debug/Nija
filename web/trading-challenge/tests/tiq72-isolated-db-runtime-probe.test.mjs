@@ -40,7 +40,7 @@ test('rejected cross-workspace URL never launches Python or logs its value',()=>
 test('read-only identity with all tables still never certifies migration or payments',()=>{
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only', expected_tables_present:tables,
-    expected_tables_missing:[], schema_contract_verified:true, migration_applied:true
+    expected_tables_missing:[], public_base_table_count:4, schema_contract_verified:true, migration_applied:true
   }));
   assert.equal(got.status,'identity_verified_read_only');
   assert.equal(got.expected_schema_present,true);
@@ -51,7 +51,8 @@ test('read-only identity with all tables still never certifies migration or paym
 test('missing tables are reported without changing database or granting entitlements',()=>{
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only',expected_tables_present:[tables[0]],
-    expected_tables_missing:tables.slice(1),schema_contract_verified:false,migration_applied:false
+    expected_tables_missing:tables.slice(1),public_base_table_count:1,
+    schema_contract_verified:false,migration_applied:false
   }));
   assert.deepEqual(got.expected_tables_missing,[...tables.slice(1)].sort());
   assert.equal(got.expected_schema_present,false);
@@ -79,7 +80,8 @@ test('inconsistent table inventory and failed child process fail closed',()=>{
 test('four tables without complete reviewed constraints never satisfy the schema contract',()=>{
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only',expected_tables_present:tables,
-    expected_tables_missing:[],schema_contract_verified:false,migration_applied:false
+    expected_tables_missing:[],public_base_table_count:4,
+    schema_contract_verified:false,migration_applied:false
   }));
   assert.equal(got.status,'identity_verified_read_only');
   assert.equal(got.expected_schema_present,false);
@@ -88,7 +90,7 @@ test('four tables without complete reviewed constraints never satisfy the schema
   assert.equal(got.migration_verified,false);
   const missingContract=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only',expected_tables_present:tables,
-    expected_tables_missing:[],migration_applied:true
+    expected_tables_missing:[],public_base_table_count:4,migration_applied:true
   }));
   assert.equal(missingContract.status,'blocked');
 });
@@ -104,4 +106,23 @@ test('known failure codes may be shown without sensitive Python or driver text',
   },3));
   assert.equal(unexpected.reason,'private_read_only_preflight_failed');
   assert.ok(!JSON.stringify(unexpected).includes('synthetic@wrong-host'));
+});
+
+test('catalog table count is fail-closed and never implies a migration',()=>{
+  const valid={status:'identity_verified_read_only',
+    expected_tables_present:tables,expected_tables_missing:[],
+    schema_contract_verified:true,migration_applied:true};
+  for(const public_base_table_count of [-1,0,1.5,NaN,1000001,'4',null,undefined]){
+    const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+      ...valid,public_base_table_count
+    }));
+    assert.equal(result.status,'blocked');
+  }
+  const unrelatedTables=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    ...valid,public_base_table_count:9
+  }));
+  assert.equal(unrelatedTables.status,'identity_verified_read_only');
+  assert.equal(unrelatedTables.public_base_table_count,9);
+  assert.equal(unrelatedTables.migration_verified,false);
+  assert.equal(unrelatedTables.checkout_available,false);
 });
