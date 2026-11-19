@@ -3,7 +3,7 @@
 // No live API key, customer-facing Vercel handler or production deployment.
 import {createHash} from "node:crypto";
 import {validateRun} from "../offline_tiq_premium/tiq_engine.mjs";
-import {PaidReportDenied,TEST_PRICE,TEST_PRODUCT} from "./verified-report-service.mjs";
+import {PaidReportDenied,resolveTestOffer} from "./verified-report-service.mjs";
 const id=x=>typeof x==="string"?x:x?.id;
 function allowedOrigin(value) {
   if(typeof value!=="string")throw new PaidReportDenied("trusted_return_origin_required");
@@ -17,7 +17,7 @@ function allowedOrigin(value) {
   return url.origin;
 }
 export async function startVerifiedTestCheckout({
-  ownerId,attemptKey,adultAttested,canonicalRun,trustedOrigin,store,stripe
+  ownerId,attemptKey,adultAttested,canonicalRun,trustedOrigin,store,stripe,testOffer
 }){
   // Authentication and adult eligibility belong to the protected calling API.
   if(typeof ownerId!=="string"||ownerId.length<1||ownerId.length>160||
@@ -29,9 +29,10 @@ export async function startVerifiedTestCheckout({
   const valid=validateRun(canonicalRun);
   if(!valid.ok)throw new PaidReportDenied("canonical_72_decisions_required");
   const origin=allowedOrigin(trustedOrigin);
-  const price=await stripe.prices.retrieve(TEST_PRICE);
-  if(price?.id!==TEST_PRICE||price.livemode!==false||price.active!==true||
-     id(price.product)!==TEST_PRODUCT||price.unit_amount!==100||
+  const {price:expectedPrice,product:expectedProduct}=resolveTestOffer(testOffer);
+  const price=await stripe.prices.retrieve(expectedPrice);
+  if(price?.id!==expectedPrice||price.livemode!==false||price.active!==true||
+     id(price.product)!==expectedProduct||price.unit_amount!==100||
      price.currency!=="usd"||price.type!=="one_time")
     throw new PaidReportDenied("verified_test_price_required");
   const digest=createHash("sha256").update(JSON.stringify(valid.run)).digest("hex");
@@ -47,7 +48,7 @@ export async function startVerifiedTestCheckout({
     // A stable Stripe idempotency key is reused after a timeout or retry;
     // persist reservation first, then bind exactly one resulting TEST session.
     session=await stripe.checkout.sessions.create({
-      mode:"payment",line_items:[{price:TEST_PRICE,quantity:1}],
+      mode:"payment",line_items:[{price:expectedPrice,quantity:1}],
       client_reference_id:reservation.reservationId,
       metadata:{tiq72_reservation_id:reservation.reservationId,
         tiq72_run_id:reservation.runId,tiq72_version:"v515-72-decisions"},
