@@ -6,8 +6,8 @@ const key=['sk','test','syntheticNoNetwork012345'].join('_');
 const fixture={
   STRIPE_TEST_SECRET_KEY:key,
   STRIPE_TEST_WEBHOOK_SECRET:['whsec','fixtureForOfflineTests'].join('_'),
-  TIQ72_STRIPE_TEST_PRICE_ID:'price_1UYToJRS5Ezp77RQVkx96eS5',
-  TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_nija_iq72_sandbox_v1',
+  TIQ72_STRIPE_TEST_PRICE_ID:'price_1UddqtI0gfJjTf3EksOST6m3',
+  TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_VexmVpVMZjIj6Y',
   STRIPE_LIVE_MODE:'false',TIQ72_LIVE_PAYMENTS_ENABLED:'false'
 };
 const price={id:fixture.TIQ72_STRIPE_TEST_PRICE_ID,
