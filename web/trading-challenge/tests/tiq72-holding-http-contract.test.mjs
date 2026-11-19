@@ -4,6 +4,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
+import { fileURLToPath } from 'node:url';
+
+// Stable against GitHub Actions' package working directory and local invocations.
+const holdingEntrypoint = fileURLToPath(new URL('../server/tiq72-upgrade6-holding-http.mjs', import.meta.url));
 
 async function availablePort() {
   const server = createServer();
@@ -18,7 +22,7 @@ async function availablePort() {
 
 test('isolated holding HTTP never exposes payment, webhook or report endpoints', {timeout: 30000}, async t => {
   const port = await availablePort();
-  const child = spawn(process.execPath, ['web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs'], {
+  const child = spawn(process.execPath, [holdingEntrypoint], {
     cwd: process.cwd(),
     env: {
       PATH: process.env.PATH,
