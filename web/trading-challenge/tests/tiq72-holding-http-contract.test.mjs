@@ -22,10 +22,7 @@ async function availablePort() {
 
 test('isolated holding HTTP never exposes payment, webhook or report endpoints', {timeout: 30000}, async t => {
   const port = await availablePort();
-  // npm test runs from web/trading-challenge while CI may run from the repo root.
-  // Resolve relative to this test file, never the caller's working directory.
-  const holdingSource = fileURLToPath(new URL('../server/tiq72-upgrade6-holding-http.mjs', import.meta.url));
-  const child = spawn(process.execPath, [holdingSource], {
+  // Holding entrypoint is resolved from this test module, never the caller's cwd.
   const child = spawn(process.execPath, [holdingEntrypoint], {
     cwd: process.cwd(),
     env: {
