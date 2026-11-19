@@ -83,7 +83,7 @@ def check_all_context(root: Path) -> bool:
             )
             if (not isinstance(line, int) or line < 1 or
                     not isinstance(hashed, str) or
-                    not re.fullmatch(r"[0-9a-f]{40}", hashed)):
+                    not re.fullmatch(r"(?:[0-9a-f]{2}:){19}[0-9a-f]{2}", hashed)):
                 return False
             identity = (path, line, kind)
             if identity in identities:
@@ -92,7 +92,7 @@ def check_all_context(root: Path) -> bool:
             matching = [
                 row for row in baseline["results"].get(path, [])
                 if (row.get("line_number"), row.get("type"),
-                    row.get("hashed_secret")) == (line, kind, hashed)
+                    row.get("hashed_secret")) == (line, kind, hashed.replace(":", ""))
                 and row.get("is_secret") is False
                 and row.get("is_verified") is False
             ]
@@ -105,7 +105,7 @@ def check_all_context(root: Path) -> bool:
         if any(
             row.get("line_number") == stale["line"]
             and row.get("type") == stale["type"]
-            and row.get("hashed_secret") == stale["old_hashed_secret"]
+            and row.get("hashed_secret") == stale["old_hashed_secret"].replace(":", "")
             for row in rows
         ):
             return False
