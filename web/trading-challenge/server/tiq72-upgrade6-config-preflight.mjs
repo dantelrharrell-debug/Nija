@@ -7,8 +7,10 @@ export function inspectTiq72TestConfig(env = process.env) {
   const errors = [];
   const has = (key) => typeof env[key] === 'string' && env[key].trim().length > 0;
   const fail = (code, condition) => { if (condition) errors.push(code); };
-  fail('test_secret_missing_or_wrong_mode',
-    !has('STRIPE_TEST_SECRET_KEY') || !/^(sk_test_|rk_test_)/.test(env.STRIPE_TEST_SECRET_KEY || ''));
+  // Value-free diagnostic only; never authorizes checkout.
+  fail('test_secret_missing', !has('STRIPE_TEST_SECRET_KEY'));
+  fail('test_secret_wrong_mode', has('STRIPE_TEST_SECRET_KEY') &&
+    !/^(sk_test_|rk_test_)/.test(env.STRIPE_TEST_SECRET_KEY));
   fail('webhook_secret_missing', !has('STRIPE_TEST_WEBHOOK_SECRET') ||
     !/^whsec_/.test(env.STRIPE_TEST_WEBHOOK_SECRET || ''));
   fail('test_price_missing', !/^price_[A-Za-z0-9]+$/.test(env.TIQ72_STRIPE_TEST_PRICE_ID || ''));
