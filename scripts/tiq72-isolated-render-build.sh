@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build-only bootstrap for isolated 72-decision TEST holding service.
-# Does not authorize payments, trades, migrations, or public routes.
+# Existing isolated TIQ72 Build Command. Delegate dependency installation to
+# the strict reviewed installer, rather than maintaining a less-protected copy.
+# This never contacts payment providers, migrates data or enables paid routes.
 set -euo pipefail
 
 if [[ "${TIQ72_ISOLATED_BUILD_SCOPE:-}" != "holding-test-only" ]]; then
@@ -8,43 +9,21 @@ if [[ "${TIQ72_ISOLATED_BUILD_SCOPE:-}" != "holding-test-only" ]]; then
   exit 64
 fi
 
-# Render may expose a service identity; when present it must match the exact
-# existing isolated TEST instance rather than the trading or billing service.
-if [[ -n "${RENDER_SERVICE_ID:-}" && "${RENDER_SERVICE_ID}" != "srv-dbqeqgqfngtc73fcphhg" ]]; then
-  echo "TIQ72_BUILD blocked: wrong_render_service" >&2
+# Render's build-time service identity must be present and exact; an absent
+# identity is not evidence of the intended isolated TEST workspace.
+if [[ "${RENDER_SERVICE_ID:-}" != "srv-dbqeqgqfngtc73fcphhg" ]]; then
+  echo "TIQ72_BUILD blocked: wrong_or_missing_render_service" >&2
   exit 64
 fi
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-server="$root/web/trading-challenge/server"
-if [[ ! -s "$server/package-lock.json" || ! -s "$server/package.json" ||
-      ! -s "$server/requirements-tiq72-preflight.txt" ]]; then
-  echo "TIQ72_BUILD blocked: reviewed_dependencies_missing" >&2
+installer="$root/scripts/tiq72_install_isolated_dependencies.sh"
+if [[ ! -s "$installer" ]]; then
+  echo "TIQ72_BUILD blocked: reviewed_installer_missing" >&2
   exit 65
 fi
 
-major="$(node -p 'Number(process.versions.node.split(".")[0])')"
-if [[ ! "$major" =~ ^[0-9]+$ ]] || ((major < 22 || major > 26)); then
-  echo "TIQ72_BUILD blocked: unsupported_node_runtime" >&2
-  exit 65
-fi
-
-(
-  cd "$server"
-  npm ci --omit=dev --ignore-scripts --no-fund --no-audit
-  npm audit --omit=dev --audit-level=high
-  node --input-type=module -e '
-    import Stripe from "stripe";
-    import pg from "pg";
-    if (typeof Stripe !== "function" || typeof pg.Pool !== "function")
-      process.exit(1);
-  '
-)
-
-# Separate from global Python and from protected trading runtime.
-python3 -m venv "$root/.venv"
-"$root/.venv/bin/python" -m pip install --disable-pip-version-check \
-  --only-binary=:all: -r "$server/requirements-tiq72-preflight.txt"
-"$root/.venv/bin/python" -c 'import psycopg2; assert psycopg2.__version__.startswith("2.9.13")'
-
-echo "TIQ72_BUILD verified: pinned_node_and_python_dependencies_installed"
+# The delegated installer checks the exact Render service ID and the complete
+# approved Node/Python dependency allowlist, then installs and audits them.
+sh "$installer"
+echo "TIQ72_BUILD verified: strict_pinned_node_and_python_dependencies_installed"

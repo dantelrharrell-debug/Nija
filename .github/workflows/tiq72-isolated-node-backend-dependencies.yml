@@ -79,6 +79,10 @@ jobs:
             echo 'Build unexpectedly accepted missing isolated scope' >&2
             exit 1
           fi
+          if TIQ72_ISOLATED_BUILD_SCOPE=holding-test-only RENDER_SERVICE_ID='' bash scripts/tiq72-isolated-render-build.sh; then
+            echo 'Build unexpectedly accepted missing service identity' >&2
+            exit 1
+          fi
           if TIQ72_ISOLATED_BUILD_SCOPE=holding-test-only RENDER_SERVICE_ID=srv-not-allowed bash scripts/tiq72-isolated-render-build.sh; then
             echo 'Build unexpectedly accepted wrong service identity' >&2
             exit 1
@@ -87,7 +91,7 @@ jobs:
         working-directory: .
         env:
           TIQ72_ISOLATED_BUILD_SCOPE: holding-test-only
-          RENDER_SERVICE_ID: ''
+          RENDER_SERVICE_ID: srv-dbqeqgqfngtc73fcphhg
         run: bash scripts/tiq72-isolated-render-build.sh
       - name: Reject extra Python packages in guarded Render installer
         working-directory: .
