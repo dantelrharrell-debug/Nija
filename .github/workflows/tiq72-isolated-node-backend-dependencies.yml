@@ -85,6 +85,28 @@ jobs:
           TIQ72_ISOLATED_BUILD_SCOPE: holding-test-only
           RENDER_SERVICE_ID: ''
         run: bash scripts/tiq72-isolated-render-build.sh
+      - name: Reject extra Python packages in guarded Render installer
+        working-directory: .
+        env:
+          RENDER_SERVICE_ID: srv-dbqeqgqfngtc73fcphhg
+        run: |
+          set -euo pipefail
+          req=web/trading-challenge/server/requirements-tiq72-preflight.txt
+          cp "$req" "$RUNNER_TEMP/tiq72-reviewed-req.txt"
+          trap 'cp "$RUNNER_TEMP/tiq72-reviewed-req.txt" "$req"' EXIT
+          printf '\nunreviewed-package==0.0.0\n' >> "$req"
+          if sh scripts/tiq72_install_isolated_dependencies.sh; then
+            echo 'FAIL: unreviewed Python package accepted' >&2
+            exit 1
+          fi
+          echo 'Guarded installer rejected extra Python dependency before install'
+      - name: Execute guarded Render installer in synthetic exact service role
+        working-directory: .
+        env:
+          RENDER_SERVICE_ID: srv-dbqeqgqfngtc73fcphhg
+        run: |
+          set -euo pipefail
+          sh scripts/tiq72_install_isolated_dependencies.sh
       - name: Publish resolved dependency lock for source review
         if: always()
         uses: actions/upload-artifact@v4
