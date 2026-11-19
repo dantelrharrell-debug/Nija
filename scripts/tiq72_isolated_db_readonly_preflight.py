@@ -22,6 +22,121 @@ TABLES = (
 )
 
 
+# Only catalog metadata is read: no run, payment, owner, or report rows.
+# Names/types mirror the reviewed v515 ledger SQL, including test-only checks.
+COLUMNS = {
+    "tiq72_v515_runs": {
+        "run_id": ("text", "NO"), "owner_id": ("text", "NO"),
+        "canonical_run": ("jsonb", "NO"),
+        "canonical_digest": ("text", "NO"),
+        "attempt_key": ("text", "NO"), "version": ("text", "NO"),
+    },
+    "tiq72_v515_reservations": {
+        "reservation_id": ("text", "NO"), "run_id": ("text", "NO"),
+        "owner_id": ("text", "NO"), "stripe_session": ("text", "YES"),
+        "state": ("text", "NO"),
+    },
+    "tiq72_v515_reports": {
+        "run_id": ("text", "NO"), "reservation_id": ("text", "NO"),
+        "owner_id": ("text", "NO"), "stripe_session": ("text", "NO"),
+        "report": ("jsonb", "NO"),
+    },
+    "tiq72_v515_verified_events": {
+        "event_id": ("text", "NO"), "event_type": ("text", "NO"),
+        "reservation_id": ("text", "NO"),
+        "stripe_session": ("text", "NO"),
+    },
+}
+# Each entry is (table, constraint_name, PostgreSQL constraint type,
+# referenced table for a foreign key or None).
+CONSTRAINTS = (
+    ("tiq72_v515_runs", "tiq72_v515_runs_pkey", "p", None),
+    ("tiq72_v515_runs", "tiq72_v515_unique_attempt", "u", None),
+    ("tiq72_v515_runs", "tiq72_v515_run_version", "c", None),
+    ("tiq72_v515_runs", "tiq72_v515_owner_nonempty", "c", None),
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_pkey", "p", None),
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_run_id_key", "u", None),
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_stripe_session_key", "u", None),
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_run_id_fkey", "f", "tiq72_v515_runs"),
+    ("tiq72_v515_reservations", "tiq72_v515_state", "c", None),
+    ("tiq72_v515_reservations", "tiq72_v515_owner_nonempty", "c", None),
+    ("tiq72_v515_reservations", "tiq72_v515_session_test_only", "c", None),
+    ("tiq72_v515_reports", "tiq72_v515_reports_pkey", "p", None),
+    ("tiq72_v515_reports", "tiq72_v515_reports_reservation_id_key", "u", None),
+    ("tiq72_v515_reports", "tiq72_v515_reports_stripe_session_key", "u", None),
+    ("tiq72_v515_reports", "tiq72_v515_reports_run_id_fkey", "f", "tiq72_v515_runs"),
+    ("tiq72_v515_reports", "tiq72_v515_reports_reservation_id_fkey", "f", "tiq72_v515_reservations"),
+    ("tiq72_v515_verified_events", "tiq72_v515_verified_events_pkey", "p", None),
+    ("tiq72_v515_verified_events", "tiq72_v515_verified_events_reservation_id_fkey", "f", "tiq72_v515_reservations"),
+    ("tiq72_v515_verified_events", "tiq72_v515_event_type", "c", None),
+    ("tiq72_v515_verified_events", "tiq72_v515_event_test_session", "c", None),
+)
+INDEXES = (
+    ("tiq72_v515_reservations", "tiq72_v515_res_owner_run"),
+    ("tiq72_v515_verified_events", "tiq72_v515_events_reservation"),
+)
+
+
+def schema_contract_verified(cursor):
+    """Check checked-in ledger structure using read-only system catalogs.
+
+    A set of matching table names alone is not migration proof. This function
+    returns a single boolean and never returns customer data or raw SQL.
+    """
+    cursor.execute(
+        "SELECT table_name, column_name, data_type, is_nullable "
+        "FROM information_schema.columns "
+        "WHERE table_schema='public' AND table_name = ANY(%s)",
+        (list(TABLES),),
+    )
+    columns = {
+        (table, column): (data_type, nullable)
+        for table, column, data_type, nullable in cursor.fetchall()
+    }
+    if any(
+        columns.get((table, column)) != spec
+        for table, specs in COLUMNS.items()
+        for column, spec in specs.items()
+    ):
+        return False
+
+    cursor.execute(
+        "SELECT t.relname, con.conname, con.contype, ref.relname "
+        "FROM pg_catalog.pg_constraint con "
+        "JOIN pg_catalog.pg_class t ON t.oid=con.conrelid "
+        "JOIN pg_catalog.pg_namespace ns ON ns.oid=t.relnamespace "
+        "LEFT JOIN pg_catalog.pg_class ref ON ref.oid=con.confrelid "
+        "WHERE ns.nspname='public' AND t.relname = ANY(%s)",
+        (list(TABLES),),
+    )
+    constraints = {
+        (table, name): (kind, foreign)
+        for table, name, kind, foreign in cursor.fetchall()
+    }
+    if any(
+        constraints.get((table, name)) != (kind, reference)
+        for table, name, kind, reference in CONSTRAINTS
+    ):
+        return False
+
+    cursor.execute(
+        "SELECT t.relname, i.relname, ix.indisvalid, ix.indisready "
+        "FROM pg_catalog.pg_index ix "
+        "JOIN pg_catalog.pg_class t ON t.oid=ix.indrelid "
+        "JOIN pg_catalog.pg_class i ON i.oid=ix.indexrelid "
+        "JOIN pg_catalog.pg_namespace ns ON ns.oid=t.relnamespace "
+        "WHERE ns.nspname='public' AND t.relname = ANY(%s)",
+        (list(TABLES),),
+    )
+    indexes = {
+        (table, index): (valid, ready)
+        for table, index, valid, ready in cursor.fetchall()
+    }
+    return all(indexes.get(pair) == (True, True) for pair in INDEXES)
+
+
+
+
 def blocked(reason, exit_code=3):
     print(json.dumps({"status": "blocked", "reason": reason}, sort_keys=True))
     return exit_code
@@ -96,12 +211,14 @@ def main():
                 (list(TABLES),),
             )
             found = {row[0] for row in cur.fetchall()}
-        missing = sorted(set(TABLES) - found)
+            missing = sorted(set(TABLES) - found)
+            contract = not missing and schema_contract_verified(cur)
         print(json.dumps({
             "status": "identity_verified_read_only",
             "expected_tables_present": sorted(found),
             "expected_tables_missing": missing,
-            "migration_applied": not missing,
+            "schema_contract_verified": bool(contract),
+            "migration_applied": bool(contract),
         }, sort_keys=True))
         return 0
     except Exception:
