@@ -208,7 +208,7 @@ def normalize_additional_tiq72_review_for_historical_comparison(current):
         candidates = [
             row for row in rows
             if (row["line_number"], row["type"], row["hashed_secret"])
-            == (line, kind, hashed)
+            == (line, kind, hashed.replace(":", ""))
         ]
         assert len(candidates) == 1
         candidate = candidates[0]
@@ -217,7 +217,7 @@ def normalize_additional_tiq72_review_for_historical_comparison(current):
             stale["path"], stale["line"], stale["type"]
         ):
             assert hashed == stale["new_hashed_secret"]
-            candidate["hashed_secret"] = stale["old_hashed_secret"]
+            candidate["hashed_secret"] = stale["old_hashed_secret"].replace(":", "")
         else:
             rows.remove(candidate)
             if not rows:
@@ -244,7 +244,7 @@ def test_supplemental_tiq72_review_is_source_bound_and_exact():
         matches = [
             x for x in baseline["results"][path]
             if (x["line_number"], x["type"], x["hashed_secret"])
-            == (line, kind, hashed)
+            == (line, kind, hashed.replace(":", ""))
         ]
         assert len(matches) == 1
         assert matches[0]["is_secret"] is False
