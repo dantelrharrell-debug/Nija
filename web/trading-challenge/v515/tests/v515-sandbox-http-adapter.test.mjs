@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {Readable} from "node:stream";
 import {createV515SandboxHttpAdapter} from "../server/v515-sandbox-http-adapter.mjs";
-import {TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
+import {TEST_PRICE,TEST_PRODUCT,ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT} from "../server/verified-report-service.mjs";
 const origin="https://game.nijaaitrading.com";
 const csrf=["0123456789abcdef","0123456789abcdef"].join("");
 const run={mode:"standard",level:"beginner",dayNum:0,
@@ -17,14 +17,14 @@ function response(){let statusCode=0,headers={},text="";
   get statusCode(){return statusCode},set statusCode(v){statusCode=v},
   get headers(){return headers},get value(){return JSON.parse(text)}};
 }
-function fixture({auth=true,limit=true}={}){
+function fixture({auth=true,limit=true,testOffer}={}){
  let stripeCalls=0,storeCalls=0;
  const session={id:"cs_test_fixture",livemode:false,mode:"payment",status:"open",
    payment_status:"unpaid",client_reference_id:"reservation-test",
    metadata:{tiq72_reservation_id:"reservation-test"},
    url:"https://checkout.stripe.com/c/pay/cs_test_fixture"};
  const stripe={prices:{retrieve:async()=>{stripeCalls++;return {
-   id:TEST_PRICE,livemode:false,active:true,product:TEST_PRODUCT,
+   id:testOffer?.price??TEST_PRICE,livemode:false,active:true,product:testOffer?.product??TEST_PRODUCT,
    unit_amount:100,currency:"usd",type:"one_time"}}},
    checkout:{sessions:{create:async()=>{stripeCalls++;return session},
      retrieve:async()=>session}}};
@@ -34,7 +34,7 @@ function fixture({auth=true,limit=true}={}){
  const handle=createV515SandboxHttpAdapter({
    authenticate:async()=>auth?{ownerId:"signed-user",csrfToken:csrf}:null,
    rateLimit:async()=>limit,store,stripe,webhookSecret:"whsec_test_placeholder",
-   trustedOrigin:origin});
+   trustedOrigin:origin,testOffer});
  const call=async(request)=>{const res=response();await handle(request,res);return res};
  return {call,get stripeCalls(){return stripeCalls},get storeCalls(){return storeCalls}};
 }
@@ -93,4 +93,14 @@ test("webhook never accepts a pre-parsed body",async()=>{
 test("unknown path remains private and not routed",async()=>{
  const f=fixture();const res=await f.call(req("POST","/api/checkout"));
  assert.equal(res.statusCode,404);assert.equal(f.stripeCalls,0);
+});
+
+test("signed HTTP adapter uses only the trusted isolated TEST offer",async()=>{
+ const f=fixture({testOffer:{price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT}});
+ const res=await f.call(req("POST","/sandbox/checkout",
+  {origin,"x-csrf-token":csrf},body));
+ assert.equal(res.statusCode,200);
+ assert.equal(f.stripeCalls,2);
+ assert.throws(()=>fixture({testOffer:{price:"price_attacker",product:ISOLATED_TEST_PRODUCT}}),
+  /test_product_mismatch/);
 });

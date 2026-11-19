@@ -5,7 +5,7 @@ import {createV515SandboxHttpAdapter} from '../v515/server/v515-sandbox-http-ada
 import {authenticateTiq72OwnerRequest} from './tiq72-signed-owner-proof.mjs';
 
 export function createTiq72SignedV515Handler({
-  signingKey, rateLimit, store, stripe, webhookSecret, trustedOrigin
+  signingKey, rateLimit, store, stripe, webhookSecret, trustedOrigin,testOffer
 }) {
   if (!Buffer.isBuffer(signingKey) || signingKey.length < 32 ||
       signingKey.length > 128 || typeof rateLimit !== 'function' ||
@@ -15,6 +15,6 @@ export function createTiq72SignedV515Handler({
     throw new TypeError('signed_isolated_v515_dependencies_required');
   return createV515SandboxHttpAdapter({
     authenticate: req => authenticateTiq72OwnerRequest(req, signingKey),
-    rateLimit, store, stripe, webhookSecret, trustedOrigin
+    rateLimit, store, stripe, webhookSecret, trustedOrigin,testOffer
   });
 }

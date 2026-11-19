@@ -1,15 +1,16 @@
 // Isolated v515 Stripe TEST-only orchestrator, not an HTTP handler.
 // Authenticated Stripe SDK instance + raw request bytes must be supplied by
 // a separately reviewed API adapter; this module never handles live payments.
-import {PaidReportDenied,requireProof,TEST_PRICE,TEST_PRODUCT} from "./verified-report-service.mjs";
+import {PaidReportDenied,requireProof,resolveTestOffer} from "./verified-report-service.mjs";
 const id=x=>typeof x==="string"?x:x?.id;
 const named=(x,p)=>typeof x==="string"&&x.startsWith(p)&&x.length>p.length&&x.length<=160;
 const payTypes=new Set(["checkout.session.completed","checkout.session.async_payment_succeeded"]);
 const reversalTypes=new Set(["charge.refunded","charge.dispute.created"]);
-function assertLineItems(lines) {
+function assertLineItems(lines,testOffer) {
+  const {price:expectedPrice,product:expectedProduct}=resolveTestOffer(testOffer);
   if (!Array.isArray(lines?.data)||lines.data.length!==1||lines.has_more ||
-      lines.data[0].quantity!==1||lines.data[0].price?.id!==TEST_PRICE ||
-      id(lines.data[0].price?.product)!==TEST_PRODUCT||
+      lines.data[0].quantity!==1||lines.data[0].price?.id!==expectedPrice ||
+      id(lines.data[0].price?.product)!==expectedProduct||
       lines.data[0].price?.unit_amount!==100||
       lines.data[0].price?.currency!=="usd")
     throw new PaidReportDenied("wrong_test_product");
@@ -24,7 +25,7 @@ function assertSession(session) {
       !named(id(session.payment_intent),"pi_"))
     throw new PaidReportDenied("wrong_test_checkout");
 }
-export async function processSignedTestWebhook({rawBody,signature,webhookSecret,stripe,store}) {
+export async function processSignedTestWebhook({rawBody,signature,webhookSecret,stripe,store,testOffer}) {
   if (!Buffer.isBuffer(rawBody)||rawBody.length===0||rawBody.length>65536||
       !named(signature,"t=")||!named(webhookSecret,"whsec_")||
       !stripe?.webhooks?.constructEvent||
@@ -52,7 +53,7 @@ export async function processSignedTestWebhook({rawBody,signature,webhookSecret,
     if(!named(id(intent?.latest_charge),"ch_"))
       throw new PaidReportDenied("charge_identity_missing");
     const charge=await stripe.charges.retrieve(id(intent.latest_charge));
-    requireProof({session,lines,intent,charge,reservationId:session.client_reference_id});
+    requireProof({session,lines,intent,charge,reservationId:session.client_reference_id,testOffer});
   } else {
     const disputeEvent=event.type==="charge.dispute.created";
     const chargeId=disputeEvent?id(event.data.object.charge):event.data.object.id;
@@ -86,7 +87,7 @@ export async function processSignedTestWebhook({rawBody,signature,webhookSecret,
     assertSession(session);
     if(id(session.payment_intent)!==intent.id)
       throw new PaidReportDenied("reversal_session_intent_mismatch");
-    assertLineItems(await stripe.checkout.sessions.listLineItems(session.id));
+    assertLineItems(await stripe.checkout.sessions.listLineItems(session.id),testOffer);
   }
   reservationId=session.client_reference_id;
   const result=await store.recordVerifiedProviderEvent({

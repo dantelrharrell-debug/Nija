@@ -18,8 +18,8 @@ function privateUrl() {
 const valid={
   STRIPE_TEST_SECRET_KEY:key,
   STRIPE_TEST_WEBHOOK_SECRET:hook,
-  TIQ72_STRIPE_TEST_PRICE_ID:'price_1UYToJRS5Ezp77RQVkx96eS5',
-  TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_nija_iq72_sandbox_v1',
+  TIQ72_STRIPE_TEST_PRICE_ID:'price_1UddqtI0gfJjTf3EksOST6m3',
+  TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_VexmVpVMZjIj6Y',
   TIQ72_TEST_DATABASE_URL:privateUrl(),
   TIQ72_TEST_RETURN_ORIGIN:'https://game.nijaaitrading.com',
   TIQ_ALLOWED_ORIGIN:'https://game.nijaaitrading.com',

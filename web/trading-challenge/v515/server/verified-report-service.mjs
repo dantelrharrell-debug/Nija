@@ -3,10 +3,26 @@ import {buildReport} from "../offline_tiq_premium/tiq_report.mjs";
 import {validateRun} from "../offline_tiq_premium/tiq_engine.mjs";
 export const TEST_PRICE="price_1UYToJRS5Ezp77RQVkx96eS5";
 export const TEST_PRODUCT="prod_nija_iq72_sandbox_v1";
+export const ISOLATED_TEST_PRICE="price_1UddqtI0gfJjTf3EksOST6m3";
+export const ISOLATED_TEST_PRODUCT="prod_VexmVpVMZjIj6Y";
 export class PaidReportDenied extends Error {constructor(code){super(code);this.name="PaidReportDenied";}}
+// Keep legacy sandbox receipts compatible; the isolated sandbox may select
+// ONLY the separately verified new TEST offer, never a browser-provided ID.
+export function resolveTestOffer(offer) {
+  if(offer===undefined)return Object.freeze({price:TEST_PRICE,product:TEST_PRODUCT});
+  if(offer!==null && typeof offer==='object' && !Array.isArray(offer) &&
+     Object.getPrototypeOf(offer)===Object.prototype &&
+     Object.keys(offer).length===2 &&
+     ((offer.price===TEST_PRICE && offer.product===TEST_PRODUCT) ||
+      (offer.price===ISOLATED_TEST_PRICE &&
+       offer.product===ISOLATED_TEST_PRODUCT)))
+    return Object.freeze({price:offer.price,product:offer.product});
+  throw new PaidReportDenied('test_product_mismatch');
+}
 const idOf=x=>typeof x==="string"?x:x?.id;
 const ident=(v,p="")=>typeof v==="string"&&v.length>p.length&&v.length<=160&&v.startsWith(p);
-export function requireProof({session,lines,intent,charge,reservationId}) {
+export function requireProof({session,lines,intent,charge,reservationId,testOffer}) {
+  const {price:expectedPrice,product:expectedProduct}=resolveTestOffer(testOffer);
   if(session?.livemode!==false||session.mode!=="payment"||
      session.status!=="complete"||session.payment_status!=="paid"||
      session.client_reference_id!==reservationId||
@@ -15,8 +31,8 @@ export function requireProof({session,lines,intent,charge,reservationId}) {
      session.currency!=="usd"||!ident(session.id,"cs_test_"))
     throw new PaidReportDenied("checkout_not_verified");
   if(!Array.isArray(lines?.data)||lines.data.length!==1||lines.has_more||
-     lines.data[0].quantity!==1||lines.data[0].price?.id!==TEST_PRICE||
-     idOf(lines.data[0].price?.product)!==TEST_PRODUCT||
+     lines.data[0].quantity!==1||lines.data[0].price?.id!==expectedPrice||
+     idOf(lines.data[0].price?.product)!==expectedProduct||
      lines.data[0].price?.unit_amount!==100||lines.data[0].price?.currency!=="usd")
     throw new PaidReportDenied("test_product_mismatch");
   if(intent?.id!==idOf(session.payment_intent)||intent.livemode!==false||
@@ -36,7 +52,7 @@ export function requireProof({session,lines,intent,charge,reservationId}) {
 // storeVerifiedReport atomically upserts one immutable report for the same
 // owner/run/session and never grants or extends a revoked entitlement.
 // stripe MUST use isolated test-mode credentials; do not expose this via HTTP.
-export async function verifyAndBuildPaidReport({ownerId,runId,store,stripe}) {
+export async function verifyAndBuildPaidReport({ownerId,runId,store,stripe,testOffer}) {
   if(!ident(ownerId)||!ident(runId)||!store||!stripe)
     throw new PaidReportDenied("authenticated_context_required");
   const row=await store.getOwnedPurchase(ownerId,runId);
@@ -55,7 +71,7 @@ export async function verifyAndBuildPaidReport({ownerId,runId,store,stripe}) {
   if(!ident(idOf(intent?.latest_charge),"ch_"))
     throw new PaidReportDenied("charge_identity_missing");
   const charge=await stripe.charges.retrieve(idOf(intent.latest_charge));
-  requireProof({session,lines,intent,charge,reservationId:row.reservationId});
+  requireProof({session,lines,intent,charge,reservationId:row.reservationId,testOffer});
   const report=buildReport(row.canonicalRun);
   if(!report)throw new PaidReportDenied("report_generation_failed");
   await store.storeVerifiedReport({ownerId,runId,sessionId:row.sessionId,report});
@@ -68,10 +84,10 @@ export async function verifyAndBuildPaidReport({ownerId,runId,store,stripe}) {
  * trust ownerId from query/body or infer ownership from a Stripe session URL.
  * Running verifyAndBuildPaidReport also guards concurrent local revocations.
  */
-export async function recoverFreshPaidReport({ownerId,runId,store,stripe}) {
+export async function recoverFreshPaidReport({ownerId,runId,store,stripe,testOffer}) {
   if (!store || typeof store.getOwnedPaidReport!=="function")
     throw new PaidReportDenied("protected_report_store_required");
-  await verifyAndBuildPaidReport({ownerId,runId,store,stripe});
+  await verifyAndBuildPaidReport({ownerId,runId,store,stripe,testOffer});
   const report=await store.getOwnedPaidReport(ownerId,runId);
   if(!report)throw new PaidReportDenied("paid_report_not_available");
   return report;

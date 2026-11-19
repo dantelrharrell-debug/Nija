@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {processSignedTestWebhook} from "../server/v515-signed-test-webhook.mjs";
-import {PaidReportDenied,TEST_PRICE,TEST_PRODUCT} from "../server/verified-report-service.mjs";
-function fixture(eventType="checkout.session.completed") {
+import {PaidReportDenied,TEST_PRICE,TEST_PRODUCT,ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT} from "../server/verified-report-service.mjs";
+function fixture(eventType="checkout.session.completed",testOffer) {
  const sid="cs_test_fixture",rid="reservation-fixture",pid="pi_fixture",cid="ch_fixture";
  const session={id:sid,livemode:false,mode:"payment",status:"complete",payment_status:"paid",
   client_reference_id:rid,metadata:{tiq72_reservation_id:rid},payment_intent:pid,
   amount_subtotal:100,amount_total:100,currency:"usd"};
- const lines={data:[{quantity:1,price:{id:TEST_PRICE,product:TEST_PRODUCT,unit_amount:100,currency:"usd"}}],has_more:false};
+ const lines={data:[{quantity:1,price:{id:testOffer?.price??TEST_PRICE,product:testOffer?.product??TEST_PRODUCT,unit_amount:100,currency:"usd"}}],has_more:false};
  const intent={id:pid,livemode:false,status:"succeeded",amount_received:100,currency:"usd",latest_charge:cid};
  const charge={id:cid,livemode:false,status:"succeeded",paid:true,amount:100,currency:"usd",
   payment_intent:pid,refunded:false,disputed:false,amount_refunded:0};
@@ -33,7 +33,7 @@ function fixture(eventType="checkout.session.completed") {
  };
  const store={recordVerifiedProviderEvent:async(x)=>{records.push(x);return {duplicate:false,state:eventType.startsWith("checkout.")?"paid":"refunded"};}};
  const rawBody=Buffer.from('{"id":"evt_fixture"}');
- const run=(overrides={})=>processSignedTestWebhook({rawBody,signature:"t=fixture,v1=valid",webhookSecret:['whsec', 'fixture'].join('_'),stripe,store,...overrides});
+ const run=(overrides={})=>processSignedTestWebhook({rawBody,signature:"t=fixture,v1=valid",webhookSecret:['whsec', 'fixture'].join('_'),stripe,store,testOffer,...overrides});
  return {session,lines,intent,charge,event,dispute,store,stripe,rawBody,run,get records(){return records},get rawSeen(){return rawSeen},get providerCalls(){return providerCalls}};
 }
 test("signed checkout independently verifies payment before grant",async()=>{
@@ -111,4 +111,16 @@ test("invalid refund amount never revokes",async()=>{
  f.charge.amount_refunded=101;
  await assert.rejects(f.run(),/refund_not_verified/);
  assert.equal(f.records.length,0);
+});
+
+test("new isolated TEST price is verified for payment and reversal events",async()=>{
+ const offer={price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT};
+ const paid=fixture("checkout.session.completed",offer);
+ assert.equal((await paid.run()).processed,true);
+ const reversal=fixture("charge.refunded",offer);
+ reversal.charge.amount_refunded=100;
+ assert.equal((await reversal.run()).processed,true);
+ const legacy=fixture();
+ await assert.rejects(legacy.run({testOffer:offer}),/test_product_mismatch/);
+ assert.equal(legacy.records.length,0);
 });
