@@ -40,7 +40,7 @@ test('rejected cross-workspace URL never launches Python or logs its value',()=>
 test('read-only identity with all tables still never certifies migration or payments',()=>{
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only', expected_tables_present:tables,
-    expected_tables_missing:[], migration_applied:true
+    expected_tables_missing:[], schema_contract_verified:true, migration_applied:true
   }));
   assert.equal(got.status,'identity_verified_read_only');
   assert.equal(got.expected_schema_present,true);
@@ -51,7 +51,7 @@ test('read-only identity with all tables still never certifies migration or paym
 test('missing tables are reported without changing database or granting entitlements',()=>{
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only',expected_tables_present:[tables[0]],
-    expected_tables_missing:tables.slice(1),migration_applied:false
+    expected_tables_missing:tables.slice(1),schema_contract_verified:false,migration_applied:false
   }));
   assert.deepEqual(got.expected_tables_missing,[...tables.slice(1)].sort());
   assert.equal(got.expected_schema_present,false);
@@ -62,9 +62,9 @@ test('missing tables are reported without changing database or granting entitlem
 test('inconsistent table inventory and failed child process fail closed',()=>{
   const bad=[
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
-     expected_tables_missing:tables.slice(1),migration_applied:true},
+     expected_tables_missing:tables.slice(1),schema_contract_verified:false,migration_applied:true},
     {status:'identity_verified_read_only',expected_tables_present:tables,
-     expected_tables_missing:[],migration_applied:false},
+     expected_tables_missing:[],schema_contract_verified:true,migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
      expected_tables_missing:[],migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:['nija_users'],
@@ -74,6 +74,23 @@ test('inconsistent table inventory and failed child process fail closed',()=>{
     assert.equal(runTiq72IsolatedDatabaseProbe(env(),withProbeResult(obj)).status,'blocked');
   assert.equal(runTiq72IsolatedDatabaseProbe(env(),withProbeResult({},2)).status,'blocked');
   assert.equal(runTiq72IsolatedDatabaseProbe(env(),()=>({status:0,stdout:'not json'})).status,'blocked');
+});
+
+test('four tables without complete reviewed constraints never satisfy the schema contract',()=>{
+  const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'identity_verified_read_only',expected_tables_present:tables,
+    expected_tables_missing:[],schema_contract_verified:false,migration_applied:false
+  }));
+  assert.equal(got.status,'identity_verified_read_only');
+  assert.equal(got.expected_schema_present,false);
+  assert.equal(got.schema_contract_verified,false);
+  assert.equal(got.checkout_available,false);
+  assert.equal(got.migration_verified,false);
+  const missingContract=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'identity_verified_read_only',expected_tables_present:tables,
+    expected_tables_missing:[],migration_applied:true
+  }));
+  assert.equal(missingContract.status,'blocked');
 });
 
 test('known failure codes may be shown without sensitive Python or driver text',()=>{

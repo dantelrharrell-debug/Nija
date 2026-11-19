@@ -22,6 +22,7 @@ async function availablePort() {
 
 test('isolated holding HTTP never exposes payment, webhook or report endpoints', {timeout: 30000}, async t => {
   const port = await availablePort();
+  // Holding entrypoint is resolved from this test module, never the caller's cwd.
   const child = spawn(process.execPath, [holdingEntrypoint], {
     cwd: process.cwd(),
     env: {

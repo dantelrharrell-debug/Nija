@@ -112,6 +112,12 @@ class EphemeralPostgresSchemaTests(unittest.TestCase):
         )
         self.assertEqual({row[0] for row in self.cursor.fetchall()}, TABLES)
 
+    def test_readonly_runtime_catalog_contract_matches_real_postgres18_ddl(self):
+        # The same catalog reader used by Render startup, exercised only on
+        # GitHub's disposable loopback-only PostgreSQL 18 CI database.
+        from scripts.tiq72_isolated_db_readonly_preflight import schema_contract_verified
+        self.assertTrue(schema_contract_verified(self.cursor))
+
     def test_owner_attempt_key_is_unique(self):
         self.insert_run()
         with self.assertRaises(self.driver.errors.UniqueViolation):

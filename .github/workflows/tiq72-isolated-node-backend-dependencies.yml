@@ -10,6 +10,8 @@ on:
       - 'scripts/tiq72-isolated-render-build.sh'
       - '.github/workflows/tiq72-isolated-node-backend-dependencies.yml'
       - 'scripts/tiq72_install_isolated_dependencies.sh'
+      - 'web/trading-challenge/server/tiq72-internal-sandbox-http-host.mjs'
+      - 'web/trading-challenge/server/tests/tiq72-internal-sandbox-http-host.test.mjs'
   workflow_dispatch:
 
 permissions:
@@ -61,6 +63,8 @@ jobs:
           "
       - name: Offline fail-closed runtime composition tests
         run: node --test tests/tiq72-isolated-v515-runtime.test.mjs
+      - name: Verify internal-only isolated TEST HTTP host denies unsafe activation
+        run: node --test tests/tiq72-internal-sandbox-http-host.test.mjs
       - name: Enforce high-severity runtime dependency audit
         run: npm audit --omit=dev --audit-level=high
       - uses: actions/setup-python@v5

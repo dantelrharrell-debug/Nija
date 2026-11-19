@@ -78,5 +78,60 @@ class TestIsolatedReadOnlyPreflight(unittest.TestCase):
         )
 
 
+class FakeCatalogCursor:
+    """Synthetic catalog shapes. Executes no SQL outside an in-memory mock."""
+    def __init__(self, *, wrong_column=False, missing_constraint=False, invalid_index=False):
+        self.wrong_column = wrong_column
+        self.missing_constraint = missing_constraint
+        self.invalid_index = invalid_index
+        self.rows = []
+        self.seen = []
+
+    def execute(self, query, parameters):
+        self.seen.append(query)
+        assert parameters == (list(preflight.TABLES),)
+        if "information_schema.columns" in query:
+            self.rows = [
+                (table, column, "text" if self.wrong_column and column == "report"
+                 else data_type, nullable)
+                for table, specs in preflight.COLUMNS.items()
+                for column, (data_type, nullable) in specs.items()
+            ]
+        elif "pg_catalog.pg_constraint" in query:
+            rows = list(preflight.CONSTRAINTS)
+            if self.missing_constraint:
+                rows = [row for row in rows if row[1] != "tiq72_v515_session_test_only"]
+            self.rows = rows
+        elif "pg_catalog.pg_index" in query:
+            self.rows = [
+                (table, index, not(self.invalid_index and index == "tiq72_v515_res_owner_run"), True)
+                for table, index in preflight.INDEXES
+            ]
+        else:
+            raise AssertionError("unexpected_catalog_query")
+
+    def fetchall(self):
+        return self.rows
+
+
+class TestIsolatedSchemaContract(unittest.TestCase):
+    def test_reviewed_four_table_catalog_shape_passes(self):
+        cursor = FakeCatalogCursor()
+        self.assertTrue(preflight.schema_contract_verified(cursor))
+        self.assertEqual(len(cursor.seen), 3)
+
+    def test_missing_test_only_session_constraint_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(missing_constraint=True)))
+
+    def test_mismatched_paid_report_jsonb_column_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(wrong_column=True)))
+
+    def test_invalid_required_index_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(invalid_index=True)))
+
+
 if __name__ == "__main__":
     unittest.main()
