@@ -80,10 +80,13 @@ class TestIsolatedReadOnlyPreflight(unittest.TestCase):
 
 class FakeCatalogCursor:
     """Synthetic catalog shapes. Executes no SQL outside an in-memory mock."""
-    def __init__(self, *, wrong_column=False, missing_constraint=False, invalid_index=False):
+    def __init__(self, *, wrong_column=False, missing_constraint=False,
+                 invalid_index=False, weak_check=False, reversed_index=False):
         self.wrong_column = wrong_column
         self.missing_constraint = missing_constraint
         self.invalid_index = invalid_index
+        self.weak_check = weak_check
+        self.reversed_index = reversed_index
         self.rows = []
         self.seen = []
 
@@ -101,10 +104,32 @@ class FakeCatalogCursor:
             rows = list(preflight.CONSTRAINTS)
             if self.missing_constraint:
                 rows = [row for row in rows if row[1] != "tiq72_v515_session_test_only"]
-            self.rows = rows
+            expected = {
+                "tiq72_v515_run_version":
+                    "CHECK ((version = 'v515-72-decisions'::text))",
+                "tiq72_v515_session_test_only":
+                    "CHECK (((stripe_session IS NULL) OR (stripe_session ~~ 'cs_test_%'::text)))",
+                "tiq72_v515_event_test_session":
+                    "CHECK ((stripe_session ~~ 'cs_test_%'::text))",
+            }
+            self.rows = [
+                (table, name, kind, foreign,
+                 "CHECK (true)" if self.weak_check and
+                 name == "tiq72_v515_session_test_only"
+                 else expected.get(name, "OTHER CONSTRAINT"))
+                for table, name, kind, foreign in rows
+            ]
         elif "pg_catalog.pg_index" in query:
             self.rows = [
-                (table, index, not(self.invalid_index and index == "tiq72_v515_res_owner_run"), True)
+                (table, index,
+                 not(self.invalid_index and index == "tiq72_v515_res_owner_run"),
+                 True,
+                 "CREATE INDEX " + index + " ON public." + table +
+                 " USING btree (" +
+                 ("run_id, owner_id" if self.reversed_index and
+                  index == "tiq72_v515_res_owner_run" else
+                  "owner_id, run_id" if index == "tiq72_v515_res_owner_run"
+                  else "reservation_id, received_at") + ")")
                 for table, index in preflight.INDEXES
             ]
         else:
@@ -127,6 +152,14 @@ class TestIsolatedSchemaContract(unittest.TestCase):
     def test_mismatched_paid_report_jsonb_column_denies(self):
         self.assertFalse(preflight.schema_contract_verified(
             FakeCatalogCursor(wrong_column=True)))
+
+    def test_same_named_weak_test_only_check_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(weak_check=True)))
+
+    def test_same_named_reversed_index_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(reversed_index=True)))
 
     def test_invalid_required_index_denies(self):
         self.assertFalse(preflight.schema_contract_verified(
