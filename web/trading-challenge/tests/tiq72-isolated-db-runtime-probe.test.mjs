@@ -64,7 +64,7 @@ test('inconsistent table inventory and failed child process fail closed',()=>{
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
      expected_tables_missing:tables.slice(1),schema_contract_verified:false,migration_applied:true},
     {status:'identity_verified_read_only',expected_tables_present:tables,
-     expected_tables_missing:[],schema_contract_verified:false,migration_applied:false},
+     expected_tables_missing:[],schema_contract_verified:true,migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
      expected_tables_missing:[],migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:['nija_users'],
