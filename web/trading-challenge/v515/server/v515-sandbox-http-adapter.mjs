@@ -5,7 +5,7 @@
 import {timingSafeEqual} from "node:crypto";
 import {startVerifiedTestCheckout} from "./v515-test-checkout.mjs";
 import {processSignedTestWebhook} from "./v515-signed-test-webhook.mjs";
-import {recoverFreshPaidReport,PaidReportDenied} from "./verified-report-service.mjs";
+import {recoverFreshPaidReport,PaidReportDenied,resolveTestOffer} from "./verified-report-service.mjs";
 
 function send(res,status,data){
   res.statusCode=status;
@@ -46,12 +46,14 @@ function responseError(res,error){
   return send(res,503,{error:"sandbox_service_unavailable"});
 }
 export function createV515SandboxHttpAdapter({
-  authenticate,rateLimit,store,stripe,webhookSecret,trustedOrigin
+  authenticate,rateLimit,store,stripe,webhookSecret,trustedOrigin,testOffer
 }){
   if(typeof authenticate!=="function"||typeof rateLimit!=="function"||
      !store||!stripe||typeof webhookSecret!=="string"||
      !trustedOrigin||typeof trustedOrigin!=="string")
     throw new TypeError("isolated_sandbox_dependencies_required");
+  // The offer is supplied only by the trusted server factory, not HTTP input.
+  const selectedOffer=resolveTestOffer(testOffer);
   return async function handle(req,res){
     try{
       // No permissive CORS, URL-supplied session secrets or session IDs.
@@ -62,7 +64,7 @@ export function createV515SandboxHttpAdapter({
         const rawBody=await readRaw(req);
         const sig=req.headers?.["stripe-signature"];
         const result=await processSignedTestWebhook({
-          rawBody,signature:sig,webhookSecret,stripe,store});
+          rawBody,signature:sig,webhookSecret,stripe,store,testOffer:selectedOffer});
         return send(res,200,{ok:true,processed:result.processed===true,
           duplicate:result.duplicate===true});
       }
@@ -85,7 +87,7 @@ export function createV515SandboxHttpAdapter({
         if(ids.length!==1||!ids[0]||ids[0].length>160||query.size!==1)
           return send(res,400,{error:"invalid_report_request"});
         const report=await recoverFreshPaidReport({
-          ownerId:identity.ownerId,runId:ids[0],store,stripe});
+          ownerId:identity.ownerId,runId:ids[0],store,stripe,testOffer:selectedOffer});
         return send(res,200,{report});
       }
       if(req.headers?.origin!==trustedOrigin||
@@ -103,7 +105,7 @@ export function createV515SandboxHttpAdapter({
       const result=await startVerifiedTestCheckout({
         ownerId:identity.ownerId,adultAttested:body.adultAttested,
         attemptKey:body.attemptKey,canonicalRun:body.canonicalRun,
-        trustedOrigin,store,stripe});
+        trustedOrigin,store,stripe,testOffer:selectedOffer});
       return send(res,200,{checkoutUrl:result.checkoutUrl,runId:result.runId});
     }catch(e){return responseError(res,e);}
   };
