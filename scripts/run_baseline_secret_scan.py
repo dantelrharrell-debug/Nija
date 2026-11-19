@@ -52,9 +52,9 @@ def scan(report_path: Path) -> int:
         # Bind marker-only detector exceptions to complete reviewed source.
         # A new PEM payload can share the old delimiter's detector identity.
         if "reviewed_context_manifest" in baseline_data:
-            from check_reviewed_secret_context import MANIFEST, check_context
+            from check_reviewed_secret_context import MANIFEST, check_all_context
             if (baseline_data["reviewed_context_manifest"] != MANIFEST
-                    or not check_context(Path.cwd())):
+                    or not check_all_context(Path.cwd())):
                 raise ValueError("reviewed_source_context_changed")
         revision = _checkout_revision()
         report["checked_out_commit"], report["checked_out_tree"] = revision
