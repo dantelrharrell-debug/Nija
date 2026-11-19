@@ -251,11 +251,18 @@ def main():
                 (list(TABLES),),
             )
             found = {row[0] for row in cur.fetchall()}
+            # Catalog-only inventory: do not read customer rows or emit names.
+            cur.execute(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_type='BASE TABLE'"
+            )
+            public_table_count = int(cur.fetchone()[0])
             missing = sorted(set(TABLES) - found)
             contract = not missing and schema_contract_verified(cur)
         print(json.dumps({
             "status": "identity_verified_read_only",
             "expected_tables_present": sorted(found),
+            "public_base_table_count": public_table_count,
             "expected_tables_missing": missing,
             "schema_contract_verified": bool(contract),
             "migration_applied": bool(contract),
