@@ -21,7 +21,11 @@ OLD_BUILD = (
     "&& /opt/render/project/src/.venv/bin/python -m pip install "
     "-r web/trading-challenge/server/requirements-tiq72-preflight.txt"
 )
-NEW_BUILD = "bash scripts/tiq72-isolated-render-build.sh"
+# The previous staged build target did not enforce an exact package allowlist.
+# Prefer the stricter installer merged in #4034: exact service identity, pinned
+# Node and Python dependency sets, and no network calls to payment providers.
+PREVIOUS_BUILD = "bash scripts/tiq72-isolated-render-build.sh"
+NEW_BUILD = "sh scripts/tiq72_install_isolated_dependencies.sh"
 START = "node web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs"
 API_URL = f"https://api.render.com/v1/services/{SERVICE}"
 APPROVAL = "APPROVE_EXISTING_ISOLATED_TEST_BUILD_ONLY"
@@ -65,7 +69,7 @@ def assert_identity(service: object) -> str:
     if start != START:
         raise GuardDenied("holding_server_start_command_changed")
     command = build_command(service)
-    if command not in (OLD_BUILD, NEW_BUILD):
+    if command not in (OLD_BUILD, PREVIOUS_BUILD, NEW_BUILD):
         raise GuardDenied("unexpected_build_command_requires_manual_review")
     return command
 
