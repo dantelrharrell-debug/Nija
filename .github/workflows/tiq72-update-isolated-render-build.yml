@@ -1,0 +1,74 @@
+name: TIQ72 isolated Render TEST build setting (manual, no payment activation)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/tiq72_update_isolated_render_build.py'
+      - 'tests/test_tiq72_update_isolated_render_build.py'
+      - '.github/workflows/tiq72-update-isolated-render-build.yml'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'review: read-only; apply: modify exact TEST build command only'
+        required: true
+        type: choice
+        options:
+          - review
+          - apply
+      approval:
+        description: 'For apply enter APPROVE_EXISTING_ISOLATED_TEST_BUILD_ONLY'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: Verify fail-closed existing-service Render build change
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax and exact-workspace readback test without Render credentials
+        run: |
+          python -m py_compile scripts/tiq72_update_isolated_render_build.py tests/test_tiq72_update_isolated_render_build.py
+          python -m unittest tests.test_tiq72_update_isolated_render_build -v
+
+  operator-review:
+    name: Explicit owner-initiated Render test-only configuration
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    needs: offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: nija-tiq72-isolated-build-review
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Update only reviewed existing TEST service Build Command
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          TIQ72_RENDER_BUILD_CHANGE_APPROVAL: ${{ inputs.approval }}
+          TIQ72_BUILD_OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+          if [ "$TIQ72_BUILD_OPERATION" = "apply" ]; then
+            python scripts/tiq72_update_isolated_render_build.py --apply
+          elif [ "$TIQ72_BUILD_OPERATION" = "review" ]; then
+            python scripts/tiq72_update_isolated_render_build.py
+          else
+            echo 'Unrecognized TEST build operation' >&2
+            exit 2
+          fi
+      - name: Confirm no payment endpoint or deployment was requested
+        run: |
+          echo 'Workflow performs no deploy, no live payment, no database DDL and no webhook changes'
