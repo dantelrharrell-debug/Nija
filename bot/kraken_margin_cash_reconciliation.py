@@ -123,11 +123,12 @@ def compare_margin_cash_records(
     _require(observed.keys() == local.keys(), "cash_entry_set_mismatch")
     _require(observed == local, "cash_entry_terms_mismatch")
     totals: dict[str, dict[str, Decimal]] = {}
+    rollover_by_reference: dict[str, dict[str, Decimal]] = {}
     with localcontext() as context:
         # 64 decimal digits per input plus at most 4 digits of accumulation.
         context.prec = 160
         for row in observed.values():
-            _, kind, _, asset, _, _, amount, fee, _ = row
+            reference, kind, _, asset, _, _, amount, fee, _ = row
             total = totals.setdefault(asset, {k: Decimal(0) for k in (
                 "realized_pnl", "opening_and_trading_fees", "rollover_fees", "net_cash_change")})
             if kind == "margin":
@@ -135,8 +136,14 @@ def compare_margin_cash_records(
                 total["opening_and_trading_fees"] += fee
             else:
                 total["rollover_fees"] += fee
+                fees = rollover_by_reference.setdefault(reference, {})
+                fees[asset] = fees.get(asset, Decimal(0)) + fee
             total["net_cash_change"] += amount - fee
     return {
+        "rollover_fees_by_refid_and_asset": {
+            ref: {asset: format(fee, "f") for asset, fee in sorted(fees.items())}
+            for ref, fees in sorted(rollover_by_reference.items())
+        },
         "input_rows_match": True, "matched_entry_count": len(observed),
         "excluded_non_margin_entry_count": excluded,
         "totals_by_asset": {a: {k: format(v, "f") for k, v in t.items()} for a, t in sorted(totals.items())},
