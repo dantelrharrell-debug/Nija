@@ -57,6 +57,22 @@ class MarginCashTests(unittest.TestCase):
                       "protective_exits_verified", "collector_certified", "authorizes_orders"):
             self.assertIs(result[field], False)
 
+    def test_rollovers_group_only_matching_reference_and_currency(self):
+        for key, ref, asset, fee in (
+            ("L-second", "T-reference", "ZUSD", "0.01"),
+            ("L-other", "T-other", "ZUSD", "0.05"),
+            ("L-euro", "T-reference", "ZEUR", "0.02"),
+        ):
+            row = dict(self.row("rollover", "0", fee), refid=ref, asset=asset)
+            self.exchange[key] = row
+            self.local.append(dict(row, exchange_ledger_id=key, broker="kraken", **self.scope))
+        report = self.compare()
+        self.assertEqual(report["rollover_fees_by_refid_and_asset"], {
+            "T-reference": {"ZUSD": "0.04125", "ZEUR": "0.02"},
+            "T-other": {"ZUSD": "0.05"},
+        })
+        self.assertFalse(report["positions_reconciled"])
+
     def test_missing_extra_and_duplicate_local_rows(self):
         for mutation in (lambda rows: rows.pop(), lambda rows: rows.append(dict(rows[0])),
                          lambda rows: rows.append(dict(rows[0], exchange_ledger_id="L-extra"))):
