@@ -42,9 +42,12 @@ test('read-only identity with all tables still never certifies migration or paym
     status:'identity_verified_read_only', expected_tables_present:tables,
     expected_tables_missing:[], public_base_table_count:4, other_schema_table_count:0,
     schema_contract_verified:true, migration_applied:true
+    expected_tables_missing:[], public_base_table_count:4,
+    other_schema_table_count:0, schema_contract_verified:true, migration_applied:true
   }));
   assert.equal(got.status,'identity_verified_read_only');
   assert.equal(got.expected_schema_present,true);
+  assert.equal(got.other_schema_table_count,0);
   assert.equal(got.checkout_available,false);
   assert.equal(got.migration_verified,false);
 });
@@ -54,6 +57,8 @@ test('missing tables are reported without changing database or granting entitlem
     status:'identity_verified_read_only',expected_tables_present:[tables[0]],
     expected_tables_missing:tables.slice(1),public_base_table_count:1,
     other_schema_table_count:0,schema_contract_verified:false,migration_applied:false
+    other_schema_table_count:0,
+    schema_contract_verified:false,migration_applied:false
   }));
   assert.deepEqual(got.expected_tables_missing,[...tables.slice(1)].sort());
   assert.equal(got.expected_schema_present,false);
@@ -64,13 +69,17 @@ test('missing tables are reported without changing database or granting entitlem
 test('inconsistent table inventory and failed child process fail closed',()=>{
   const bad=[
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
-     expected_tables_missing:tables.slice(1),schema_contract_verified:false,migration_applied:true},
+     expected_tables_missing:tables.slice(1),public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:true},
     {status:'identity_verified_read_only',expected_tables_present:tables,
-     expected_tables_missing:[],schema_contract_verified:true,migration_applied:false},
+     expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+     schema_contract_verified:true,migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
-     expected_tables_missing:[],migration_applied:false},
+     expected_tables_missing:[],public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:['nija_users'],
-     expected_tables_missing:tables.slice(1),migration_applied:false}
+     expected_tables_missing:tables.slice(1),public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:false}
   ];
   for(const obj of bad)
     assert.equal(runTiq72IsolatedDatabaseProbe(env(),withProbeResult(obj)).status,'blocked');
@@ -83,6 +92,8 @@ test('four tables without complete reviewed constraints never satisfy the schema
     status:'identity_verified_read_only',expected_tables_present:tables,
     expected_tables_missing:[],public_base_table_count:4,
     other_schema_table_count:0,schema_contract_verified:false,migration_applied:false
+    expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+    schema_contract_verified:false,migration_applied:false
   }));
   assert.equal(got.status,'identity_verified_read_only');
   assert.equal(got.expected_schema_present,false);
@@ -93,6 +104,8 @@ test('four tables without complete reviewed constraints never satisfy the schema
     status:'identity_verified_read_only',expected_tables_present:tables,
     expected_tables_missing:[],public_base_table_count:4,
     other_schema_table_count:0,migration_applied:true
+    expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+    migration_applied:true
   }));
   assert.equal(missingContract.status,'blocked');
 });
@@ -135,6 +148,11 @@ test('non-public table count must be a bounded integer and never certifies migra
     schema_contract_verified:true,migration_applied:true,
     public_base_table_count:4};
   for(const other_schema_table_count of [-1,0.5,NaN,1000001,'2',null,undefined]){
+test('non-public table count requires a bounded integer and never certifies migration or payments',()=>{
+  const valid={status:'identity_verified_read_only',
+    expected_tables_present:tables,expected_tables_missing:[],
+    schema_contract_verified:true,migration_applied:true,public_base_table_count:4};
+  for(const other_schema_table_count of [-1,1.5,NaN,1000001,'4',null,undefined]){
     const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
       ...valid,other_schema_table_count
     }));
@@ -148,4 +166,16 @@ test('non-public table count must be a bounded integer and never certifies migra
   assert.equal(extraTables.other_schema_table_count,2);
   assert.equal(extraTables.checkout_available,false);
   assert.equal(extraTables.migration_verified,false);
+    assert.equal(result.reason,'invalid_preflight_result');
+    assert.equal(result.migration_verified,false);
+  }
+  for(const other_schema_table_count of [0,2,1000000]){
+    const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+      ...valid,other_schema_table_count
+    }));
+    assert.equal(result.status,'identity_verified_read_only');
+    assert.equal(result.other_schema_table_count,other_schema_table_count);
+    assert.equal(result.migration_verified,false);
+    assert.equal(result.checkout_available,false);
+  }
 });
