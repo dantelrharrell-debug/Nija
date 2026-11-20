@@ -40,10 +40,12 @@ test('rejected cross-workspace URL never launches Python or logs its value',()=>
 test('read-only identity with all tables still never certifies migration or payments',()=>{
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only', expected_tables_present:tables,
-    expected_tables_missing:[], public_base_table_count:4, schema_contract_verified:true, migration_applied:true
+    expected_tables_missing:[], public_base_table_count:4,
+    other_schema_table_count:0, schema_contract_verified:true, migration_applied:true
   }));
   assert.equal(got.status,'identity_verified_read_only');
   assert.equal(got.expected_schema_present,true);
+  assert.equal(got.other_schema_table_count,0);
   assert.equal(got.checkout_available,false);
   assert.equal(got.migration_verified,false);
 });
@@ -52,6 +54,7 @@ test('missing tables are reported without changing database or granting entitlem
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only',expected_tables_present:[tables[0]],
     expected_tables_missing:tables.slice(1),public_base_table_count:1,
+    other_schema_table_count:0,
     schema_contract_verified:false,migration_applied:false
   }));
   assert.deepEqual(got.expected_tables_missing,[...tables.slice(1)].sort());
@@ -63,13 +66,17 @@ test('missing tables are reported without changing database or granting entitlem
 test('inconsistent table inventory and failed child process fail closed',()=>{
   const bad=[
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
-     expected_tables_missing:tables.slice(1),schema_contract_verified:false,migration_applied:true},
+     expected_tables_missing:tables.slice(1),public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:true},
     {status:'identity_verified_read_only',expected_tables_present:tables,
-     expected_tables_missing:[],schema_contract_verified:true,migration_applied:false},
+     expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+     schema_contract_verified:true,migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
-     expected_tables_missing:[],migration_applied:false},
+     expected_tables_missing:[],public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:false},
     {status:'identity_verified_read_only',expected_tables_present:['nija_users'],
-     expected_tables_missing:tables.slice(1),migration_applied:false}
+     expected_tables_missing:tables.slice(1),public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:false}
   ];
   for(const obj of bad)
     assert.equal(runTiq72IsolatedDatabaseProbe(env(),withProbeResult(obj)).status,'blocked');
@@ -80,7 +87,7 @@ test('inconsistent table inventory and failed child process fail closed',()=>{
 test('four tables without complete reviewed constraints never satisfy the schema contract',()=>{
   const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only',expected_tables_present:tables,
-    expected_tables_missing:[],public_base_table_count:4,
+    expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
     schema_contract_verified:false,migration_applied:false
   }));
   assert.equal(got.status,'identity_verified_read_only');
@@ -90,7 +97,8 @@ test('four tables without complete reviewed constraints never satisfy the schema
   assert.equal(got.migration_verified,false);
   const missingContract=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
     status:'identity_verified_read_only',expected_tables_present:tables,
-    expected_tables_missing:[],public_base_table_count:4,migration_applied:true
+    expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+    migration_applied:true
   }));
   assert.equal(missingContract.status,'blocked');
 });
@@ -111,7 +119,7 @@ test('known failure codes may be shown without sensitive Python or driver text',
 test('catalog table count is fail-closed and never implies a migration',()=>{
   const valid={status:'identity_verified_read_only',
     expected_tables_present:tables,expected_tables_missing:[],
-    schema_contract_verified:true,migration_applied:true};
+    schema_contract_verified:true,migration_applied:true,other_schema_table_count:0};
   for(const public_base_table_count of [-1,0,1.5,NaN,1000001,'4',null,undefined]){
     const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
       ...valid,public_base_table_count
@@ -125,4 +133,27 @@ test('catalog table count is fail-closed and never implies a migration',()=>{
   assert.equal(unrelatedTables.public_base_table_count,9);
   assert.equal(unrelatedTables.migration_verified,false);
   assert.equal(unrelatedTables.checkout_available,false);
+});
+
+test('non-public table count requires a bounded integer and never certifies migration or payments',()=>{
+  const valid={status:'identity_verified_read_only',
+    expected_tables_present:tables,expected_tables_missing:[],
+    schema_contract_verified:true,migration_applied:true,public_base_table_count:4};
+  for(const other_schema_table_count of [-1,1.5,NaN,1000001,'4',null,undefined]){
+    const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+      ...valid,other_schema_table_count
+    }));
+    assert.equal(result.status,'blocked');
+    assert.equal(result.reason,'invalid_preflight_result');
+    assert.equal(result.migration_verified,false);
+  }
+  for(const other_schema_table_count of [0,2,1000000]){
+    const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+      ...valid,other_schema_table_count
+    }));
+    assert.equal(result.status,'identity_verified_read_only');
+    assert.equal(result.other_schema_table_count,other_schema_table_count);
+    assert.equal(result.migration_verified,false);
+    assert.equal(result.checkout_available,false);
+  }
 });
