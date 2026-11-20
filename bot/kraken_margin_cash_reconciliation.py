@@ -224,3 +224,46 @@ def compare_margin_position_records(
         "protective_exits_verified": False, "collector_certified": False,
         "authorizes_orders": False,
     }
+
+
+def compare_close_fill_allocations(
+    fills: Mapping[str, Mapping[str, Any]], persisted_rows: list[Mapping[str, Any]],
+    *, account_scope: str, account_sha256: str, api_key_sha256: str,
+) -> dict[str, Any]:
+    """Compare exact close-fill allocations supplied by two independent sources.
+
+    The caller selects closing fills. A position reference in a trade alone
+    cannot establish close direction, history completeness, or exit coverage.
+    """
+    _scope(account_scope, account_sha256, api_key_sha256)
+    _require(isinstance(fills, Mapping) and type(persisted_rows) is list
+             and 0 < len(fills) <= MAX_ROWS and len(persisted_rows) <= MAX_ROWS,
+             "close_allocation_inputs_invalid")
+
+    def terms(fill_id, order_id, position_id, volume):
+        _require(isinstance(fill_id, str) and _POSITION_ID.fullmatch(fill_id)
+                 and isinstance(position_id, str) and _POSITION_ID.fullmatch(position_id)
+                 and fill_id != position_id
+                 and isinstance(order_id, str) and _ORDER_ID.fullmatch(order_id),
+                 "close_allocation_reference_invalid")
+        quantity = _amount(volume)
+        _require(quantity > 0, "close_allocation_quantity_invalid")
+        return order_id, position_id, quantity
+
+    observed = {}
+    for fill_id, fill in fills.items():
+        _require(isinstance(fill, Mapping), "close_allocation_row_invalid")
+        observed[fill_id] = terms(fill_id, fill.get("ordertxid"), fill.get("postxid"), fill.get("vol"))
+    local = {}
+    for row in persisted_rows:
+        _require(isinstance(row, Mapping), "close_allocation_row_invalid")
+        _require((row.get("broker"), row.get("account_scope"), row.get("account_sha256"),
+                  row.get("api_key_sha256")) == ("kraken", account_scope, account_sha256, api_key_sha256),
+                 "close_allocation_scope_mismatch")
+        fill_id = row.get("exchange_trade_id")
+        allocation = terms(fill_id, row.get("exchange_order_id"), row.get("exchange_position_id"),
+                           row.get("closed_volume"))
+        _require(fill_id not in local, "close_allocation_duplicate")
+        local[fill_id] = allocation
+    _require(observed == local, "close_allocation_mismatch")
+    return {"matched_fill_count": len(local), "collector_certified": False, "authorizes_orders": False}
