@@ -296,7 +296,10 @@ def inspect_authenticated_kraken_ledger_gaps(
             else:
                 counts["matched_margin_cash_entries"] = cash["matched_entry_count"]
                 counts["matched_rollover_references"] = len(cash["rollover_fees_by_refid_and_asset"])
-        elif counts["fills_with_nonzero_margin"]:
+        elif counts["fills_with_nonzero_margin"] or any(
+            isinstance(entry, Mapping) and entry.get("type") in ("margin", "rollover")
+            for entry in observed["history"]["ledger"].values()
+        ):
             reject("independently_persisted_margin_cash_rows_missing")
         if counts["fills_with_unknown_margin"]:
             reject("broker_fill_margin_classification_unverified")
