@@ -25,6 +25,8 @@ const fakeDb=()=>({status:'identity_verified_read_only',
   expected_schema_present:true,schema_contract_verified:true,expected_tables_missing:[]});
 const fakePrice=async()=>({status:'price_verified_test_mode_read_only',
   stripe_test_price_verified:true});
+const fakeAccount=async()=>({status:'sandbox_account_verified_read_only',
+  stripe_test_account_verified:true});
 
 test('scope validation fails before provider use for wrong or missing flags',async()=>{
   for(const [name,env] of [
@@ -72,7 +74,7 @@ test('missing reviewed schema or validated Stripe TEST price rejects before depe
 test('internal host serves only health and explicitly permitted TEST routes',async t=>{
   let handled=0,closed=0,constructed=0;
   const host=await createTiq72InternalSandboxHttpHost({
-    env:scope,databaseProbe:fakeDb,priceProbe:fakePrice,
+    env:scope,databaseProbe:fakeDb,priceProbe:fakePrice,accountProbe:fakeAccount,
     dependenciesFactory:()=>{
       constructed++;
       return {
@@ -139,4 +141,37 @@ test('single-instance internal rate gate denies unknown categories and bursts',a
   assert.equal(await limit({},'authenticated_commerce'),false);
   tick+=60000;
   assert.equal(await limit({},'authenticated_commerce'),true);
+});
+
+test('an active TEST price belonging to another account cannot create routes',async()=>{
+  let dependencyCalls=0,accountCalls=0,priceCalls=0;
+  await assert.rejects(()=>createTiq72InternalSandboxHttpHost({
+    env:scope,databaseProbe:fakeDb,
+    priceProbe:async()=>{priceCalls++;return fakePrice();},
+    accountProbe:async()=>{accountCalls++;return {
+      status:'blocked',reason:'stripe_test_account_mismatch',
+      stripe_test_account_verified:false,checkout_available:false};},
+    dependenciesFactory:()=>{dependencyCalls++;throw Error('must_not_build_checkout');}
+  }),{name:'TypeError',message:'isolated_sandbox_stripe_account_unavailable'});
+  assert.equal(priceCalls,1);
+  assert.equal(accountCalls,1);
+  assert.equal(dependencyCalls,0);
+});
+
+test('missing or restricted account verification remains fail-closed',async()=>{
+  let dependencies=0;
+  for(const accountProbe of [
+    async()=>({status:'blocked',reason:'stripe_test_account_key_rejected_or_restricted',
+      stripe_test_account_verified:false}),
+    async()=>null,
+    async()=>({status:'sandbox_account_verified_read_only',
+      stripe_test_account_verified:false}),
+    async()=>({stripe_test_account_verified:true})
+  ]){
+    await assert.rejects(()=>createTiq72InternalSandboxHttpHost({
+      env:scope,databaseProbe:fakeDb,priceProbe:fakePrice,
+      accountProbe,dependenciesFactory:()=>{dependencies++;throw Error('must_not_construct');}
+    }),{name:'TypeError',message:'isolated_sandbox_stripe_account_unavailable'});
+  }
+  assert.equal(dependencies,0);
 });
