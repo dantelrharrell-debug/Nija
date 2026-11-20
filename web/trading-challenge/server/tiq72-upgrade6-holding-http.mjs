@@ -5,6 +5,7 @@ import { TIQ72_DECISIONS, TIQ72_VERSION } from './tiq72-authoritative-adapter.mj
 import { safeTiq72IsolatedReadiness } from './tiq72-isolated-readiness.mjs';
 import { runTiq72IsolatedDatabaseProbe } from './tiq72-isolated-db-runtime-probe.mjs';
 import { inspectTiq72StripeTestPrice } from './tiq72-stripe-test-readonly-preflight.mjs';
+import { inspectTiq72StripeTestAccount } from './tiq72-stripe-test-account-preflight.mjs';
 
 const port=Number(process.env.PORT||10000);
 // This value-free diagnostic appears only in private Render application logs.
@@ -17,6 +18,16 @@ void inspectTiq72StripeTestPrice().then(result=>{
 }).catch(()=>{
  console.info('TIQ72_STRIPE_TEST_PRICE_PREFLIGHT '+JSON.stringify({
   status:'blocked',reason:'stripe_test_price_verification_failed',checkout_available:false}));
+});
+// Independent GET-only account check: the prior Price GET can pass when the
+// key belongs to another Stripe TEST account whose webhook is not NIJA's
+// connected sandbox. Only log fixed reason codes; never log provider IDs.
+void inspectTiq72StripeTestAccount().then(result=>{
+ console.info('TIQ72_STRIPE_TEST_ACCOUNT_PREFLIGHT '+JSON.stringify(result));
+}).catch(()=>{
+ console.info('TIQ72_STRIPE_TEST_ACCOUNT_PREFLIGHT '+JSON.stringify({
+  status:'blocked',reason:'stripe_test_account_verification_failed',
+  stripe_test_account_verified:false,checkout_available:false}));
 });
 const server=http.createServer((req,res)=>{
  res.setHeader('Content-Type','application/json; charset=utf-8');
