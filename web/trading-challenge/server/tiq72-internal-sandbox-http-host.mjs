@@ -8,6 +8,7 @@ import {TIQ72_VERSION,TIQ72_DECISIONS} from './tiq72-authoritative-adapter.mjs';
 import {createNonRoutedTiq72SandboxDependencies} from './tiq72-isolated-v515-runtime.mjs';
 import {runTiq72IsolatedDatabaseProbe} from './tiq72-isolated-db-runtime-probe.mjs';
 import {inspectTiq72StripeTestPrice} from './tiq72-stripe-test-readonly-preflight.mjs';
+import {inspectTiq72StripeTestAccount} from './tiq72-stripe-test-account-preflight.mjs';
 
 const SERVICE_ID='srv-dbqeqgqfngtc73fcphhg';
 const ORIGIN='https://game.nijaaitrading.com';
@@ -59,6 +60,7 @@ export async function createTiq72InternalSandboxHttpHost({
   env=process.env,
   databaseProbe=runTiq72IsolatedDatabaseProbe,
   priceProbe=inspectTiq72StripeTestPrice,
+  accountProbe=inspectTiq72StripeTestAccount,
   dependenciesFactory=createNonRoutedTiq72SandboxDependencies,
   rateLimit=makeInternalSandboxRateLimiter()
 }={}) {
@@ -76,6 +78,14 @@ export async function createTiq72InternalSandboxHttpHost({
   if(price?.status!=='price_verified_test_mode_read_only' ||
      price.stripe_test_price_verified!==true)
     throw new TypeError('isolated_sandbox_stripe_price_unavailable');
+  // This TEST Price can exist under a *different* Stripe account from
+  // the intended NIJA sandbox webhook. Only the independently verified
+  // connected account may mount even internal payment rehearsal routes.
+  // A passing Price GET by itself is never adequate.
+  const account=await accountProbe(env);
+  if(account?.status!=='sandbox_account_verified_read_only' ||
+     account.stripe_test_account_verified!==true)
+    throw new TypeError('isolated_sandbox_stripe_account_unavailable');
   const dependencies=dependenciesFactory({env,rateLimit});
   if(typeof dependencies?.handler!=='function' ||
      typeof dependencies?.close!=='function')
