@@ -30,6 +30,21 @@ class MarginCashTests(unittest.TestCase):
     def compare(self):
         return module.compare_margin_cash_records(self.exchange, self.local, **self.scope)
 
+    def test_close_allocation_requires_independent_scoped_exact_rows(self):
+        fill = "TAAAAA-BBBBB-CCCCCC"
+        position = "TDDDDD-EEEEE-FFFFFF"
+        order = "OAAAAA-BBBBB-CCCCCC"
+        fills = {fill: dict(postxid=position, ordertxid=order, vol="0.250")}
+        row = dict(exchange_trade_id=fill, exchange_position_id=position, exchange_order_id=order,
+                   closed_volume="0.25", broker="kraken", **self.scope)
+        compare = module.compare_close_fill_allocations
+        self.assertEqual(compare(fills, [row], **self.scope), {
+            "matched_fill_count": 1, "collector_certified": False, "authorizes_orders": False})
+        for rows in ([], [row, row], [dict(row, closed_volume="0.24")],
+                     [dict(row, account_sha256="c" * 64)], [dict(row, exchange_position_id=fill)]):
+            with self.subTest(rows=len(rows)), self.assertRaises(module.MarginCashReconciliationDenied):
+                compare(fills, rows, **self.scope)
+
     def test_margin_pnl_and_fees_not_spot_transfers(self):
         before = copy.deepcopy((self.exchange, self.local))
         result = self.compare()
