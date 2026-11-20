@@ -8,6 +8,13 @@ COPY requirements.txt .
 RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 FROM ${PYTHON_BASE}
+
+# Patch the base Python environment as well as the application virtualenv.
+# Fail the build if either vulnerable vendored distribution is still present.
+RUN /usr/local/bin/python -m pip install --no-cache-dir --disable-pip-version-check "setuptools==84.1.0" \
+    && /usr/local/bin/python -c "import importlib.metadata as m; assert m.version('setuptools') == '84.1.0'" \
+    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/METADATA \
+    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /app
 # The Python base includes an older global setuptools vendoring
