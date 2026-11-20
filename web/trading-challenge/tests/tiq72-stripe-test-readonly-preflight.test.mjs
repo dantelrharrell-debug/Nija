@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {inspectTiq72StripeTestPrice} from '../server/tiq72-stripe-test-readonly-preflight.mjs';
+import {TEST_PRICE,TEST_PRODUCT,ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT} from '../v515/server/verified-report-service.mjs';
 
 const key=['sk','test','syntheticNoNetwork012345'].join('_');
 const fixture={
   STRIPE_TEST_SECRET_KEY:key,
   STRIPE_TEST_WEBHOOK_SECRET:['whsec','fixtureForOfflineTests'].join('_'),
-  TIQ72_STRIPE_TEST_PRICE_ID:'price_1UddqtI0gfJjTf3EksOST6m3',
-  TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_VexmVpVMZjIj6Y',
+  TIQ72_STRIPE_TEST_PRICE_ID:TEST_PRICE,
+  TIQ72_STRIPE_TEST_PRODUCT_ID:TEST_PRODUCT,
   STRIPE_LIVE_MODE:'false',TIQ72_LIVE_PAYMENTS_ENABLED:'false'
 };
 const price={id:fixture.TIQ72_STRIPE_TEST_PRICE_ID,
@@ -84,5 +85,21 @@ test('HTTP denial, excessive response size, malformed data and transport errors 
     assert.equal(result.stripe_test_price_verified,false);
     assert.ok(!JSON.stringify(result).includes(key));
     assert.ok(!JSON.stringify(result).includes('secret-sensitive-system-error'));
+  }
+});
+
+test('rejects a different sandbox offer and either cross-pair before Stripe GET',async()=>{
+  for(const [priceId,productId] of [
+    [ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT],
+    [ISOLATED_TEST_PRICE,TEST_PRODUCT],
+    [TEST_PRICE,ISOLATED_TEST_PRODUCT]
+  ]){
+    let calls=0;
+    const result=await inspectTiq72StripeTestPrice({
+      ...fixture,TIQ72_STRIPE_TEST_PRICE_ID:priceId,TIQ72_STRIPE_TEST_PRODUCT_ID:productId
+    },async()=>{calls++;return goodResponse(price)});
+    assert.equal(calls,0);
+    assert.equal(result.reason,'stripe_test_offer_config_mismatch');
+    assert.equal(result.checkout_available,false);
   }
 });

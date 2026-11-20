@@ -1,8 +1,7 @@
 // NIJA TIQ72: read-only, value-free Stripe TEST price preflight.
 // Safe to run only in the isolated Render holding service. This never creates
 // Checkout Sessions, reads customer records, grants entitlements, or enables payment.
-const TEST_PRICE='price_1UddqtI0gfJjTf3EksOST6m3';
-const TEST_PRODUCT='prod_VexmVpVMZjIj6Y';
+import {TEST_PRICE,TEST_PRODUCT} from '../v515/server/tiq72-test-offer.mjs';
 const blocked=reason=>({status:'blocked',reason,stripe_test_price_verified:false,checkout_available:false});
 
 export async function inspectTiq72StripeTestPrice(env=process.env, request=fetch) {
