@@ -74,7 +74,7 @@ class ExecutionPipelineMarginLedgerHookTests(unittest.TestCase):
             stack.enter_context(patch("bot.execution_pipeline.runtime_authority_snapshot", return_value=SimpleNamespace(ready=True)))
             stack.enter_context(patch("bot.execution_pipeline.get_seak", return_value=SimpleNamespace(is_halted=False)))
             stack.enter_context(patch("bot.execution_pipeline.get_runtime_correlation", return_value={"intent_id": request.intent_id or "", "cycle_id": "cycle-1"}))
-            stack.enter_context(patch("bot.execution_pipeline.append_execution_journal_event", return_value=None))
+            self.journal = stack.enter_context(patch("bot.execution_pipeline.append_execution_journal_event"))
             stack.enter_context(patch("bot.execution_pipeline._get_pipeline_cycle_snapshot", return_value=SimpleNamespace(cycle_id="cycle-1")))
             return pipeline.execute(request)
 
@@ -95,6 +95,21 @@ class ExecutionPipelineMarginLedgerHookTests(unittest.TestCase):
         )
         self.assertEqual(row["lifecycle_status"], "open")
         self.assertEqual(float(row["position_notional_usd"]), 100.0)
+
+    def test_ack_records_returned_order_and_request_scope(self):
+        for order_id in ("order-from-broker", ""):
+            with self.subTest(order_id=order_id):
+                dispatch = PipelineResult(success=True, symbol="BTC-USD", side="buy",
+                                          broker="kraken", order_id=order_id, size_usd=100.0)
+                pipeline = self._make_pipeline(dispatch)
+                with patch("bot.strategy_order_provenance.record_pipeline_order_intent"):
+                    self.assertTrue(self._execute(pipeline, self._request()).success)
+                acknowledgments = [call.kwargs for call in self.journal.call_args_list
+                                   if call.kwargs["event_type"] == "broker_ack"]
+                self.assertEqual(len(acknowledgments), 1)
+                payload = acknowledgments[0]["payload"]
+                self.assertEqual((payload["order_id"], payload["account_id"], payload["subaccount_id"]),
+                                 (order_id, "acc-1", "sub-1"))
 
     def test_partial_reduce_behavior_updates_reducing_state(self):
         pipeline = self._make_pipeline(PipelineResult(success=True, symbol="BTC-USD", side="buy", size_usd=100.0, filled_size_usd=100.0, broker="kraken"))
