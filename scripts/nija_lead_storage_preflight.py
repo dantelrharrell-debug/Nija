@@ -9,9 +9,30 @@ import json
 import os
 import sqlite3
 import urllib.parse
+import re
 from pathlib import Path
 from typing import Callable, Mapping
 
+
+
+def _approved_zapier_catch_hook(raw: str) -> bool:
+    """Match the production lead forwarder's destination rules without network I/O."""
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        return bool(
+            raw and raw == raw.strip()
+            and not any(ord(char) < 33 or ord(char) == 127 for char in raw)
+            and parsed.scheme == "https"
+            and parsed.hostname == "hooks.zapier.com"
+            and parsed.port is None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+            and re.fullmatch(r"/hooks/catch/[0-9]+/[A-Za-z0-9_-]+/?", parsed.path)
+        )
+    except ValueError:
+        return False
 
 def _sqlite_summary(path: Path, *, forward: bool = False) -> dict:
     summary: dict = {"exists": path.is_file(), "schema_valid": False, "row_count": None}
@@ -24,6 +45,9 @@ def _sqlite_summary(path: Path, *, forward: bool = False) -> dict:
         # Never attach SQLite to a live WAL database: even mode=ro may create
         # -shm/-wal files, while immutable=1 could silently omit committed WAL.
         # Inspect the header without SQLite first and fail closed for WAL.
+        if source.with_name(source.name + "-journal").exists():
+            summary["read_error"] = "rollback_journal_requires_offline_snapshot"
+            return summary
         if source.with_name(source.name + "-wal").exists() or source.with_name(source.name + "-shm").exists():
             summary["read_error"] = "wal_database_requires_offline_snapshot"
             return summary
@@ -100,17 +124,9 @@ def inspect(*, environ: Mapping[str, str] | None = None,
     forwarding_durable = _on_disk(forward, disk, disk_mounted)
     token_configured = bool(str(env.get("NIJA_LEAD_WEBHOOK_TOKEN")
                             or env.get("NIJA_OUTREACH_SERVICE_TOKEN") or "").strip())
-    target = str(env.get("NIJA_LEAD_FORWARD_URL") or "").strip()
-    try:
-        url = urllib.parse.urlsplit(target)
-        valid_https = bool(target and url.scheme == "https" and url.hostname
-                           and not url.username and not url.password and url.port != 0)
-        hostname = url.hostname if valid_https else None
-    except ValueError:
-        valid_https = False
-        hostname = None
-    destination = ("zapier" if hostname == "hooks.zapier.com" else
-                   "other_https" if valid_https else "missing_or_invalid")
+    target = str(env.get("NIJA_LEAD_FORWARD_URL") or "")
+    valid_https = _approved_zapier_catch_hook(target)
+    destination = "zapier" if valid_https else "missing_or_invalid"
 
     issues = []
     if not disk_mounted:

@@ -18,6 +18,10 @@ class FakeStripe:
         self.session = None
         self.checkout = Obj(Session=Obj(create=self.create, retrieve=self.retrieve,
                                          list_line_items=self.items))
+        self.Price = Obj(retrieve=self.retrieve_price)
+    def retrieve_price(self, price_id):
+        return {"id":price_id,"livemode":False,"active":True,"type":"one_time",
+                "currency":"usd","unit_amount":100,"product":"prod_test_1"}
     def create(self, **kw):
         self.session = dict(id="cs_test_abc", livemode=False, mode="payment",
             payment_status="paid", status="complete", currency="usd", amount_total=100,
@@ -36,7 +40,8 @@ class CommerceIntegrationTests(unittest.TestCase):
         self.store = Tiq72Store(self.db)
         self.stripe = FakeStripe()
         self.service = Tiq72TestCommerce(self.store, self.stripe, "whsec_test")
-        self.env = patch.dict(os.environ, {"STRIPE_SECRET_KEY":"sk_test_fake",
+        self.env = patch.dict(os.environ, {"STRIPE_TEST_SECRET_KEY":"sk_test_fake",
+            "TIQ72_TEST_RETURN_ORIGIN":"https://example.org",
             "TIQ72_STRIPE_TEST_PRICE_ID":"price_test_1",
             "TIQ72_STRIPE_TEST_PRODUCT_ID":"prod_test_1",
             "NIJA_GAME_REPORTS_ENABLED":"false",
@@ -57,11 +62,13 @@ class CommerceIntegrationTests(unittest.TestCase):
                 "data":{"object":{"id":"cs_test_abc","metadata":{"tiq72_reservation_id":rid}}}}
             self.assertTrue(self.service.accept_signed_checkout(raw_body=b"signed",signature="sig"))
             self.assertFalse(self.service.accept_signed_checkout(raw_body=b"signed",signature="sig"))
-            report=self.service.fulfill_report(owner_id="adult-1",reservation_id=rid,
-                                               report={"score":70})
+            with self.assertRaisesRegex(CommerceDenied,"caller_report_forbidden"):
+                self.service.fulfill_report(owner_id="adult-1",reservation_id=rid,
+                                            report={"score":999})
+            report=self.service.fulfill_report(owner_id="adult-1",reservation_id=rid)
             self.assertEqual(report,{"score":70})
             with self.assertRaisesRegex(CommerceDenied,"reservation_not_owned"):
-                self.service.fulfill_report(owner_id="other",reservation_id=rid,report={"score":70})
+                self.service.fulfill_report(owner_id="other",reservation_id=rid)
             self.store.record_verified_event("evt_refund","charge.refunded",rid,
                                              "cs_test_abc",verified_reversal=True)
             with self.assertRaisesRegex(CommerceDenied,"report_unavailable"):
@@ -71,6 +78,36 @@ class CommerceIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(CommerceDenied,"report_unavailable"):
                 self.store.get_report(rid,"adult-1")
 
+    def test_malformed_stored_score_fails_closed_after_payment(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
+            canonical_run=run,authoritative_score={"score":70},
+            success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        rid=result["reservation_id"]
+        with self.db:
+            self.db.execute(
+                "UPDATE tiq72_runs SET score_json=? WHERE id=(SELECT run_id FROM tiq72_reservations WHERE id=?)",
+                ("not-json",rid))
+        self.store.record_verified_event("evt_paid_invalid_score",
+            "checkout.session.completed",rid,"cs_test_abc",verified_paid=True)
+        with self.assertRaisesRegex(CommerceDenied,"stored_score_invalid"):
+            self.service.fulfill_report(owner_id="adult-1",reservation_id=rid)
+        self.assertEqual(self.db.execute(
+            "SELECT COUNT(*) FROM tiq72_reports WHERE reservation_id=?",(rid,)).fetchone()[0],0)
+
+    def test_report_cannot_be_fulfilled_after_refund(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
+            canonical_run=run,authoritative_score={"score":70},
+            success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        rid=result["reservation_id"]
+        self.store.record_verified_event("evt_paid_then_refund",
+            "checkout.session.completed",rid,"cs_test_abc",verified_paid=True)
+        self.store.record_verified_event("evt_refund_before_report",
+            "charge.refunded",rid,"cs_test_abc",verified_reversal=True)
+        with self.assertRaisesRegex(CommerceDenied,"active_entitlement_required"):
+            self.service.fulfill_report(owner_id="adult-1",reservation_id=rid)
+
     def test_report_denied_before_verified_payment(self):
         run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
         result=self.service.start_checkout(owner_id="adult-1",adult_attested=True,
@@ -78,7 +115,7 @@ class CommerceIntegrationTests(unittest.TestCase):
             success_url="https://example.org/success",cancel_url="https://example.org/cancel")
         with self.assertRaisesRegex(CommerceDenied,"active_entitlement_required"):
             self.service.fulfill_report(owner_id="adult-1",
-                reservation_id=result["reservation_id"],report={"score":70})
+                reservation_id=result["reservation_id"])
 
     def test_unpaid_checkout_cannot_grant_entitlement(self):
         run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
@@ -98,9 +135,53 @@ class CommerceIntegrationTests(unittest.TestCase):
 
     def test_requires_adult_attestation(self):
         run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
-        with self.assertRaisesRegex(CommerceDenied,"adult_identity_required"):
-            self.service.start_checkout(owner_id="adult-1",adult_attested=False,
-                canonical_run=run,authoritative_score={"score":70},
-                success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+        for attestation in (False, None, 1, "true"):
+            with self.subTest(attestation=attestation):
+                with self.assertRaisesRegex(CommerceDenied,"adult_identity_required"):
+                    self.service.start_checkout(owner_id="adult-1",adult_attested=attestation,
+                        canonical_run=run,authoritative_score={"score":70},
+                        success_url="https://example.org/success",cancel_url="https://example.org/cancel")
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_runs").fetchone()[0], 0)
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_reservations").fetchone()[0], 0)
+        self.assertIsNone(self.stripe.session)
+
+
+    def test_rejected_attestations_leave_no_side_effects_extended(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        for attestation in (False, None, 0, 1, "true", "True", [], {}):
+            with self.subTest(attestation=repr(attestation)):
+                with self.assertRaisesRegex(CommerceDenied, "adult_identity_required"):
+                    self.service.start_checkout(owner_id="adult-1", adult_attested=attestation,
+                        canonical_run=run, authoritative_score={"score":70},
+                        success_url="https://example.org/success",
+                        cancel_url="https://example.org/cancel")
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_runs").fetchone()[0], 0)
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_reservations").fetchone()[0], 0)
+                self.assertIsNone(self.stripe.session)
+
+    def test_missing_owner_rejected_before_persistence(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        for owner in (None, "", " ", 1, False, {}, []):
+            with self.subTest(owner=repr(owner)):
+                with self.assertRaisesRegex(CommerceDenied, "authenticated_owner_required"):
+                    self.service.start_checkout(owner_id=owner, adult_attested=True,
+                        canonical_run=run, authoritative_score={"score":70},
+                        success_url="https://example.org/success",
+                        cancel_url="https://example.org/cancel")
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_runs").fetchone()[0], 0)
+                self.assertEqual(self.db.execute("SELECT COUNT(*) FROM tiq72_reservations").fetchone()[0], 0)
+                self.assertIsNone(self.stripe.session)
+
+    def test_other_owner_cannot_read_or_fulfill_paid_report(self):
+        run={"challenges":[[{"action":"wait","stop":None} for _ in range(12)] for _ in range(6)]}
+        result=self.service.start_checkout(owner_id="adult-1", adult_attested=True,
+            canonical_run=run, authoritative_score={"score":70},
+            success_url="https://example.org/success",
+            cancel_url="https://example.org/cancel")
+        rid=result["reservation_id"]
+        with self.assertRaisesRegex(CommerceDenied, "reservation_not_owned"):
+            self.service.fulfill_report(owner_id="adult-2", reservation_id=rid, report={"score":70})
+        with self.assertRaises(CommerceDenied):
+            self.store.get_report(rid, "adult-2")
 
 if __name__=="__main__": unittest.main()

@@ -616,3 +616,189 @@ def test_versioned_standard_beta_price_mappings_are_distinct(monkeypatch, tmp_pa
     assert current.offer_code == "standard_beta_v2"
     assert current.price_id == "price_standard_v2"
     assert legacy.price_id != current.price_id
+
+
+@pytest.mark.parametrize("prefix", ["rk_live_", "sk_live_", "invalid_"])
+def test_staging_rejects_live_and_unknown_key_modes_before_stripe(monkeypatch, prefix):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dasmtjfpn0mc73948r10")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", prefix + "synthetic_fixture")
+    with pytest.raises(RuntimeError, match="^billing_staging_requires_stripe_test_key$"):
+        billing._stripe_module()
+    assert fake_stripe.api_key is None
+
+
+@pytest.mark.parametrize("prefix", ["rk_test_", "sk_test_"])
+def test_staging_accepts_test_mode_keys(monkeypatch, prefix):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dasmtjfpn0mc73948r10")
+    key = prefix + "synthetic_fixture"
+    monkeypatch.setenv("STRIPE_SECRET_KEY", key)
+    assert billing._stripe_module() is fake_stripe
+    assert fake_stripe.api_key == key
+
+
+
+@pytest.mark.parametrize("value", [
+    "mk_sandbox_invalid", "pk_test_publishable_only", "rk_live_wrong_mode",
+    "sk_live_wrong_mode", "invalid_secret",
+])
+@pytest.mark.parametrize("service_id,sandbox_mode", [
+    ("srv-dbc4oe5g1s2s73925fb0", "false"),
+    ("srv-dbc4oe5g1s2s73925fb0", "true"),
+    ("srv-dasn1mbbc2fs738036gg", "true"),
+])
+def test_course_sandbox_rejects_invalid_or_live_stripe_keys_before_import(
+        monkeypatch, service_id, sandbox_mode, value):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", service_id)
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", sandbox_mode)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", value)
+    with pytest.raises(RuntimeError, match="^course_sandbox_requires_stripe_test_key$"):
+        billing._stripe_module()
+    assert fake_stripe.api_key is None
+
+
+@pytest.mark.parametrize("prefix", ["rk_test_", "sk_test_"])
+def test_course_sandbox_accepts_only_test_mode_key_prefix(monkeypatch, prefix):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dbc4oe5g1s2s73925fb0")
+    monkeypatch.setenv("NIJA_COURSE_SANDBOX_MODE", "true")
+    secret = prefix + "isolated_synthetic_fixture"
+    monkeypatch.setenv("STRIPE_SECRET_KEY", secret)
+    assert billing._stripe_module() is fake_stripe
+    assert fake_stripe.api_key == secret
+
+
+def test_staging_guard_does_not_change_production_key_configuration(monkeypatch):
+    import sys
+    fake_stripe = SimpleNamespace(api_key=None)
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-dasn1mbbc2fs738036gg")
+    key = "rk_" + "live_" + "synthetic_fixture"
+    monkeypatch.setenv("STRIPE_SECRET_KEY", key)
+    assert billing._stripe_module() is fake_stripe
+    assert fake_stripe.api_key == key
+
+
+def test_current_stripe_invoice_parent_parser_accepts_subscription_only():
+    """Stripe 2026 invoices carry subscriptions under parent.subscription_details."""
+    current = {
+        "id": "in_test_one",
+        "parent": {"type": "subscription_details",
+                   "subscription_details": {"subscription": "sub_1"}},
+    }
+    assert billing._invoice_subscription_id(current) == "sub_1"
+    assert billing._invoice_subscription_id({"subscription": "sub_legacy"}) == "sub_legacy"
+    assert billing._invoice_subscription_id({
+        "parent": {"type": "quote_details",
+                   "subscription_details": {"subscription": "sub_1"}}
+    }) is None
+    assert billing._invoice_subscription_id({
+        "parent": {"type": "subscription_details",
+                   "subscription_details": {"subscription": "pi_untrusted"}}
+    }) is None
+    assert billing._invoice_subscription_id({"subscription": "bogus"}) is None
+    assert billing._invoice_subscription_id({}) is None
+
+
+def test_current_stripe_invoice_paid_updates_authoritative_membership(monkeypatch, tmp_path):
+    """Invoice paid callback must resolve new Stripe parent structure."""
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    state["session"] = _valid_checkout_session()
+    state["event"] = {
+        "id": "evt_checkout_for_invoice_2026",
+        "type": "checkout.session.completed",
+        "created": 601,
+        "data": {"object": {"id": "cs_nija_1"}},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+
+    state["subscription"] = _valid_subscription("active")
+    state["event"] = {
+        "id": "evt_current_invoice_paid",
+        "type": "invoice.paid",
+        "created": 602,
+        "data": {"object": {
+            "id": "in_current_paid",
+            "customer": "cus_1",
+            "parent": {"type": "subscription_details",
+                       "subscription_details": {"subscription": "sub_1"}},
+        }},
+    }
+    response = client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    )
+    assert response.status_code == 200
+    record = store.get_customer("application-123")
+    assert record["status"] == "active"
+    assert record["entitled"] is True
+
+
+def test_current_stripe_failed_invoice_revokes_existing_membership(monkeypatch, tmp_path):
+    """Current Invoice layout must revoke after failure even without top-level subscription."""
+    app, store = _configured_app(monkeypatch, tmp_path)
+    state, stripe = _stripe_fixture()
+    monkeypatch.setattr(billing, "_stripe_module", lambda: stripe)
+    client = app.test_client()
+    assert _create_checkout(client).status_code == 200
+
+    state["session"] = _valid_checkout_session()
+    state["event"] = {
+        "id": "evt_checkout_for_invoice_failure",
+        "type": "checkout.session.completed",
+        "created": 701,
+        "data": {"object": {"id": "cs_nija_1"}},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+
+    state["event"] = {
+        "id": "evt_valid_membership_active",
+        "type": "customer.subscription.updated",
+        "created": 702,
+        "data": {"object": _valid_subscription("active")},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+    assert store.get_customer("application-123")["entitled"] is True
+
+    state["event"] = {
+        "id": "evt_current_invoice_failed",
+        "type": "invoice.payment_failed",
+        "created": 703,
+        "data": {"object": {
+            "id": "in_current_failed",
+            "customer": "cus_1",
+            "parent": {"type": "subscription_details",
+                       "subscription_details": {"subscription": "sub_1"}},
+        }},
+    }
+    assert client.post(
+        "/api/billing/webhook", data=b"raw",
+        headers={"Stripe-Signature": "valid-signature"},
+    ).status_code == 200
+    record = store.get_customer("application-123")
+    assert record["entitled"] is False
+    assert record["status"] == "payment_failed"

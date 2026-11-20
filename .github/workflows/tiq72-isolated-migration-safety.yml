@@ -1,0 +1,102 @@
+name: TIQ72 isolated migration safety (synthetic only)
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/migrate_tiq72_upgrade6_isolated.py'
+      - 'tests/test_migrate_tiq72_upgrade6_isolated.py'
+      - 'tests/test_tiq72_real_postgres18_schema_ci.py'
+      - 'web/trading-challenge/v515/server/sql/tiq72-v515-report-ledger.sql'
+      - '.github/workflows/tiq72-isolated-migration-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    name: Confirm no cross-workspace migration or unapproved DDL
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install local test runner only
+        run: python -m pip install pytest==8.2.2
+      - name: Syntax check (no DB connection)
+        run: python -m py_compile scripts/migrate_tiq72_upgrade6_isolated.py tests/test_migrate_tiq72_upgrade6_isolated.py
+      - name: Mock database identity, backup, transaction and rollback
+        run: python -m pytest -q tests/test_migrate_tiq72_upgrade6_isolated.py
+
+  ephemeral-postgres18:
+    name: Validate actual v515 DDL on disposable PostgreSQL 18
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install isolated PostgreSQL driver for offline CI
+        run: |
+          python -m pip install --only-binary=:all: -r web/trading-challenge/server/requirements-tiq72-preflight.txt
+      - name: Create isolated, ephemeral database password file
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/tiq72-postgres"
+          openssl rand -hex 32 > "$RUNNER_TEMP/tiq72-postgres/secret"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/tiq72-postgres/secret")"
+          printf '127.0.0.1:5432:nija_tiq72_ci_scratch:nija_tiq72_ci:%s\n' \
+            "$(cat "$RUNNER_TEMP/tiq72-postgres/secret")" > "$RUNNER_TEMP/tiq72-postgres/client.pgpass"
+          chmod 600 "$RUNNER_TEMP/tiq72-postgres/client.pgpass"
+          printf 'PGPASSFILE=%s\n' "$RUNNER_TEMP/tiq72-postgres/client.pgpass" >> "$GITHUB_ENV"
+      - name: Start PostgreSQL 18 bound only to runner loopback
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name nija-tiq72-ci-postgres \
+            --publish 127.0.0.1:5432:5432 \
+            --mount "type=bind,src=$RUNNER_TEMP/tiq72-postgres/secret,dst=/run/secrets/tiq72-db-password,readonly" \
+            --env POSTGRES_DB=nija_tiq72_ci_scratch \
+            --env POSTGRES_USER=nija_tiq72_ci \
+            --env POSTGRES_PASSWORD_FILE=/run/secrets/tiq72-db-password \
+            postgres:18
+          for attempt in $(seq 1 30); do
+            if docker exec nija-tiq72-ci-postgres pg_isready -U nija_tiq72_ci -d nija_tiq72_ci_scratch; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'Disposable PostgreSQL failed to become ready' >&2
+          exit 1
+      - name: Prove schema DDL, uniqueness, foreign keys, constraints, and rollback
+        env:
+          NIJA_TIQ72_CI_EPHEMERAL_POSTGRES: '1'
+          PGHOST: '127.0.0.1'
+          PGPORT: '5432'
+          PGDATABASE: nija_tiq72_ci_scratch
+          PGUSER: nija_tiq72_ci
+        run: python -m unittest discover -s tests -p 'test_tiq72_real_postgres18_schema_ci.py' -v
+      - name: Rehearse logical backup and restoration in disposable container
+        run: |
+          docker exec -i nija-tiq72-ci-postgres sh -eu <<'CI_PG_RESTORE'
+          psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "INSERT INTO tiq72_v515_runs (run_id,owner_id,canonical_run,canonical_digest,attempt_key) VALUES ('ci-backup-test','ci-owner','{}'::jsonb,'ci-digest','ci-attempt')"
+          pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-privileges --file=/tmp/tiq72-ci.dump
+          createdb -U "$POSTGRES_USER" nija_tiq72_ci_restore
+          pg_restore -U "$POSTGRES_USER" -d nija_tiq72_ci_restore --exit-on-error --no-owner --no-privileges /tmp/tiq72-ci.dump
+          table_count=$(psql -U "$POSTGRES_USER" -d nija_tiq72_ci_restore -At -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'tiq72_v515_%'")
+          row_count=$(psql -U "$POSTGRES_USER" -d nija_tiq72_ci_restore -At -c "SELECT COUNT(*) FROM tiq72_v515_runs WHERE run_id='ci-backup-test'")
+          test "$table_count" = 4
+          test "$row_count" = 1
+          echo "Disposable schema and one synthetic row restored successfully"
+          CI_PG_RESTORE
+      - name: Destroy disposable PostgreSQL and ephemeral credential files
+        if: always()
+        run: |
+          docker rm -f nija-tiq72-ci-postgres >/dev/null 2>&1 || true
+          if [ -n "${RUNNER_TEMP:-}" ]; then
+            rm -f -- "$RUNNER_TEMP/tiq72-postgres/secret" "$RUNNER_TEMP/tiq72-postgres/client.pgpass"
+            rmdir -- "$RUNNER_TEMP/tiq72-postgres" 2>/dev/null || true
+          fi

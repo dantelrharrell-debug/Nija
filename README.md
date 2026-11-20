@@ -1,5 +1,31 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Production recovery checkpoint — November 13, 2026 (repository-verified)
+
+**Status: live trading is not independently certified by this documentation update.** GitHub merge evidence shows recovery code has advanced since the November 12 authenticated inspection below. A merged pull request, completed deployment, or successful unit test is **not** sufficient to establish a collector installed in the final production interpreter, all account-scoped observations passing, or authorization to place real-money orders. The November 12 runtime observations below remain a historical baseline, not a claim about the current runtime.
+
+### Changes confirmed in GitHub
+
+- [PR #3859](https://github.com/dantelrharrell-debug/Nija/pull/3859), **merged November 13**: explicit Kraken identity-method wiring across the account, permission and ledger evidence-reader chain. Production readback of the correct account and credential, including identity/scope validation, still requires fresh authenticated evidence.
+- [PR #3860](https://github.com/dantelrharrell-debug/Nija/pull/3860), **merged November 13**: preserve private Kraken history responses across interrupted recovery. This improves recovery tooling; it does **not** prove all historical opening trades, financing, transfers, fees, holdings or protective orders have been collected and reconciled.
+- [PR #3861](https://github.com/dantelrharrell-debug/Nija/pull/3861), **merged November 13**: release-branch integration was recorded in the repository. Do not infer production-image alignment from the merge alone.
+
+### Production acceptance gates still needing fresh evidence
+
+1. **Identity and collector:** Verify current Render deployment commit and immutable image digest; confirm the reviewed identity method against Kraken's real account/permission responses; prove collector factory registration in the final Python interpreter and all **13/13 fresh, correctly scoped observations**.
+2. **Ledger and protective exits:** Privately recover source-backed opening trades, all 13 orders and 18 fills as applicable to the recovery case, financing, transfers, balances, positions, fees, and protective orders. Verify every linkage and independently restore-test a backup **before** any audited ledger correction. The order/fill counts are investigation scope, not reconciliation certification.
+3. **Live risk publisher:** Demonstrate genuine, account-scoped current capital, spot/margin exposure, pending obligations and approved limits; prove freshness, atomicity, and fail-closed behavior when any field is missing.
+4. **Release security:** Resolve remaining secret/pre-commit, dependency/package, and container/artifact findings; require passing mandatory checks on the **exact deployment commit and image**, without bypasses.
+5. **Protected startup:** Independently review and sign genuine receipts, privately provision both fixed-path protected startup files, verify trust roots and immutable-image binding, then authenticate fresh producer and admission evidence after an explicitly approved release deployment.
+6. **Trading authorization:** Keep `allow_new_orders=false`, kill-switch and nonce/writer/duplicate protections in force until complete certification and a distinct affirmative owner go-live decision. Never use synthetic fills, fabricated signatures or stale health signals as proof.
+
+**Operational references:** [recovery issue #3800](https://github.com/dantelrharrell-debug/Nija/issues/3800) · [Render service](https://dashboard.render.com/web/srv-d98dsr5aeets73fpbaqg) · [protected release](https://github.com/dantelrharrell-debug/Nija/tree/release/justcall-handoff-only-20261017). Keep credentials, customer records, signed receipts, and sensitive account data in approved private storage, not this public README.
+
+**Scope:** Documentation only. This change does not deploy software, provision protected files, change risk controls, repair a ledger, submit an order, or authorize trading.
+
+---
+
+
 ## Kraken production activation — November 12, 2026 (authenticated read-only inspection)
 
 **Live trading: BLOCKED — NOT AUTHORIZED.** The November 12 authenticated production inspection (21:08–21:16 UTC) established that the **current Render runtime does not have the Kraken evidence collector installed**. This is a dated baseline, not a continuously monitored current-state assertion. Keep `allow_new_orders=false`, fail-closed admission, strict Redis writer/nonce ownership, kill-switch safeguards, and auto-deploy disabled. This README update is documentation only: no merge, deployment, credential change, protected-file change, order submission or trading authorization.

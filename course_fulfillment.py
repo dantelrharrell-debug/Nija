@@ -46,10 +46,9 @@ def expected_course_link():
 
 
 def _matches_mode(obj, expected_live):
-    # In sandbox the provider must explicitly attest livemode=false.
-    # Legacy mock fixtures in live-mode tests omit this field.
-    value = obj.get("livemode")
-    return value is not False if expected_live else value is False
+    # Provider objects must explicitly attest the exact configured mode.
+    # Missing/null/non-boolean values cannot prove a real payment.
+    return obj.get("livemode") is expected_live
 
 
 
@@ -73,6 +72,13 @@ class CourseLedger:
         with self.engine.connect() as conn:
             row = conn.execute(select(self.table).where(self.table.c.session_id == session_id)).first()
             return dict(row._mapping) if row else None
+
+    def sessions_for_intent(self, payment_intent: str) -> list[str]:
+        """Find only existing course purchases for a verified payment intent."""
+        with self.engine.connect() as conn:
+            return list(conn.execute(select(self.table.c.session_id).where(
+                self.table.c.payment_intent == payment_intent
+            )).scalars())
 
     def upsert(self, session_id, email, customer_id, payment_intent, status, granted):
         now = datetime.now(timezone.utc)
@@ -160,6 +166,23 @@ def reconcile_session(stripe, ledger, session_id):
 
 def handle_course_event(stripe, ledger, event_type, obj):
     """Invoke only after the parent webhook verifies Stripe's signature."""
+    if event_type in {"charge.refunded", "charge.dispute.created"}:
+        expected = expected_course_identity()
+        if not expected or not _matches_mode(obj, expected[3]):
+            return
+        charge_id = obj.get("id") if event_type == "charge.refunded" else obj.get("charge")
+        if not isinstance(charge_id, str) or not charge_id.startswith("ch_"):
+            return
+        # Re-fetch the provider charge; the event alone cannot change access.
+        charge = stripe.Charge.retrieve(charge_id)
+        if charge.get("id") != charge_id or not _matches_mode(charge, expected[3]):
+            return
+        intent_id = charge.get("payment_intent")
+        if not isinstance(intent_id, str) or not intent_id.startswith("pi_"):
+            return
+        for session_id in ledger.sessions_for_intent(intent_id):
+            reconcile_session(stripe, ledger, session_id)
+        return
     if event_type not in {"checkout.session.completed", "checkout.session.async_payment_succeeded",
                           "checkout.session.async_payment_failed", "checkout.session.expired"}:
         return

@@ -1,0 +1,91 @@
+--- a/src/lib/adminLeadList.js
++++ b/src/lib/adminLeadList.js
+@@ -15,6 +15,15 @@
+   return "unavailable";
+ }
+ 
++// Private dispatcher status is unknown on auth, network or malformed reads — never report "off" or "not configured".
++export function verifiedHookStatus(reply) {
++  if (!reply || typeof reply.endpoint_configured !== "boolean" ||
++      typeof reply.enabled !== "boolean" || typeof reply.activated !== "boolean") {
++    return { loaded: true, configured: null, enabled: null, activated: null, error: "unavailable" };
++  }
++  return { loaded: true, configured: reply.endpoint_configured, enabled: reply.enabled, activated: reply.activated, error: null };
++}
++
+ // Zapier status shown per lead. Never "sent" and never "delivered".
+ // The receipt store accepts rows written by anyone, so NO receipt can prove an outcome. Only the lead's own record may say
+ // "test lead" (skipped). A receipt that says "pending" is shown as waiting; every other receipt value (sent, failed, skipped,
+--- a/src/pages/AdminSettings.jsx
++++ b/src/pages/AdminSettings.jsx
+@@ -1,7 +1,7 @@
+ import { useState, useEffect } from "react";
+ import { Link } from "react-router";
+ import { pb, isPreviewStore, storeLabel } from "../lib/pb.js";
+-import { buildLeadFilter, classifyReadError, zapStatus, zapLabel, completeReceiptPage, consentCell, LEAD_PAGE_SIZE, LEAD_SORT } from "../lib/adminLeadList.js";
++import { buildLeadFilter, classifyReadError, zapStatus, zapLabel, completeReceiptPage, verifiedHookStatus, consentCell, LEAD_PAGE_SIZE, LEAD_SORT } from "../lib/adminLeadList.js";
+ import { isAllowedWebhookUrl } from "../lib/endpointFormat.js";
+ 
+ const GOLD = "#D4AF37";
+@@ -78,14 +78,14 @@
+   // Private dispatch: the address is write-only here. It is never read back, never prefilled and never
+   // stored in the public settings store. Status comes only from the authenticated server route.
+   const [hookUrl, setHookUrl] = useState("");
+-  const [hookState, setHookState] = useState({ loaded: false, configured: false, enabled: false, activated: false });
++  const [hookState, setHookState] = useState({ loaded: false, configured: null, enabled: null, activated: null, error: null });
+   const [hookMsg, setHookMsg] = useState({ type: "", text: "" });
+ 
+   async function loadHook() {
+     try {
+       const s = await pb.send("/api/nija-lead-dispatch/status", { method: "GET" });
+-      setHookState({ loaded: true, configured: s?.endpoint_configured === true, enabled: s?.enabled === true, activated: s?.activated === true });
+-    } catch { setHookState({ loaded: true, configured: false, enabled: false, activated: false }); }
++      setHookState(verifiedHookStatus(s));
++    } catch { setHookState(verifiedHookStatus(null)); }
+   }
+   // Delivery checks (read-only). They only read: no sending, retrying, claiming or changing anything.
+   // A failed check is shown as an error, never as a zero count.
+@@ -270,8 +270,8 @@
+             Saving an address does not start sending. The website itself no longer sends anything to Zapier or by email from a visitor's browser; every enquiry is saved and waits.
+           </p>
+           <p style={{ color: "#E0E0E0", fontSize: 15 }} role="status">
+-            Address: {!hookState.loaded ? "checking…" : hookState.configured ? "saved privately (value hidden)" : "not saved yet"}.
+-            Sending: {!hookState.loaded ? "checking…" : hookState.enabled ? "switched on" : "switched off, so nothing is passed on from new submissions"}.
++            Address: {!hookState.loaded ? "checking…" : hookState.error ? "UNVERIFIED (could not read private configuration)" : hookState.configured ? "saved privately (value hidden)" : "not saved yet"}.
++            Sending: {!hookState.loaded ? "checking…" : hookState.error ? "UNVERIFIED (could not read server status)" : hookState.enabled ? "switched on" : "switched off, so nothing is passed on from new submissions"}.
+           </p>
+           <div style={{ marginBottom: 16 }}>
+             <label htmlFor="hook-url" style={label}>New catch-hook address (write-only; the box empties after saving)</label>
+@@ -414,7 +414,7 @@
+           {leads.loaded && !leads.error && (
+             <p role="status" style={{ color: "#E0E0E0", fontSize: 14 }}>
+               {leads.total} saved in total. Waiting for Zapier (in this list): {leads.items.filter((l) => l._zap === "pending").length}.
+-              {!hookState.configured && hookState.loaded ? " Zapier is not connected, so new leads show as waiting." : ""}
++              {!hookState.error && !hookState.configured && hookState.loaded ? " Zapier is not connected, so new leads show as waiting." : ""}
+             </p>
+           )}
+           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "8px 0" }}>
+--- /dev/null
++++ b/offline_lead_intake_tests/hook_status_failclosed_test.mjs
+@@ -0,0 +1,21 @@
++import fs from 'node:fs';
++import assert from 'node:assert/strict';
++import {verifiedHookStatus} from '../src/lib/adminLeadList.js';
++const missing=verifiedHookStatus(null);
++assert.equal(missing.error,'unavailable');
++assert.equal(missing.configured,null);
++assert.equal(missing.enabled,null);
++assert.equal(missing.activated,null);
++const malformed=verifiedHookStatus({endpoint_configured:false,enabled:false});
++assert.equal(malformed.error,'unavailable');
++const validOff=verifiedHookStatus({endpoint_configured:false,enabled:false,activated:false});
++assert.equal(validOff.error,null);
++assert.equal(validOff.enabled,false);
++const validOn=verifiedHookStatus({endpoint_configured:true,enabled:true,activated:true});
++assert.equal(validOn.error,null);
++assert.equal(validOn.enabled,true);
++const ui=fs.readFileSync('src/pages/AdminSettings.jsx','utf8');
++assert.match(ui,/setHookState\(verifiedHookStatus\(null\)\)/);
++assert.match(ui,/hookState\.error \? "UNVERIFIED/);
++assert.match(ui,/!hookState\.error && !hookState\.configured/);
++console.log('6 hook status fail-closed assertions PASS');

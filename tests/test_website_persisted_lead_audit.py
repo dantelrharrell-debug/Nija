@@ -53,6 +53,28 @@ class PersistedLeadAuditTests(unittest.TestCase):
         self.assertEqual(by_name["pilot_application"], 1)
         self.assertEqual(by_name["other"], 1)
 
+    def test_published_form_names_are_classified_and_not_exposed(self):
+        # Current published forms must remain separately classified; all records are synthetic.
+        with sqlite3.connect(self.path) as conn:
+            conn.executemany(
+                "INSERT INTO website_leads VALUES (?,?,?,?)",
+                [
+                    ("new-assessment", "free_trader_assessment", "newfree@example.test", "2026-10-20T01:00:00Z"),
+                    ("new-waitlist", "founding_100_waitlist", "newwait@example.test", "2026-10-20T01:01:00Z"),
+                ],
+            )
+        data = count_saved_submissions(str(self.path), "2026-10")
+        groups = {row["form_category"]: row["submissions"] for row in data["forms"]}
+        self.assertEqual(data["persisted_submissions"], 6)
+        self.assertEqual(data["distinct_submission_ids"], 6)
+        self.assertEqual(data["distinct_contact_emails"], 5)
+        self.assertEqual(groups["free_assessment"], 3)
+        self.assertEqual(groups["founding_waitlist"], 1)
+        self.assertEqual(groups["other"], 1)
+        self.assertIs(data["complete_source_inventory"], False)
+        self.assertNotIn("newfree@example.test", repr(data))
+        self.assertNotIn("newwait@example.test", repr(data))
+
     def test_receipt_month_not_client_submission_month(self):
         october = count_saved_submissions(str(self.path), "2026-10")
         september = count_saved_submissions(str(self.path), "2026-09")

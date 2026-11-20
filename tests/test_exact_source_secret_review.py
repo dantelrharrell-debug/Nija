@@ -13,7 +13,7 @@ from detect_secrets.pre_commit_hook import main as hook_main
 import pytest
 import yaml
 
-from scripts.check_reviewed_secret_context import MANIFEST, check_context
+from scripts.check_reviewed_secret_context import MANIFEST, TIQ72_MANIFEST, check_context, check_all_context
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -188,6 +188,87 @@ def _reviewed_source_drift_summary(root: Path, review: dict) -> str:
     )
 
 
+def normalize_additional_tiq72_review_for_historical_comparison(current):
+    """Remove only separately source-pinned 2026-11-18 identities in a copy.
+
+    The original 142-candidate regression below remains exact. A new review
+    cannot silently alter or expand the historical baseline comparison.
+    """
+    assert check_all_context(ROOT)
+    review = json.loads((ROOT / TIQ72_MANIFEST).read_text())
+    assert current.pop("reviewed_additional_context_manifest") == TIQ72_MANIFEST
+    assert len(review["entries"]) == 6
+    assert len(review["files"]) == 6
+    stale = review["replaced_stale_identity"]
+    for item in review["entries"]:
+        path, line, kind, hashed = (
+            item["path"], item["line"], item["type"], item["detector_sha1"]
+        )
+        rows = current["results"][path]
+        candidates = [
+            row for row in rows
+            if (row["line_number"], row["type"], row["hashed_secret"])
+            == (line, kind, hashed.replace(":", ""))
+        ]
+        assert len(candidates) == 1
+        candidate = candidates[0]
+        assert candidate["is_secret"] is False and candidate["is_verified"] is False
+        if (path, line, kind) == (
+            stale["path"], stale["line"], stale["type"]
+        ):
+            assert hashed == stale["current_detector_sha1"]
+            candidate["hashed_secret"] = stale["previous_detector_sha1"].replace(":", "")
+        else:
+            rows.remove(candidate)
+            if not rows:
+                del current["results"][path]
+
+
+def test_supplemental_tiq72_review_is_source_bound_and_exact():
+    assert check_context(ROOT), "historical_review_source_mismatch"
+    assert check_context(ROOT, TIQ72_MANIFEST), "supplemental_review_source_mismatch"
+    assert check_all_context(ROOT), "reviewed_candidate_mapping_mismatch"
+    baseline = json.loads((ROOT / ".secrets.baseline").read_text())
+    review = json.loads((ROOT / TIQ72_MANIFEST).read_text())
+    assert baseline["reviewed_additional_context_manifest"] == TIQ72_MANIFEST
+    assert len(review["entries"]) == 6
+    assert len(review["files"]) == 6
+    assert check_context(ROOT, TIQ72_MANIFEST)
+    observed = {
+        (e["path"], e["line"], e["type"], e["detector_sha1"])
+        for e in review["entries"]
+    }
+    assert len(observed) == 6
+    assert {e["category"] for e in review["entries"]} == {
+        "provider_public_price_id", "language_type_check", "source_sha256_digest"
+    }
+    for path, line, kind, hashed in observed:
+        matches = [
+            x for x in baseline["results"][path]
+            if (x["line_number"], x["type"], x["hashed_secret"])
+            == (line, kind, hashed.replace(":", ""))
+        ]
+        assert len(matches) == 1
+        assert matches[0]["is_secret"] is False
+        assert matches[0]["is_verified"] is False
+
+
+def test_supplemental_source_drift_fails_closed(tmp_path):
+    """Changed reviewed source must not inherit its old detector exception."""
+    review = json.loads((ROOT / TIQ72_MANIFEST).read_text())
+    manifest = tmp_path / TIQ72_MANIFEST
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps(review))
+    for path in review["files"]:
+        source = tmp_path / path
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes((ROOT / path).read_bytes())
+    assert check_context(tmp_path, TIQ72_MANIFEST)
+    target = tmp_path / review["entries"][0]["path"]
+    target.write_bytes(target.read_bytes() + b"\n// unreviewed code change\n")
+    assert not check_context(tmp_path, TIQ72_MANIFEST)
+
+
 def test_review_adds_only_the_exact_142_reviewed_identities():
     before = json.loads(subprocess.check_output([
         "git", "show", "15b64ddcb44fa67f33a336b799ee8f89b1bc1fe9:.secrets.baseline",
@@ -196,6 +277,7 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
         json.loads((ROOT / ".secrets.baseline").read_text()), ROOT,
     )
     normalize_reviewed_recovery_pin_replacements(current)
+    normalize_additional_tiq72_review_for_historical_comparison(current)
     # Normalize only the separately reviewed public source-digest replacement
     # before checking the original 142-candidate review. All other identities,
     # audit flags, metadata and detector configuration remain checked below.
