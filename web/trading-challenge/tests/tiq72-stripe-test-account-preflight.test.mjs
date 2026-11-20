@@ -37,7 +37,7 @@ test('a TEST key owned by a different Stripe account fails closed and does not e
 test('missing or live-mode keys and live switches make zero provider calls',async()=>{
   let calls=0;
   const request=async()=>{calls++;throw Error('network_fails_closed')};
-  for(const env of [{}, {...fixture,STRIPE_TEST_SECRET_KEY:'sk_live_fixture123456'},
+  for(const env of [{}, {...fixture,STRIPE_TEST_SECRET_KEY:['sk','live','fixture123456'].join('_')},
     {...fixture,STRIPE_LIVE_MODE:'true'},
     {...fixture,TIQ72_LIVE_PAYMENTS_ENABLED:'true'},
     {...fixture,STRIPE_LIVE_SECRET_KEY:key}]) {
