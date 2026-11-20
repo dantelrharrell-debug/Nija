@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
 import {createNonRoutedTiq72SandboxDependencies} from '../tiq72-isolated-v515-runtime.mjs';
+import {TEST_PRICE,TEST_PRODUCT,ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT} from '../../v515/server/verified-report-service.mjs';
 
 const key=['sk','test',randomBytes(24).toString('hex')].join('_');
 const hook=['whsec',randomBytes(24).toString('hex')].join('_');
@@ -18,8 +19,8 @@ function privateUrl() {
 const valid={
   STRIPE_TEST_SECRET_KEY:key,
   STRIPE_TEST_WEBHOOK_SECRET:hook,
-  TIQ72_STRIPE_TEST_PRICE_ID:'price_1UddqtI0gfJjTf3EksOST6m3',
-  TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_VexmVpVMZjIj6Y',
+  TIQ72_STRIPE_TEST_PRICE_ID:TEST_PRICE,
+  TIQ72_STRIPE_TEST_PRODUCT_ID:TEST_PRODUCT,
   TIQ72_TEST_DATABASE_URL:privateUrl(),
   TIQ72_TEST_RETURN_ORIGIN:'https://game.nijaaitrading.com',
   TIQ_ALLOWED_ORIGIN:'https://game.nijaaitrading.com',
@@ -64,6 +65,10 @@ test('rejects missing keys, live flags, wrong DB/price/origin and absent rate li
       'dpg-dbqeq90ae00c7386p970-a','dpg-dbsuhuc9v7es73bmteeg-a')}],
     ['wrong_price',{...valid,TIQ72_STRIPE_TEST_PRICE_ID:'price_incorrect'}],
     ['wrong_product',{...valid,TIQ72_STRIPE_TEST_PRODUCT_ID:'prod_incorrect'}],
+    ['different_sandbox_offer',{...valid,TIQ72_STRIPE_TEST_PRICE_ID:ISOLATED_TEST_PRICE,
+      TIQ72_STRIPE_TEST_PRODUCT_ID:ISOLATED_TEST_PRODUCT}],
+    ['mixed_sandbox_price',{...valid,TIQ72_STRIPE_TEST_PRICE_ID:ISOLATED_TEST_PRICE}],
+    ['mixed_sandbox_product',{...valid,TIQ72_STRIPE_TEST_PRODUCT_ID:ISOLATED_TEST_PRODUCT}],
     ['unsafe_origin',{...valid,TIQ_ALLOWED_ORIGIN:'https://malicious.invalid'}],
     ['live_switch',{...valid,STRIPE_LIVE_MODE:'true'}],
     ['browser_checkout_switch',{...valid,NIJA_GAME_BROWSER_CHECKOUT_ENABLED:'true'}],

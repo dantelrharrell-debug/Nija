@@ -1,8 +1,8 @@
 // Test-only v515 paid report boundary. Never register as a live payment route.
 import {buildReport} from "../offline_tiq_premium/tiq_report.mjs";
 import {validateRun} from "../offline_tiq_premium/tiq_engine.mjs";
-export const TEST_PRICE="price_1UYToJRS5Ezp77RQVkx96eS5";
-export const TEST_PRODUCT="prod_nija_iq72_sandbox_v1";
+import {TEST_PRICE,TEST_PRODUCT} from "./tiq72-test-offer.mjs";
+export {TEST_PRICE,TEST_PRODUCT};
 export const ISOLATED_TEST_PRICE="price_1UddqtI0gfJjTf3EksOST6m3";
 export const ISOLATED_TEST_PRODUCT="prod_VexmVpVMZjIj6Y";
 export class PaidReportDenied extends Error {constructor(code){super(code);this.name="PaidReportDenied";}}

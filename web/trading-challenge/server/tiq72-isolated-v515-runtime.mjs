@@ -9,10 +9,7 @@ import {inspectTiq72IsolatedPrivateUrl} from './tiq72-isolated-readiness.mjs';
 import {inspectTiq72TestConfig} from './tiq72-upgrade6-config-preflight.mjs';
 import {createTiq72SignedV515Handler} from './tiq72-v515-auth-adapter.mjs';
 import {V515PgReportStore} from '../v515/server/v515-pg-report-store.mjs';
-import {ISOLATED_TEST_PRICE,ISOLATED_TEST_PRODUCT} from '../v515/server/verified-report-service.mjs';
-
-const PRICE=ISOLATED_TEST_PRICE;
-const PRODUCT=ISOLATED_TEST_PRODUCT;
+import {TEST_PRICE as PRICE,TEST_PRODUCT as PRODUCT} from '../v515/server/tiq72-test-offer.mjs';
 const ORIGIN='https://game.nijaaitrading.com';
 const TEST_SECRET=/^(?:sk_test_|rk_test_)[a-zA-Z0-9]{16,}$/;
 const WEBHOOK_SECRET=/^whsec_[a-zA-Z0-9]{16,}$/;
