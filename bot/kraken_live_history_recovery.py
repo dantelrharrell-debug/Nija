@@ -74,7 +74,7 @@ def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _request(root: Path, now: float, filename: str = "request.json") -> dict[str, Any] | None:
+def _request(root: Path, now: float, filename: str = "request.json", *, allow_inventory: bool = False) -> dict[str, Any] | None:
     """Read one bounded, private request; do not create an empty replacement."""
     try:
         fd = os.open(root / filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -95,8 +95,14 @@ def _request(root: Path, now: float, filename: str = "request.json") -> dict[str
         os.close(fd)
     row = json.loads(raw, object_pairs_hook=_unique_keys)
     required = {"request_id", "account_scope", "created_at", "max_pages"}
-    if not isinstance(row, dict) or set(row) not in (required, required | {"use_cursor"}):
+    schemas = [required, required | {"use_cursor"}]
+    if allow_inventory:
+        schemas.append(required | {"mode"})
+    if not isinstance(row, dict) or set(row) not in schemas:
         raise ValueError("recovery_request_schema_invalid")
+    if "mode" in row and (row["mode"] != "current_inventory" or row["account_scope"] != "platform:kraken"
+                          or row["max_pages"] != 1):
+        raise ValueError("inventory_request_invalid")
     if "use_cursor" in row and type(row["use_cursor"]) is not bool:
         raise ValueError("recovery_request_cursor_invalid")
     identity = row["request_id"]
@@ -147,7 +153,7 @@ def collect_requested_history(
             return False
         if _recovery_mode_conflict(root, "request.json"):
             return False
-        request = _request(root, time.time() if now is None else now)
+        request = _request(root, time.time() if now is None else now, allow_inventory=True)
         if request is None:
             return False
         selected = []
@@ -176,8 +182,26 @@ def collect_requested_history(
             os.fsync(dirfd)
         finally:
             os.close(dirfd)
-        if _request(root, time.time() if now is None else now, claim.name) != request:
+        if _request(root, time.time() if now is None else now, claim.name, allow_inventory=True) != request:
             raise ValueError("recovery_request_changed_before_claim")
+        if request.get("mode") == "current_inventory":
+            from .kraken_current_inventory import InventoryDenied, read_current_inventory
+
+            inventory_path = root / (identity + ".inventory.json")
+            if os.path.lexists(inventory_path):
+                raise ValueError("inventory_result_exists")
+            try:
+                inventory = read_current_inventory(selected[0], monitoring_category)
+            except InventoryDenied as exc:
+                inventory = {"inventory_read_succeeded": False, "reason": str(exc)}
+            except Exception:
+                # Never serialize private transport exceptions or response bodies to logs.
+                inventory = {"inventory_read_succeeded": False}
+            write_recovery_state(inventory_path, {
+                **inventory, "request_id": identity, "account_scope_asserted_by_caller": request["account_scope"],
+                "diagnostic_only": True, "complete_history": False, "trading_authorized": False,
+            })
+            return True
         started = time.time()
         progress_path = root / (identity + ".progress.json")
         read_sequence = 0

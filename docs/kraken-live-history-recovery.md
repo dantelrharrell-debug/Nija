@@ -117,3 +117,16 @@ Endpoint contract: https://docs.kraken.com/api-reference/account-data/get-open-o
 
 Rollback of this addition: revert the readback change without deleting requests,
 claims or evidence; historical receipts remain historical. No schema migration.
+
+### Current inventory request
+
+On a release containing the current inventory reader, the same private request
+publisher can select `"mode": "current_inventory"`, `"account_scope": "platform:kraken"`
+and `"max_pages": 1` with a fresh request ID and timestamp. Omit `use_cursor`.
+The existing worker and lock handle the request. It reads BalanceEx, one unfiltered
+OpenOrders cursor page and unconsolidated OpenPositions through the selected
+direct broker. A missing cursor envelope or a continuation denies the diagnostic.
+The private result is `<request_id>.inventory.json`. Each observation has its own
+start and finish time. Check those times before using the data. This separate
+file supplies diagnostic input only. Historical recovery, independent matching
+and startup verification retain their existing evidence requirements.
