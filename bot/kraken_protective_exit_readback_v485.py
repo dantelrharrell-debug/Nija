@@ -48,7 +48,7 @@ def _flat_readers(broker, account_scope, approved_api_key_sha256, monitoring_cat
                                            approved_api_key_sha256.lower())):
             raise KrakenProtectionDenied("flat_exposure_transport_unverified")
 
-    def flat_exposure(read: Callable, api: Any) -> str:
+    def flat_exposure(read: Callable, api: Any, expected_usd: Decimal | None = None) -> str:
         """Read complete supported-wallet exposure through the same pinned client."""
         results = {}
         for endpoint in ("BalanceEx", "OpenPositions"):
@@ -74,6 +74,11 @@ def _flat_readers(broker, account_scope, approved_api_key_sha256, monitoring_cat
             if any(_amount(value) != 0 for field, value in values.items()
                    if canonical != "USD" or field != "balance"):
                 raise KrakenProtectionDenied("flat_balance_or_encumbrance_present")
+        if expected_usd is not None:
+            # Require an explicit USD row even for a proposed zero opening balance.
+            cash = balances.get("ZUSD", balances.get("USD"))
+            if cash is None or _amount(cash["balance"]) != expected_usd:
+                raise KrakenProtectionDenied("opening_cash_mismatch")
         return digest
 
     return guard_flat_transport, flat_exposure
@@ -83,6 +88,7 @@ def rehearse_cash_only_baseline(
     broker: Any, *, account_scope: str, approved_api_key_sha256: str,
     approved_iban_sha256: str, reviewed_provider_id: str, monitoring_category: Any,
     identity_method: str = "response_echo", clock: Callable[[], float] = time.time,
+    expected_usd: str | None = None,
 ) -> dict:
     """Check current default-wallet exposure without certifying origin, P&L or orders.
 
@@ -99,6 +105,9 @@ def rehearse_cash_only_baseline(
     guard, exposure = _flat_readers(broker, account_scope, approved_api_key_sha256,
                                     monitoring_category)
     try:
+        if expected_usd is not None and not isinstance(expected_usd, str):
+            raise KrakenProtectionDenied("opening_cash_requires_decimal_text")
+        opening_cash = None if expected_usd is None else _amount(expected_usd)
         start = clock()
         api, read = broker.api, broker._kraken_private_call
         if identity().get("verified") is not True:
@@ -108,13 +117,14 @@ def rehearse_cash_only_baseline(
             guard(read, api)
             if _broker_orders(broker, monitoring_category=monitoring_category):
                 raise KrakenProtectionDenied("flat_open_order_inventory_not_empty")
-            observations.append(exposure(read, api))
+            observations.append(exposure(read, api, opening_cash))
         if identity().get("verified") is not True:
             raise KrakenProtectionDenied("broker_identity_changed")
         guard(read, api)
         if observations[0] != observations[1] or not 0 <= clock() - start <= MAX_AGE:
             raise KrakenProtectionDenied("readback_changed_or_stale")
-        return {"default_wallet_cash_only_observed": True, "authorizes_orders": False,
+        return {"supplied_usd_matched": opening_cash is not None,
+                "default_wallet_cash_only_observed": True, "authorizes_orders": False,
                 "collector_install_allowed": False, "historical_attribution_verified": False}
     except KrakenProtectionDenied:
         raise
