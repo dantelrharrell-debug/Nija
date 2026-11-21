@@ -33,6 +33,95 @@ class KrakenProtectionDenied(ValueError):
     """Fixed non-sensitive refusal code."""
 
 
+def _flat_readers(broker, account_scope, approved_api_key_sha256, monitoring_category):
+    def guard_flat_transport(read: Callable, api: Any) -> None:
+        """Recheck the exact existing owner without any private read or mutation."""
+        key = getattr(api, "key", None)
+        if (not callable(read) or getattr(broker, "connected", False) is not True
+                or _broker_account_scope(broker) != account_scope
+                or getattr(broker, "api", None) is not api
+                or getattr(broker, "_kraken_private_call", None) != read
+                or getattr(broker, "_gateway_url", "")
+                or getattr(broker, "_gateway_only_mode", False)
+                or not isinstance(key, str) or not key
+                or not hmac.compare_digest(hashlib.sha256(key.encode()).hexdigest(),
+                                           approved_api_key_sha256.lower())):
+            raise KrakenProtectionDenied("flat_exposure_transport_unverified")
+
+    def flat_exposure(read: Callable, api: Any) -> str:
+        """Read complete supported-wallet exposure through the same pinned client."""
+        results = {}
+        for endpoint in ("BalanceEx", "OpenPositions"):
+            guard_flat_transport(read, api)
+            reply = read(endpoint, {}, category=monitoring_category)
+            guard_flat_transport(read, api)
+            if (not isinstance(reply, Mapping) or set(reply) != {"error", "result"}
+                    or reply.get("error") != [] or not isinstance(reply.get("result"), Mapping)):
+                raise KrakenProtectionDenied("flat_exposure_response_unverified")
+            results[endpoint] = json.loads(json.dumps(reply["result"], allow_nan=False))
+        if results["OpenPositions"]:
+            raise KrakenProtectionDenied("flat_margin_exposure_present")
+        balances = results["BalanceEx"]
+        digest = _snapshot_digest(balances)  # Exact fields, finite amounts and paired credit fields.
+        aliases = {"ZUSD": "USD", "USD": "USD", "XXBT": "BTC", "XBT": "BTC", "BTC": "BTC",
+                   "XETH": "ETH", "ETH": "ETH"}
+        seen = set()
+        for asset, values in balances.items():
+            canonical = aliases.get(asset)
+            if canonical is None or canonical in seen:
+                raise KrakenProtectionDenied("flat_asset_unsupported_or_ambiguous")
+            seen.add(canonical)
+            if any(_amount(value) != 0 for field, value in values.items()
+                   if canonical != "USD" or field != "balance"):
+                raise KrakenProtectionDenied("flat_balance_or_encumbrance_present")
+        return digest
+
+    return guard_flat_transport, flat_exposure
+
+
+def rehearse_cash_only_baseline(
+    broker: Any, *, account_scope: str, approved_api_key_sha256: str,
+    approved_iban_sha256: str, reviewed_provider_id: str, monitoring_category: Any,
+    identity_method: str = "response_echo", clock: Callable[[], float] = time.time,
+) -> dict:
+    """Check current default-wallet exposure without certifying origin, P&L or orders.
+
+    An exposed account still needs the independent lot and protective-order path.
+    No historic attribution, pending row, provider registration or order is changed.
+    """
+    if account_scope != "platform:kraken":
+        raise KrakenProtectionDenied("reviewed_platform_scope_required")
+    identity = make_kraken_account_identity_provider(
+        broker, account_scope=account_scope, approved_api_key_sha256=approved_api_key_sha256,
+        approved_iban_sha256=approved_iban_sha256, reviewed_provider_id=reviewed_provider_id,
+        monitoring_category=monitoring_category, identity_method=identity_method, clock=clock,
+    )
+    guard, exposure = _flat_readers(broker, account_scope, approved_api_key_sha256,
+                                    monitoring_category)
+    try:
+        start = clock()
+        api, read = broker.api, broker._kraken_private_call
+        if identity().get("verified") is not True:
+            raise KrakenProtectionDenied("broker_identity_unverified")
+        observations = []
+        for _ in range(2):
+            guard(read, api)
+            if _broker_orders(broker, monitoring_category=monitoring_category):
+                raise KrakenProtectionDenied("flat_open_order_inventory_not_empty")
+            observations.append(exposure(read, api))
+        if identity().get("verified") is not True:
+            raise KrakenProtectionDenied("broker_identity_changed")
+        guard(read, api)
+        if observations[0] != observations[1] or not 0 <= clock() - start <= MAX_AGE:
+            raise KrakenProtectionDenied("readback_changed_or_stale")
+        return {"default_wallet_cash_only_observed": True, "authorizes_orders": False,
+                "collector_install_allowed": False, "historical_attribution_verified": False}
+    except KrakenProtectionDenied:
+        raise
+    except Exception:
+        raise KrakenProtectionDenied("cash_only_rehearsal_unavailable") from None
+
+
 def make_kraken_protective_exit_provider(
     broker: Any, *, account_scope: str,
     approved_api_key_sha256: str, approved_iban_sha256: str,
@@ -63,6 +152,10 @@ def make_kraken_protective_exit_provider(
         approved_iban_sha256=approved_iban_sha256,
         reviewed_provider_id=reviewed_provider_id,
         monitoring_category=monitoring_category, clock=clock, identity_method=identity_method,
+    )
+
+    guard_flat_transport, flat_exposure = _flat_readers(
+        broker, account_scope, approved_api_key_sha256, monitoring_category
     )
 
     def ledger_snapshot() -> tuple:
@@ -128,48 +221,6 @@ def make_kraken_protective_exit_provider(
             used.update((stop, profit))
             normalized.append((lot_id, pair, lot["side"], qty, stop, profit))
         return (snap["snapshot_id"], tuple(sorted(normalized)), flat_source)
-
-    def guard_flat_transport(read: Callable, api: Any) -> None:
-        """Recheck the exact existing owner without any private read or mutation."""
-        key = getattr(api, "key", None)
-        if (not callable(read) or getattr(broker, "connected", False) is not True
-                or _broker_account_scope(broker) != account_scope
-                or getattr(broker, "api", None) is not api
-                or getattr(broker, "_kraken_private_call", None) != read
-                or getattr(broker, "_gateway_url", "")
-                or getattr(broker, "_gateway_only_mode", False)
-                or not isinstance(key, str) or not key
-                or not hmac.compare_digest(hashlib.sha256(key.encode()).hexdigest(),
-                                           approved_api_key_sha256.lower())):
-            raise KrakenProtectionDenied("flat_exposure_transport_unverified")
-
-    def flat_exposure(read: Callable, api: Any) -> str:
-        """Read complete supported-wallet exposure through the same pinned client."""
-        results = {}
-        for endpoint in ("BalanceEx", "OpenPositions"):
-            guard_flat_transport(read, api)
-            reply = read(endpoint, {}, category=monitoring_category)
-            guard_flat_transport(read, api)
-            if (not isinstance(reply, Mapping) or set(reply) != {"error", "result"}
-                    or reply.get("error") != [] or not isinstance(reply.get("result"), Mapping)):
-                raise KrakenProtectionDenied("flat_exposure_response_unverified")
-            results[endpoint] = json.loads(json.dumps(reply["result"], allow_nan=False))
-        if results["OpenPositions"]:
-            raise KrakenProtectionDenied("flat_margin_exposure_present")
-        balances = results["BalanceEx"]
-        digest = _snapshot_digest(balances)  # Exact fields, finite amounts and paired credit fields.
-        aliases = {"ZUSD": "USD", "USD": "USD", "XXBT": "BTC", "XBT": "BTC", "BTC": "BTC",
-                   "XETH": "ETH", "ETH": "ETH"}
-        seen = set()
-        for asset, values in balances.items():
-            canonical = aliases.get(asset)
-            if canonical is None or canonical in seen:
-                raise KrakenProtectionDenied("flat_asset_unsupported_or_ambiguous")
-            seen.add(canonical)
-            if any(_amount(value) != 0 for field, value in values.items()
-                   if canonical != "USD" or field != "balance"):
-                raise KrakenProtectionDenied("flat_balance_or_encumbrance_present")
-        return digest
 
     def verify_coverage(positions: tuple, orders: Mapping[str, tuple]) -> None:
         for _lot, pair, side, quantity, stop_id, profit_id in positions:

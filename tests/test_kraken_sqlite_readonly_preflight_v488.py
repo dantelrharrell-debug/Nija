@@ -1,4 +1,6 @@
 """Offline regression: actual SQLite schema read without any trading authority."""
+import hashlib
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -65,6 +67,38 @@ class KrakenLedgerReadonlyPreflightTests(unittest.TestCase):
 
     def inspect(self):
         return inspect_kraken_ledger(self.db_path, persistent_root=self.root)
+
+    def test_baseline_keeps_unattributed_closes_out_of_current_changes(self):
+        self.create_db(pending=1)
+        with sqlite3.connect(self.db_path) as db:
+            for column in ("symbol", "side", "fill_price", "filled_usd", "exit_fee",
+                           "user_id", "verification_level", "reason", "matched_position_id"):
+                db.execute("ALTER TABLE pending_kraken_closes ADD COLUMN " + column + " TEXT")
+            db.execute("UPDATE pending_kraken_closes SET reason='missing_position', "
+                       "symbol='ETHUSD', side='sell', fill_price='5', filled_usd='5', "
+                       "exit_fee='0.01', user_id='platform', "
+                       "verification_level='canonical_v328_fill_fields_only'")
+        backup = self.root / "baseline.db"
+        shutil.copyfile(self.db_path, backup)
+        digest = hashlib.sha256(backup.read_bytes()).hexdigest()
+
+        def compare(pin):
+            return inspect_kraken_ledger(self.db_path, persistent_root=self.root,
+                                         historical_backup=backup, historical_sha256=pin)
+
+        result = compare(digest)
+        self.assertEqual(result["counts"]["historical_unattributed_unchanged"], 1)
+        self.assertFalse(result["authorizes_orders"])
+        self.assertFalse(result["collector_install_allowed"])
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("UPDATE pending_kraken_closes SET exit_fee='0.02'")
+        changed = compare(digest)["counts"]
+        self.assertEqual(changed["historical_unattributed_unchanged"], 0)
+        self.assertEqual(changed["current_unattributed_new_or_changed"], 1)
+        self.assertEqual(changed["historical_unattributed_absent_or_changed"], 1)
+        denied = compare("0" * 64)
+        self.assertIn("historical_backup_comparison_unverified", denied["issues"])
+        self.assertNotIn("historical_unattributed_unchanged", denied["counts"])
 
     def test_missing_mount_or_database_refused(self):
         result = self.inspect()
