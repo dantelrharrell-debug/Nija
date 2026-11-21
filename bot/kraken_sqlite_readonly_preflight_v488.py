@@ -200,6 +200,16 @@ def inspect_kraken_ledger(
             counts["pending_kraken_closes"] = pending
             if pending:
                 issues.append("pending_kraken_closes_require_reconciliation")
+                if "trade_ledger" in counts:
+                    booked = connection.execute(
+                        "SELECT COUNT(DISTINCT p.order_id) FROM pending_kraken_closes p "
+                        "JOIN trade_ledger l ON l.order_id=p.order_id "
+                        "WHERE p.broker='kraken' AND p.account_scope='platform:kraken' "
+                        "AND p.state='pending' AND l.user_id='platform' AND l.action='CLOSE'"
+                    ).fetchone()[0]
+                    counts["pending_platform_orders_already_booked"] = booked
+                    if booked:
+                        issues.append("pending_kraken_close_already_in_trade_ledger")
 
         if historical_backup is not None or historical_sha256 is not None:
             if (historical_backup is None or historical_sha256 is None

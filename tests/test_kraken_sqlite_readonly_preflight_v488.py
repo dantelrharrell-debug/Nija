@@ -122,6 +122,23 @@ class KrakenLedgerReadonlyPreflightTests(unittest.TestCase):
         self.assertIn("exchange_protective_order_id_mapping_missing", report["issues"])
         self.assertFalse(report["broker_history_reconciled"])
 
+    def test_pending_order_already_booked_only_counts_same_owner_closes(self):
+        self.create_db(pending=1)
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("INSERT INTO trade_ledger VALUES (?,?,?,?)",
+                       ("another-lot", "another-owner", "CLOSE", OPEN_ID))
+        self.assertEqual(self.inspect()["counts"]["pending_platform_orders_already_booked"], 0)
+        with sqlite3.connect(self.db_path) as db:
+            db.executemany("INSERT INTO trade_ledger VALUES (?,?,?,?)", [
+                ("lot-1", "platform", "CLOSE", OPEN_ID),
+                ("lot-2", "platform", "CLOSE", OPEN_ID),
+            ])
+        report = self.inspect()
+        self.assertEqual(report["counts"]["pending_platform_orders_already_booked"], 1)
+        self.assertIn("pending_kraken_close_already_in_trade_ledger", report["issues"])
+        self.assertFalse(report["authorizes_orders"])
+        self.assertNotIn(OPEN_ID, str(report))
+
     def test_missing_opening_records_flagged(self):
         self.create_db(opening=False, exits=True)
         report = self.inspect()
