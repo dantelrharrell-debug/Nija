@@ -531,3 +531,76 @@ def test_returned_progress_does_not_claim_broker_acceptance(root):
     assert receipt["collection_succeeded"] is False
     assert receipt["trading_authorized"] is False
     assert "private-api-canary" not in progress_path.read_text() + receipt_path.read_text()
+
+
+@pytest.mark.parametrize("reply,success", [
+    ({"open": {}}, True), ({"open": {"example": {"status": "open"}}}, True),
+    ({"open": {}, "cursor": {"next": "more"}}, False), ({"open": {}, "cursor": {}}, False),
+    ({"open": {str(i): {"status": "open"} for i in range(51)}}, False),
+    ({"open": None}, False), ({}, False), ({"open": {}, "count": 3}, False),
+])
+def test_current_inventory_has_separate_private_result_and_no_history_calls(root, reply, success):
+    class InventoryBroker(Broker):
+        api = object()
+        _gateway_url = ""
+        _gateway_only_mode = False
+
+        def _kraken_private_call(self, endpoint, params, *, category):
+            assert category is CATEGORY
+            self.calls.append(endpoint)
+            if endpoint == "BalanceEx":
+                return {"error": [], "result": {"XXBT": {"balance": "0.000001", "hold_trade": "0"}}}
+            if endpoint == "OpenOrders":
+                assert params == {}
+                return {"error": [], "result": reply}
+            assert endpoint == "OpenPositions" and params == {}
+            return {"error": [], "result": {}}
+
+    request(root, mode="current_inventory", max_pages=1)
+    broker = InventoryBroker()
+    assert run(root, [broker])
+    assert broker.calls == (["BalanceEx", "OpenOrders", "OpenPositions"] if success else ["BalanceEx", "OpenOrders"])
+    path = root / (ID + ".inventory.json")
+    result = json.loads(path.read_text())
+    assert result["inventory_read_succeeded"] is success
+    assert result["complete_history"] is False and result["trading_authorized"] is False
+    assert ("observations" in result) is success
+    if success:
+        observation = result["observations"]["OpenOrders"]
+        assert observation["request_mode"] == "all_unfiltered_no_limit"
+        assert observation["result"] == reply
+    assert not (root / (ID + ".evidence.json")).exists()
+    assert path.stat().st_mode & 0o077 == 0
+
+
+def test_inventory_schema_is_exclusive_and_unavailable_to_other_consumers(root):
+    request(root, mode="current_inventory", max_pages=1)
+    with pytest.raises(ValueError, match="schema"):
+        api._request(root, NOW)
+    request(root, mode="current_inventory", use_cursor=True, max_pages=1)
+    with pytest.raises(ValueError, match="schema"):
+        run(root, [Broker()])
+
+
+def test_inventory_owner_change_stops_after_first_read(root):
+    class ChangingOwner(Broker):
+        api = object()
+        _gateway_url = ""
+        _gateway_only_mode = False
+
+        def _kraken_private_call(self, endpoint, params, *, category):
+            self.calls.append(endpoint)
+            self.api = object()
+            return {"error": [], "result": {}}
+
+    request(root, mode="current_inventory", max_pages=1)
+    broker = ChangingOwner()
+    assert run(root, [broker])
+    assert broker.calls == ["BalanceEx"]
+    result = json.loads((root / (ID + ".inventory.json")).read_text())
+    assert result["reason"] == "inventory_owner_changed"
+    assert "observations" not in result
+    request(root, mode="current_inventory", max_pages=1)
+    with pytest.raises(ValueError, match="replay"):
+        run(root, [broker])
+    assert broker.calls == ["BalanceEx"]
