@@ -195,13 +195,18 @@ class KrakenSubmissionJournal:
             ).fetchone()[0]
 
 
+def configured_journal_path() -> str:
+    """Return the configured direct-order journal path, if opted in."""
+    return os.environ.get("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", "").strip()
+
+
 def query_direct_order(broker, method, params, *, assert_deadline):
     """Route an opted-in direct order through a durable reservation.
 
     Transport failures and replies without a unique acknowledgment leave
     the reservation unresolved. The verified recovery path must resolve it.
     """
-    path = os.environ.get("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", "").strip()
+    path = configured_journal_path()
     if not path or (method == "AddOrder" and params.get("validate") is True):
         return broker.api.query_private(method, params)
     if method != "AddOrder":
