@@ -533,8 +533,13 @@ def test_returned_progress_does_not_claim_broker_acceptance(root):
     assert "private-api-canary" not in progress_path.read_text() + receipt_path.read_text()
 
 
-@pytest.mark.parametrize("cursor,success", [({}, True), (None, False), ({"next": "more"}, False)])
-def test_current_inventory_has_separate_private_result_and_no_history_calls(root, cursor, success):
+@pytest.mark.parametrize("reply,success", [
+    ({"open": {}}, True), ({"open": {"example": {"status": "open"}}}, True),
+    ({"open": {}, "cursor": {"next": "more"}}, False), ({"open": {}, "cursor": {}}, False),
+    ({"open": {str(i): {"status": "open"} for i in range(51)}}, False),
+    ({"open": None}, False), ({}, False), ({"open": {}, "count": 3}, False),
+])
+def test_current_inventory_has_separate_private_result_and_no_history_calls(root, reply, success):
     class InventoryBroker(Broker):
         api = object()
         _gateway_url = ""
@@ -546,8 +551,8 @@ def test_current_inventory_has_separate_private_result_and_no_history_calls(root
             if endpoint == "BalanceEx":
                 return {"error": [], "result": {"XXBT": {"balance": "0.000001", "hold_trade": "0"}}}
             if endpoint == "OpenOrders":
-                assert params == {"with_cursor": "true", "limit": 50, "trades": "true"}
-                return {"error": [], "result": {"open": {}, "cursor": cursor}}
+                assert params == {}
+                return {"error": [], "result": reply}
             assert endpoint == "OpenPositions" and params == {}
             return {"error": [], "result": {}}
 
@@ -560,6 +565,10 @@ def test_current_inventory_has_separate_private_result_and_no_history_calls(root
     assert result["inventory_read_succeeded"] is success
     assert result["complete_history"] is False and result["trading_authorized"] is False
     assert ("observations" in result) is success
+    if success:
+        observation = result["observations"]["OpenOrders"]
+        assert observation["request_mode"] == "all_unfiltered_no_limit"
+        assert observation["result"] == reply
     assert not (root / (ID + ".evidence.json")).exists()
     assert path.stat().st_mode & 0o077 == 0
 
