@@ -74,7 +74,8 @@ def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _request(root: Path, now: float, filename: str = "request.json", *, allow_inventory: bool = False) -> dict[str, Any] | None:
+def _request(root: Path, now: float, filename: str = "request.json",
+             *, allow_inventory: bool = False, allow_history_window: bool = False) -> dict[str, Any] | None:
     """Read one bounded, private request; do not create an empty replacement."""
     try:
         fd = os.open(root / filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -98,6 +99,13 @@ def _request(root: Path, now: float, filename: str = "request.json", *, allow_in
     schemas = [required, required | {"use_cursor"}]
     if allow_inventory:
         schemas.append(required | {"mode"})
+    window_fields = {"history_start", "history_end"}
+    if isinstance(row, dict) and window_fields.intersection(row):
+        start, end = row.get("history_start"), row.get("history_end")
+        if (not allow_history_window or type(start) is not int or type(end) is not int
+                or not 0 < start < end <= now or row.get("use_cursor", False) is not False):
+            raise ValueError("recovery_request_window_invalid")
+        schemas.extend((required | window_fields, required | window_fields | {"use_cursor"}))
     if not isinstance(row, dict) or set(row) not in schemas:
         raise ValueError("recovery_request_schema_invalid")
     if "mode" in row and (row["mode"] != "current_inventory" or row["account_scope"] != "platform:kraken"
@@ -153,7 +161,7 @@ def collect_requested_history(
             return False
         if _recovery_mode_conflict(root, "request.json"):
             return False
-        request = _request(root, time.time() if now is None else now, allow_inventory=True)
+        request = _request(root, time.time() if now is None else now, allow_inventory=True, allow_history_window=True)
         if request is None:
             return False
         selected = []
@@ -170,7 +178,11 @@ def collect_requested_history(
             return False
         identity = request["request_id"]
         claim = root / (identity + ".claimed.json")
-        output = root / (identity + ".evidence.json")
+        window = ((request["history_start"], request["history_end"])
+                  if "history_start" in request else None)
+        # Keep windowed output outside the full-history evidence namespace.
+        evidence_root = root / (identity + ".window") if window else root
+        output = evidence_root / (identity + ".evidence.json")
         if claim.exists() or claim.is_symlink() or output.exists() or output.is_symlink():
             raise ValueError("recovery_request_replay")
         # Hard-link creates exclusively. A repeated request ID can never replace
@@ -182,7 +194,7 @@ def collect_requested_history(
             os.fsync(dirfd)
         finally:
             os.close(dirfd)
-        if _request(root, time.time() if now is None else now, claim.name, allow_inventory=True) != request:
+        if _request(root, time.time() if now is None else now, claim.name, allow_inventory=True, allow_history_window=True) != request:
             raise ValueError("recovery_request_changed_before_claim")
         if request.get("mode") == "current_inventory":
             from .kraken_current_inventory import InventoryDenied, read_current_inventory
@@ -225,14 +237,17 @@ def collect_requested_history(
                 "trading_authorized": False,
             })
 
+        if window:
+            evidence_root.mkdir(mode=0o700)
         try:
-            journal = PrivateHistoryResponseJournal(root, identity, request["account_scope"])
+            journal = PrivateHistoryResponseJournal(evidence_root, identity, request["account_scope"])
             evidence = collect_from_existing_broker(
                 selected[0], account_scope=request["account_scope"],
                 monitoring_category=monitoring_category,
-                max_pages=request["max_pages"], include_balance=True,
-                include_open_orders=True, include_ledger_links=True,
+                max_pages=request["max_pages"], include_balance=window is None,
+                include_open_orders=window is None, include_ledger_links=True,
                 use_cursor=request.get("use_cursor", False),
+                history_window=window,
                 on_private_read=progress,
                 on_private_response=journal.append,
             )

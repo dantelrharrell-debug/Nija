@@ -151,6 +151,7 @@ def collect_history(
     include_open_orders: bool = False,
     use_cursor: bool = False,
     include_ledger_links: bool = False,
+    history_window: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Collect repeat-checked history, optionally bracketed by private balances."""
     if not (account_scope == "platform:kraken" or (
@@ -165,6 +166,12 @@ def collect_history(
     if type(use_cursor) is not bool:
         raise ValueError("Explicit boolean cursor selection required")
     _history_read_options("TradesHistory", include_ledger_links)
+
+    if history_window is not None:
+        if (type(history_window) is not tuple or len(history_window) != 2
+                or any(type(bound) is not int for bound in history_window)
+                or not 0 < history_window[0] < history_window[1] or use_cursor):
+            raise ValueError("Invalid offset history window")
 
     def read_cursor_endpoint(endpoint: str, field: str) -> dict[str, Any]:
         """Follow an explicit cursor chain; never fall back to offset reads.
@@ -310,6 +317,10 @@ def collect_history(
             expected: int | None = None
             for index in range(max_pages):
                 params = {"ofs": index * PAGE_SIZE, **_history_read_options(endpoint, include_ledger_links)}
+                if history_window:
+                    params.update(start=history_window[0], end=history_window[1])
+                    if endpoint == "ClosedOrders":
+                        params["closetime"] = "close"
                 payload = private_read(endpoint, params)
                 if not isinstance(payload, Mapping) or payload.get("error") != []:
                     raise _api_failure(endpoint, payload)
@@ -339,6 +350,10 @@ def collect_history(
                         raise IncompleteHistory(f"{endpoint}: invalid record")
                     if identifier in records:
                         raise IncompleteHistory(f"{endpoint}: duplicate identifier across pages")
+                    if history_window:
+                        stamp = row.get("closetm" if endpoint == "ClosedOrders" else "time")
+                        if type(stamp) not in (int, float) or not history_window[0] < stamp <= history_window[1]:
+                            raise IncompleteHistory(f"{endpoint}: invalid record")
                     # Freeze broker response objects: do not trust later mutation of a
                     # nested mapping to silently change already-collected evidence.
                     try:
@@ -378,6 +393,8 @@ def collect_history(
     if include_balance and read_balance() != balance:
         raise IncompleteHistory("balance changed during history collection")
     envelope = {"account_scope_asserted_by_caller": account_scope, "history": collected}
+    if history_window:
+        envelope["history_window"] = {"start_exclusive": history_window[0], "end_inclusive": history_window[1]}
     if use_cursor:
         envelope["history_pagination"] = "cursor"
     if include_balance:
@@ -421,6 +438,7 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  include_open_orders: bool = False,
                                  use_cursor: bool = False,
                                  include_ledger_links: bool = False,
+                                 history_window: tuple[int, int] | None = None,
                                  on_private_read: Callable[[str, str], None] | None = None,
                                  on_private_response: Callable[
                                      [str, Mapping[str, Any], float, float], None,
@@ -443,10 +461,16 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
         trade_options = _history_read_options(endpoint, include_ledger_links)
         trade_keys = set(trade_options)
+        bounds = {}
+        if history_window and endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}:
+            bounds.update(start=history_window[0], end=history_window[1])
+            if endpoint == "ClosedOrders":
+                bounds["closetime"] = "close"
         valid_trade_mode = all(params.get(key) is value for key, value in trade_options.items())
         history_read = (
             endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
-            and set(params) == ({"ofs"} | trade_keys) and valid_trade_mode
+            and set(params) == ({"ofs"} | trade_keys | bounds.keys()) and valid_trade_mode
+            and all(params.get(key) == value for key, value in bounds.items())
         )
         if use_cursor:
             history_read = (
@@ -498,5 +522,5 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
     return collect_history(
         read, account_scope=account_scope, max_pages=max_pages, include_balance=include_balance,
         include_open_orders=include_open_orders,
-        use_cursor=use_cursor, include_ledger_links=include_ledger_links,
+        use_cursor=use_cursor, include_ledger_links=include_ledger_links, history_window=history_window,
     )
