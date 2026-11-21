@@ -1,5 +1,28 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Operational readiness checkpoint — November 20, 2026 (documentation review)
+
+**Verdict: NOT CERTIFIED FOR LIVE TRADING.** This checkpoint documents repository and issue evidence, **not a fresh authenticated Render inspection**. The most recent production observations verified in [issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890) are dated November 15, 2026: deployed startup reported `protected_startup_artifacts_missing`, `collector_installed=false`, `producer_status=collector_missing`, and **13/13 required pretrade observations missing**. A later successful build, merge, or service health check does not by itself supersede those runtime findings.
+
+### Kraken activation procedure
+
+1. **Inspect current production read-only:** capture service `srv-d98dsr5aeets73fpbaqg` deployed commit/image digest, final Python interpreter, Secret Files inventory, startup logs and order-admission status.
+2. **Certify authentic source owners:** reconcile real Kraken history, balances, open orders, fills, pending closes, fees, positions and protective exits; verify the full durable Redis duplicate-order inventory, operator authority, kill switch, risk publication, writer/nonce ownership and position sync. Never create a second Kraken client or nonce writer.
+3. **Review private protected startup artifacts:** follow [issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890) and its [provisioning runbook](docs/kraken-3890-production-provisioning-handoff.md). Independently verify source bindings and role-signed receipts before approval and private provisioning of `/etc/secrets/.render-kraken-startup-root.py` and `/etc/secrets/.render-kraken-startup-binding.json`. Preserve startup command `python -S /etc/secrets/.render-ledger-bootstrap.py`. Never commit private bindings, signed receipts, or keys.
+4. **Clear mandatory exact-release security gates:** investigate failed Security Scanning, Artifact Scanning, pre-commit, dependency and image checks without weakening protections. [PR #4062](https://github.com/dantelrharrell-debug/Nija/pull/4062) and [PR #4063](https://github.com/dantelrharrell-debug/Nija/pull/4063) are proposed corrections, not proof of deployed fixes.
+5. **Require exact-artifact and deployment authorization:** independently approve source/manifest hashes, release/image, and the Render provisioning/deployment operation. [Draft PR #4066](https://github.com/dantelrharrell-debug/Nija/pull/4066) is a read-only verifier, **not an installation**.
+6. **Verify production after authorized deployment:** require `protected_startup_factory_registered` **and** `collector_installed=true` in the final interpreter and **13/13 current authenticated account-scoped observations**, plus ledger/exits/risk/nonce controls, monitoring and rollback. Registration alone is insufficient. Any live order requires separate, explicit, bounded go-live authorization.
+
+### Independent product acceptance
+
+- **Trading IQ $1 TEST:** [PR #4061](https://github.com/dantelrharrell-debug/Nija/pull/4061) merged a TEST-offer selection correction, but source changes alone do not certify the isolated Render deployment, attached TEST credentials, webhook, entitlement, fulfillment, or live-payment readiness.
+- **Course commerce:** verify actual checkout, idempotent webhook, paid entitlement, delivery, failure and refund paths before claiming production certification.
+- **IONOS and Zapier leads:** distinguish server-persisted submissions, consent, downstream dispatch acknowledgment and real inbox receipt. A spreadsheet plan is not proof of connected live workflows.
+
+**Fail-closed invariant:** keep `allow_new_orders=false`, kill-switch and existing safeguards enabled until independently verified certification and a separate live-trading decision. Record timestamps, environment and evidence for every gate; unknown is **unverified**, not passed. README documentation does not deploy services, install the collector, provision secrets, turn on payments, or place trades.
+
+---
+
 ## Production recovery checkpoint — November 13, 2026 (repository-verified)
 
 **Status: live trading is not independently certified by this documentation update.** GitHub merge evidence shows recovery code has advanced since the November 12 authenticated inspection below. A merged pull request, completed deployment, or successful unit test is **not** sufficient to establish a collector installed in the final production interpreter, all account-scoped observations passing, or authorization to place real-money orders. The November 12 runtime observations below remain a historical baseline, not a claim about the current runtime.
