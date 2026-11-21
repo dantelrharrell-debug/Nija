@@ -1,11 +1,13 @@
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { inspectTiq72TestConfig } from '../server/tiq72-upgrade6-config-preflight.mjs';
 
 // Synthetic credentials only: no production or sandbox secrets are read here.
+const disposableToken = prefix => prefix + randomUUID();
 const valid = () => ({
-  STRIPE_TEST_SECRET_KEY: 'sk_test_synthetic_for_preflight',
-  STRIPE_TEST_WEBHOOK_SECRET: 'whsec_synthetic_for_preflight',
+  STRIPE_TEST_SECRET_KEY: disposableToken('sk_test_'),
+  STRIPE_TEST_WEBHOOK_SECRET: disposableToken('whsec_'),
   TIQ72_TEST_OWNER_SIGNING_KEY_B64URL: Buffer.alloc(32, 7).toString('base64url'),
   TIQ72_STRIPE_TEST_PRICE_ID: 'price_123',
   TIQ72_STRIPE_TEST_PRODUCT_ID: 'prod_123',
@@ -25,7 +27,7 @@ test('missing sandbox API key is distinguished from wrong-mode credential', () =
   const missing = valid();
   delete missing.STRIPE_TEST_SECRET_KEY;
   assert.deepEqual(inspectTiq72TestConfig(missing).errors, ['test_secret_missing']);
-  const wrong = { ...valid(), STRIPE_TEST_SECRET_KEY: 'sk_live_not_allowed' };
+  const wrong = { ...valid(), STRIPE_TEST_SECRET_KEY: disposableToken('sk_live_') };
   assert.deepEqual(inspectTiq72TestConfig(wrong).errors, ['test_secret_wrong_mode']);
 });
 test('missing and invalid owner signing keys fail closed', () => {
@@ -53,7 +55,10 @@ test('sandbox key cannot equal live key', () => {
   assert.ok(inspectTiq72TestConfig(env).errors.includes('test_secret_equals_live_secret'));
 });
 test('untrusted return origins are rejected', () => {
-  for (const origin of ['http://example.test', 'https://example.test/path', 'https://user:pass@example.test', 'https://example.test?x=1']) {
+  const withUserInfo = new URL('https://example.test');
+  withUserInfo.username = 'fixture';
+  withUserInfo.password = randomUUID();
+  for (const origin of ['http://example.test', 'https://example.test/path', withUserInfo.href, 'https://example.test?x=1']) {
     assert.ok(inspectTiq72TestConfig({ ...valid(), TIQ72_TEST_RETURN_ORIGIN: origin }).errors.includes('tiq72_test_return_origin_invalid'));
   }
 });
