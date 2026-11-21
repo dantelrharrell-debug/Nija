@@ -604,3 +604,55 @@ def test_inventory_owner_change_stops_after_first_read(root):
     with pytest.raises(ValueError, match="replay"):
         run(root, [broker])
     assert broker.calls == ["BalanceEx"]
+
+
+@pytest.mark.parametrize("event_time,success", [(100, False), (101, True), (200, True), (201, False)])
+def test_window_uses_existing_broker_and_scoped_evidence(root, event_time, success):
+    request(root, history_start=100, history_end=200)
+    broker = Broker()
+    original_read = broker._kraken_private_call
+
+    def read(endpoint, params, *, category):
+        response = original_read(endpoint, params, category=category)
+        if endpoint in {"Balance", "OpenOrders"}:
+            assert "start" not in params and "end" not in params
+        else:
+            assert (params["start"], params["end"]) == (100, 200)
+            assert "ofs" in params and "with_cursor" not in params
+            if endpoint == "ClosedOrders":
+                assert params["closetime"] == "close"
+            field = {"TradesHistory": "trades", "Ledgers": "ledger", "ClosedOrders": "closed"}[endpoint]
+            row = response["result"][field]["id"]
+            row["closetm" if endpoint == "ClosedOrders" else "time"] = event_time
+        return response
+
+    broker._kraken_private_call = read
+    assert run(root, [broker])
+    result = json.loads((root / (ID + ".window") / (ID + ".evidence.json")).read_text())
+    assert result["collection_succeeded"] is success
+    assert result["trading_authorized"] is False
+    if success:
+        assert result["evidence"]["history_window"] == {"start_exclusive": 100, "end_inclusive": 200}
+        assert len(broker.calls) == 6
+    assert not list(root.glob("*.evidence.json"))
+    assert not list(root.glob("*.response.*.json"))
+
+
+@pytest.mark.parametrize("changes", [
+    {"history_start": 1}, {"history_end": 2}, {"history_start": 2, "history_end": 2},
+    {"history_start": True, "history_end": 2}, {"history_start": 1, "history_end": 1001},
+    {"history_start": 1, "history_end": 2, "use_cursor": True},
+])
+def test_invalid_window_never_calls_broker(root, changes):
+    request(root, **changes)
+    broker = Broker()
+    with pytest.raises(ValueError, match="window_invalid"):
+        run(root, [broker])
+    assert not broker.calls
+
+
+@pytest.mark.parametrize("filename", ["exact_request.json", "identity_request.json"])
+def test_other_recovery_modes_reject_window_fields(root, filename):
+    request(root, history_start=100, history_end=200).rename(root / filename)
+    with pytest.raises(ValueError, match="window_invalid"):
+        api._request(root, NOW, filename=filename)
