@@ -14,7 +14,7 @@ if "bot" not in sys.modules:
     sys.modules["bot"] = pkg
 
 from bot.kraken_protective_exit_readback_v485 import (
-    KrakenProtectionDenied, make_kraken_protective_exit_provider,
+    KrakenProtectionDenied, make_kraken_protective_exit_provider, rehearse_cash_only_baseline,
 )
 
 KEY = "synthetic-key"
@@ -131,6 +131,48 @@ def build(broker, ledger, *, clock=lambda: 1001.0):
 
 
 class TestProtection(unittest.TestCase):
+    def test_cash_only_rehearsal_does_not_certify_history_or_ignore_margin(self):
+        broker = Broker()
+        broker.orders.clear()
+        def observe():
+            return rehearse_cash_only_baseline(
+                broker, account_scope="platform:kraken", approved_api_key_sha256=KEY_PIN,
+                approved_iban_sha256=IBAN_PIN, reviewed_provider_id="cash-only-rehearsal",
+                monitoring_category=CATEGORY, clock=lambda: 1001.0,
+            )
+        report = observe()
+        self.assertTrue(report["default_wallet_cash_only_observed"])
+        self.assertFalse(report["historical_attribution_verified"])
+        self.assertFalse(report["authorizes_orders"])
+        self.assertEqual(broker.calls.count("OpenPositions"), 2)
+        broker.margin_positions = {"synthetic": {}}
+        with self.assertRaisesRegex(KrakenProtectionDenied, "flat_margin_exposure_present"):
+            observe()
+
+    def test_opening_cash_compares_both_reads_without_certification(self):
+        broker = Broker()
+        broker.orders.clear()
+
+        def compare(value):
+            return rehearse_cash_only_baseline(
+                broker, account_scope="platform:kraken", approved_api_key_sha256=KEY_PIN,
+                approved_iban_sha256=IBAN_PIN, reviewed_provider_id="cash-only-rehearsal",
+                monitoring_category=CATEGORY, clock=lambda: 1001.0, expected_usd=value,
+            )
+
+        self.assertFalse(compare(None)["supplied_usd_matched"])
+        report = compare("100.000")
+        self.assertTrue(report["supplied_usd_matched"])
+        self.assertFalse(report["collector_install_allowed"])
+        self.assertFalse(report["authorizes_orders"])
+        with self.assertRaisesRegex(KrakenProtectionDenied, "opening_cash_mismatch"):
+            compare("100.000000000000000001")
+        with self.assertRaises(KrakenProtectionDenied):
+            compare(100.0)
+        broker.balances.clear()
+        with self.assertRaisesRegex(KrakenProtectionDenied, "opening_cash_mismatch"):
+            compare("0")
+
     def test_verified_protection_read_only(self):
         broker, ledger = Broker(), Ledger()
         provider = build(broker, ledger)

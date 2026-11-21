@@ -10,6 +10,7 @@ secrets, user identifiers, or raw order/position IDs.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -27,8 +28,59 @@ _TABLE_COLUMNS = {
 _MAX_ROWS = 10000
 
 
+def _unattributed_closes(db: sqlite3.Connection) -> dict:
+    """Identify pending closes by immutable fill terms; omit replay timestamps."""
+    rows = db.execute(
+        "SELECT order_id, symbol, side, fill_price, filled_usd, exit_fee, "
+        "user_id, verification_level FROM pending_kraken_closes "
+        "WHERE account_scope='platform:kraken' AND broker='kraken' "
+        "AND state='pending' AND reason='missing_position' "
+        "AND matched_position_id IS NULL LIMIT ?", (_MAX_ROWS + 1,)
+    ).fetchall()
+    if len(rows) > _MAX_ROWS:
+        raise ValueError("historical_close_budget_exceeded")
+    result = {}
+    for oid, *terms in rows:
+        if not isinstance(oid, str) or not ORDER_ID.fullmatch(oid) or oid in result:
+            raise ValueError("ambiguous_historical_order")
+        result[oid] = tuple(terms)
+    return result
+
+
+def _compare_history(db: sqlite3.Connection, backup: Path, expected: str) -> dict:
+    """Read a closed standalone SQLite backup into memory; never restore in place."""
+    if not re.fullmatch(r"[a-f0-9]{64}", expected) or backup.is_symlink():
+        raise ValueError("invalid_historical_backup")
+    if not backup.is_file() or any(Path(str(backup) + suffix).exists()
+                                   for suffix in ("-wal", "-journal")):
+        raise ValueError("standalone_backup_required")
+    with backup.open("rb") as stream:
+        data = stream.read(32 * 1024 * 1024 + 1)
+    if len(data) > 32 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("historical_backup_digest_mismatch")
+    reference = sqlite3.connect(":memory:")
+    try:
+        reference.deserialize(data)
+        reference.execute("PRAGMA trusted_schema=OFF")
+        reference.execute("PRAGMA query_only=ON")
+        if reference.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+            raise ValueError("historical_backup_integrity_failed")
+        historical = _unattributed_closes(reference)
+    finally:
+        reference.close()
+    current = _unattributed_closes(db)
+    same = sum(oid in historical and historical[oid] == terms
+               for oid, terms in current.items())
+    return {
+        "historical_unattributed_unchanged": same,
+        "current_unattributed_new_or_changed": len(current) - same,
+        "historical_unattributed_absent_or_changed": len(historical) - same,
+    }
+
+
 def inspect_kraken_ledger(
-    ledger_path: Path, *, persistent_root: Path = Path("/data")
+    ledger_path: Path, *, persistent_root: Path = Path("/data"),
+    historical_backup: Path | None = None, historical_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Inspect current persistent SQLite without writes or readiness assertions."""
     issues: list[str] = []
@@ -148,6 +200,26 @@ def inspect_kraken_ledger(
             counts["pending_kraken_closes"] = pending
             if pending:
                 issues.append("pending_kraken_closes_require_reconciliation")
+                if "trade_ledger" in counts:
+                    booked = connection.execute(
+                        "SELECT COUNT(DISTINCT p.order_id) FROM pending_kraken_closes p "
+                        "JOIN trade_ledger l ON l.order_id=p.order_id "
+                        "WHERE p.broker='kraken' AND p.account_scope='platform:kraken' "
+                        "AND p.state='pending' AND l.user_id='platform' AND l.action='CLOSE'"
+                    ).fetchone()[0]
+                    counts["pending_platform_orders_already_booked"] = booked
+                    if booked:
+                        issues.append("pending_kraken_close_already_in_trade_ledger")
+
+        if historical_backup is not None or historical_sha256 is not None:
+            if (historical_backup is None or historical_sha256 is None
+                    or historical_backup.samefile(actual)):
+                issues.append("distinct_pinned_historical_backup_required")
+            else:
+                try:
+                    counts.update(_compare_history(connection, historical_backup, historical_sha256))
+                except (sqlite3.Error, ValueError, OSError):
+                    issues.append("historical_backup_comparison_unverified")
 
         connection.execute("COMMIT")
         if connection.execute("PRAGMA data_version").fetchone()[0] != version_before:
@@ -175,9 +247,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--persistent-root", type=Path, default=Path("/data"))
+    parser.add_argument("--historical-backup", type=Path)
+    parser.add_argument("--historical-sha256")
     args = parser.parse_args()
     print(json.dumps(inspect_kraken_ledger(
-        args.ledger, persistent_root=args.persistent_root
+        args.ledger, persistent_root=args.persistent_root,
+        historical_backup=args.historical_backup, historical_sha256=args.historical_sha256,
     ), sort_keys=True))
     return 2  # Forbid treating a local audit as a production certificate.
 
