@@ -5,7 +5,6 @@ import time
 from typing import Any
 
 from bot.kraken_authenticated_balance_provider import _snapshot_digest
-from bot.kraken_cursor_read_wire_v490 import cursor_read_params
 from scripts.nija_kraken_readonly_history_collector_v441 import PAGE_SIZE, _broker_account_scope
 
 
@@ -14,7 +13,7 @@ class InventoryDenied(ValueError):
 
 
 def read_current_inventory(broker: Any, monitoring_category: Any) -> dict:
-    """Read balances, a single exhausted open-order page and unconsolidated positions.
+    """Read balances, all unfiltered default-wallet open orders and unconsolidated positions.
 
     Preserve the exact responses and their individual observation intervals privately.
     Sequential reads do not prove atomicity, independent identity, or ledger ownership.
@@ -34,12 +33,12 @@ def read_current_inventory(broker: Any, monitoring_category: Any) -> dict:
     previous = 0.0
     for endpoint, params in (
         ("BalanceEx", {}),
-        ("OpenOrders", {"with_cursor": True, "limit": PAGE_SIZE, "trades": True}),
+        ("OpenOrders", {}),
         ("OpenPositions", {}),
     ):
         check_owner()
         start = time.time()
-        payload = read(endpoint, cursor_read_params(broker, endpoint, params), category=monitoring_category)
+        payload = read(endpoint, dict(params), category=monitoring_category)
         end = time.time()
         check_owner()
         if (not math.isfinite(end) or not 0 < start <= end or start < previous or not isinstance(payload, dict)
@@ -51,14 +50,19 @@ def read_current_inventory(broker: Any, monitoring_category: Any) -> dict:
         if endpoint == "BalanceEx":
             _snapshot_digest(result)
         elif endpoint == "OpenOrders":
-            cursor = result.get("cursor")
-            if (set(result) != {"open", "cursor"} or not isinstance(cursor, dict)
-                    or set(cursor) - {"next"} or cursor.get("next") not in (None, "")
-                    or not isinstance(result["open"], dict) or len(result["open"]) > PAGE_SIZE):
-                raise InventoryDenied("inventory_open_orders_incomplete")
+            # Without filters, a limit or cursor mode, Kraken returns all open orders.
+            # A pagination marker on this request is unexpected; never discard it.
+            if "cursor" in result:
+                raise InventoryDenied("inventory_unexpected_pagination")
+            if set(result) != {"open"} or not isinstance(result["open"], dict):
+                raise InventoryDenied("inventory_open_orders_shape_invalid")
+            if len(result["open"]) > PAGE_SIZE:
+                raise InventoryDenied("inventory_order_budget_exceeded")
         if endpoint != "BalanceEx":
             rows = result["open"] if endpoint == "OpenOrders" else result
             if any(not key or not isinstance(row, dict) or not row for key, row in rows.items()):
                 raise InventoryDenied("inventory_rows_invalid")
         observations[endpoint] = {"started_at": start, "finished_at": end, "result": result}
+        if endpoint == "OpenOrders":
+            observations[endpoint]["request_mode"] = "all_unfiltered_no_limit"
     return {"inventory_read_succeeded": True, "observations": observations}
