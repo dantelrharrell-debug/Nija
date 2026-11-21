@@ -51,11 +51,17 @@ def scan(report_path: Path) -> int:
             raise ValueError("baseline_version_mismatch")
         # Bind marker-only detector exceptions to complete reviewed source.
         # A new PEM payload can share the old delimiter's detector identity.
+        context_changed = False
         if "reviewed_context_manifest" in baseline_data:
             from check_reviewed_secret_context import MANIFEST, check_all_context
             if (baseline_data["reviewed_context_manifest"] != MANIFEST
                     or not check_all_context(Path.cwd())):
-                raise ValueError("reviewed_source_context_changed")
+                # Scan with every historical candidate exception revoked. An
+                # invalid review must still block even when no candidates remain.
+                context_changed = True
+                baseline_data["results"] = {}
+                baseline = json.dumps(baseline_data).encode()
+
         revision = _checkout_revision()
         report["checked_out_commit"], report["checked_out_tree"] = revision
         event = os.environ.get("GITHUB_EVENT_NAME")
@@ -106,6 +112,10 @@ def scan(report_path: Path) -> int:
             "clean" if status == 0 else "unbaselined_candidates" if status == 1
             else "baseline_refresh_required" if status == 3 else "scanner_error"
         )
+        if context_changed:
+            report["scanner_exit_code"] = status
+            report["outcome"] = "reviewed_source_context_changed"
+            status = 2
     except Exception:
         # Errors may contain input snippets. Publish no exception text or secrets.
         status = 2
