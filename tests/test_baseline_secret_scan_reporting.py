@@ -119,6 +119,24 @@ def test_existing_baseline_identity_is_respected(tmp_path, baseline):
     assert report["findings"] == []
 
 
+@pytest.mark.parametrize("with_candidate", [False, True])
+def test_invalid_review_still_scans_and_never_passes(tmp_path, baseline, with_candidate):
+    candidate = secrets.token_hex(24)
+    baseline["reviewed_context_manifest"] = "absent.json"
+    baseline["results"] = {"probe.py": [{
+        "type": "Secret Keyword", "filename": "probe.py", "line_number": 1,
+        "hashed_secret": hashlib.sha1(candidate.encode(), usedforsecurity=False).hexdigest(),
+        "is_verified": False,
+    }]}
+    source = f'password = "{candidate}"\n' if with_candidate else "count = 12\n"
+    result, report = run_scan(tmp_path, baseline, source)
+    assert result.returncode == 2
+    assert report["outcome"] == "reviewed_source_context_changed"
+    assert report["scanner_exit_code"] == int(with_candidate)
+    assert len(report["findings"]) == int(with_candidate)
+    assert candidate not in json.dumps(report) + result.stdout + result.stderr
+
+
 def test_line_number_drift_stays_nonzero_without_mutation(tmp_path, baseline):
     candidate = secrets.token_hex(24)
     baseline["results"] = {"probe.py": [{
