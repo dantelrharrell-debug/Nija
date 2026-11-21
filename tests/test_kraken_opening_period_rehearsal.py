@@ -118,3 +118,15 @@ class OpeningPeriodTests(unittest.TestCase):
         denied = subprocess.run(args, capture_output=True, check=False)
         self.assertEqual(denied.returncode, 2)
         self.assertEqual(json.loads(denied.stdout)["comparison"], "denied")
+
+
+    def test_unpaginated_order_inventory_needs_matching_request_mode(self):
+        observation = self.right["observations"]["OpenOrders"]
+        observation["result"] = {"open": {}}
+        with self.assertRaises(ValueError):
+            self.compare()
+        observation["request_mode"] = "all_unfiltered_no_limit"
+        self.assertEqual(self.compare()["comparison"], "supplied_inputs_match")
+        observation["result"]["cursor"] = {"next": "more"}
+        with self.assertRaises(ValueError):
+            self.compare()

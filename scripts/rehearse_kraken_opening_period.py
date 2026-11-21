@@ -77,7 +77,11 @@ def observe(report: dict) -> tuple[float, float, dict]:
         require(previous <= start <= end, "unordered_observations")
         previous = end
     orders = obs["OpenOrders"]["result"]
-    require(orders in ({"open": {}, "cursor": {}}, {"open": {}, "cursor": {"next": None}},
+    if "request_mode" in obs["OpenOrders"]:
+        require(obs["OpenOrders"]["request_mode"] == "all_unfiltered_no_limit" and orders == {"open": {}},
+                "open_orders_or_unverified_request_mode")
+    else:
+        require(orders in ({"open": {}, "cursor": {}}, {"open": {}, "cursor": {"next": None}},
                        {"open": {}, "cursor": {"next": ""}}), "open_orders_or_incomplete_cursor")
     require(obs["OpenPositions"]["result"] == {}, "open_margin_positions")
     rows = obs["BalanceEx"]["result"]
