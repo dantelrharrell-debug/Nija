@@ -111,7 +111,9 @@ class LedgerGapTests(unittest.TestCase):
                 "bot.kraken_authenticated_ledger_gap_audit_v489.collect_from_existing_broker",
                 return_value=observed):
             report = inspect_authenticated_kraken_ledger_gaps(**self.args, persisted_margin_cash_rows=[local])
+            missing = inspect_authenticated_kraken_ledger_gaps(**self.args)
             mismatch = inspect_authenticated_kraken_ledger_gaps(**self.args, persisted_margin_cash_rows=[])
+        self.assertIn("independently_persisted_margin_cash_rows_missing", missing["issues"])
         self.assertIn("independent_margin_cash_comparison_failed", mismatch["issues"])
         self.assertEqual(report["counts"]["matched_margin_cash_entries"], 1)
         self.assertEqual(report["counts"]["matched_rollover_references"], 1)
