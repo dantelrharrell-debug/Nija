@@ -419,7 +419,9 @@ def _open(binding: ReviewedLedgerBinding) -> tuple[sqlite3.Connection, Path, tup
         raise
 
 
-def _snapshot(db: sqlite3.Connection, binding: ReviewedLedgerBinding, now: float) -> dict:
+def _snapshot(
+    db: sqlite3.Connection, binding: ReviewedLedgerBinding, now: float, *, expected_unresolved: int = 0,
+) -> dict:
     """Read the real scoped tables atomically, without initializing TradeLedgerDB."""
     output = {}
     db.execute("BEGIN")
@@ -459,7 +461,7 @@ def _snapshot(db: sqlite3.Connection, binding: ReviewedLedgerBinding, now: float
         _require(len(states) == 1, "ledger_snapshot_state_missing_or_duplicate")
         state = states[0]
         _require(state["schema_version"] == 1 and state["history_from_genesis"] == 1
-                 and state["unresolved_submission_count"] == 0
+                 and state["unresolved_submission_count"] == expected_unresolved
                  and _identifier(state["revision"]), "ledger_snapshot_state_unverified")
         _stamp(state["observed_at_epoch"], now)
         owner = "platform" if binding.account == "platform:kraken" else binding.account.split(":")[1]
@@ -620,6 +622,43 @@ def make_kraken_ledger_evidence_provider(
     merely inspect its strings. It is rechecked at observation time. No private
     requests occur during construction. All observation failures are redacted.
     """
+    observe = _make_ledger_observer(binding, review_binding=review_binding, max_pages=max_pages, clock=clock)
+    return lambda: observe()
+
+
+def make_kraken_terminal_order_verifier(
+    binding: ReviewedLedgerBinding, *,
+    review_binding: Callable[[ReviewedLedgerBinding], bool],
+    max_pages: int = MAX_PAGES,
+    clock: Callable[[], float] = time.time,
+) -> Callable[..., Mapping[str, Any]]:
+    """Verify a reserved order using the reviewed, account-pinned ledger binding.
+
+    Review must expressly cover terminal reconciliation. This verifier expects
+    exactly one unresolved submission in the independent ledger snapshot and
+    returns proof for a single order. It never returns a pretrade observation.
+    """
+    observe = _make_ledger_observer(binding, review_binding=review_binding, max_pages=max_pages, clock=clock)
+
+    def verify(scope: str, intent_id: str, order_id: str | None, reserved_at: float,
+               *, client_order_id: str | None = None) -> Mapping[str, Any]:
+        _require(scope == binding.account and _identifier(intent_id), "terminal_order_scope_mismatch")
+        if order_id is None:
+            _require(isinstance(client_order_id, str) and re.fullmatch(r"[0-9a-f]{32}", client_order_id),
+                     "terminal_client_order_id_invalid")
+        else:
+            _exchange_id(order_id)
+        _require(type(reserved_at) in (int, float) and 0 < reserved_at <= clock(),
+                 "terminal_order_reservation_time_invalid")
+        return observe((intent_id, order_id, reserved_at, client_order_id))
+
+    return verify
+
+
+def _make_ledger_observer(
+    binding: ReviewedLedgerBinding, *,
+    review_binding: Callable[[ReviewedLedgerBinding], bool], max_pages: int, clock: Callable[[], float],
+) -> Callable[..., Mapping[str, Any]]:
     try:
         _require(type(binding) is ReviewedLedgerBinding and callable(review_binding)
                  and review_binding(binding) is True, "explicit_reviewed_binding_required")
@@ -636,14 +675,15 @@ def make_kraken_ledger_evidence_provider(
     except Exception:
         raise KrakenLedgerDenied("reviewed_binding_invalid") from None
 
-    def observe() -> Mapping[str, Any]:
+    def observe(terminal_order: tuple[str, str | None, float, str | None] | None = None) -> Mapping[str, Any]:
+        expected_unresolved = int(terminal_order is not None)
         db = None
         try:
             _require(review_binding(binding) is True, "reviewed_binding_revoked")
             started = _stamp(clock(), clock())
             db, path, file_before = _open(binding)
             version = db.execute("PRAGMA data_version").fetchone()[0]
-            local = _snapshot(db, binding, clock())
+            local = _snapshot(db, binding, clock(), expected_unresolved=expected_unresolved)
             _identity(read, binding, clock(), clock=clock)
             observed = _collect(read, max_pages)
             _identity(read, binding, clock(), clock=clock)
@@ -653,12 +693,34 @@ def make_kraken_ledger_evidence_provider(
                 positions, orders = _reconcile(local, observed)
             finished = clock()
             _stamp(started, finished)
-            _require(local == _snapshot(db, binding, finished)
+            _require(local == _snapshot(db, binding, finished, expected_unresolved=expected_unresolved)
                      and version == db.execute("PRAGMA data_version").fetchone()[0]
                      and file_before == _file_identity(path), "concurrent_ledger_change")
             _require(review_binding(binding) is True, "reviewed_binding_revoked")
             source_stamp = min(started, local["ledger_evidence_state"][0]["observed_at_epoch"])
             digest = hashlib.sha256(json.dumps(local, sort_keys=True, allow_nan=False).encode()).hexdigest()
+            if terminal_order is not None:
+                intent_id, order_id, reserved_at, client_order_id = terminal_order
+                closed = observed["history"]["closed"]
+                if order_id is None:
+                    matches = [oid for oid, row in closed.items() if row.get("cl_ord_id") == client_order_id]
+                    _require(len(matches) == 1 and not any(
+                        row.get("cl_ord_id") == client_order_id for row in observed["open_orders"].values()
+                    ), "unique_terminal_client_order_missing")
+                    order_id = matches[0]
+                order = closed.get(order_id)
+                _require(isinstance(order, Mapping), "exact_terminal_order_missing")
+                closed_at = order.get("closetm")
+                _require(type(closed_at) in (int, float) and reserved_at <= closed_at <= finished,
+                         "terminal_order_time_invalid")
+                broker_digest = hashlib.sha256(
+                    json.dumps(observed, sort_keys=True, allow_nan=False).encode()
+                ).hexdigest()
+                return {
+                    "account_scope": binding.account, "intent_id": intent_id, "broker_order_id": order_id,
+                    "observed_at": finished, "terminal_status": order["status"], "client_order_id": client_order_id,
+                    "broker_evidence_sha256": broker_digest, "ledger_evidence_sha256": digest,
+                }
             return {
                 "account": binding.account, "verified": True, "read_only": True,
                 "scope_verified": True, "source": "independent_ledger",
@@ -688,5 +750,5 @@ def make_kraken_ledger_evidence_provider(
 
 __all__ = [
     "KrakenLedgerDenied", "ReviewedLedgerBinding", "make_kraken_ledger_evidence_provider",
-    "offline_ledger_schema_sql",
+    "make_kraken_terminal_order_verifier", "offline_ledger_schema_sql",
 ]
