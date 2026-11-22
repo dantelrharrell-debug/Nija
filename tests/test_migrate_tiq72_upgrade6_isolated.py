@@ -93,7 +93,8 @@ def test_apply_checks_all_tables_and_commits_only_on_success(monkeypatch):
     ddl = [q[0] for q in db.c.queries if "CREATE TABLE IF NOT EXISTS tiq72_v515_runs" in q[0]]
     assert len(ddl) == 1
     assert "BEGIN;" not in ddl[0] and "COMMIT;" not in ddl[0]
-    assert db.c.queries[-1][0].startswith("SELECT tablename FROM pg_tables")
+    assert any(q[0].startswith("SELECT tablename FROM pg_tables") for q in db.c.queries)
+    assert db.c.queries[-1][0].startswith("SELECT tablename FROM pg_tables")  # mock verifier runs no SQL
 
 def test_missing_table_rolls_back():
     db=Connection(Cursor(tables=[("tiq72_v515_runs",)]))
