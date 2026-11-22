@@ -236,3 +236,47 @@ def test_verified_restore_uses_pinned_bytes_if_original_archive_is_replaced(tmp_
     assert checked["expected_archive_sha256_matched"] is True
     assert checked["isolated_restore_test_verified"] is True
     assert checked["off_host_backup_verified"] is False
+
+
+def test_configured_submission_journal_roundtrip_preserves_order_fence(tmp_path, monkeypatch):
+    import tarfile
+    from bot.kraken_submission_journal import (
+        KrakenSubmissionJournal, SubmissionDenied, initialize_journal,
+    )
+
+    source = tmp_path / "live.db"
+    _ledger(source)
+    journal_path = tmp_path / "writer.db"
+    initialize_journal(journal_path, "platform:kraken")
+    journal = KrakenSubmissionJournal(journal_path, "platform:kraken")
+    journal.reserve("awaiting-terminal-proof")
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal_path))
+
+    report = snapshot.create_snapshot(source, tmp_path / "exports")
+    archive = Path(report["archive"])
+    verified = snapshot.verify_snapshot(archive, expected_sha256=report["sha256"], exercise_restore=True)
+    assert verified["submission_journal_sqlite_tables"]["submission"] == 1
+    assert verified["isolated_restore_test_verified"] is True
+    assert verified["live_trading_eligible"] is False
+
+    restored = tmp_path / "restored-journal.db"
+    with tarfile.open(archive) as tar:
+        member = tar.extractfile(snapshot.SUBMISSION_JOURNAL)
+        assert member is not None
+        with member:
+            restored.write_bytes(member.read())
+    reopened = KrakenSubmissionJournal(restored, "platform:kraken")
+    assert reopened.unresolved_count() == 1
+    with pytest.raises(SubmissionDenied, match="already reserved"):
+        reopened.reserve("awaiting-terminal-proof")
+    with pytest.raises(SubmissionDenied, match="unresolved"):
+        reopened.reserve("new-intent")
+
+
+def test_configured_missing_submission_journal_cannot_produce_backup(tmp_path, monkeypatch):
+    source = tmp_path / "live.db"
+    _ledger(source)
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(tmp_path / "missing.db"))
+    with pytest.raises(FileNotFoundError):
+        snapshot.create_snapshot(source, tmp_path / "exports")
+    assert not list((tmp_path / "exports").glob("*.tar.gz"))

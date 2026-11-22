@@ -32,6 +32,8 @@ MAX_COMPANION_BYTES = 128 * 1024 * 1024
 MAX_SQLITE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
 MANDATORY_TABLES = ("trade_ledger", "open_positions", "completed_trades")
+SUBMISSION_JOURNAL = "kraken_submission_journal.db"
+SUBMISSION_JOURNAL_TABLES = ("account", "submission", "submission_resolution")
 OPTIONAL_FILES = (
     ("pending_kraken_fills.json", "NIJA_KRAKEN_PENDING_FILL_PROOF_PATH",
      "./data/kraken_pending_fill_proof.json"),
@@ -69,7 +71,7 @@ def _counts(connection: sqlite3.Connection) -> dict[str, int]:
     return output
 
 
-def _validate_database(path: Path) -> dict[str, int]:
+def _validate_database(path: Path, required_tables: tuple[str, ...] = MANDATORY_TABLES) -> dict[str, int]:
     if not path.is_file() or path.is_symlink():
         raise ValueError("snapshot SQLite file missing or is a symlink")
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=15)
@@ -78,7 +80,7 @@ def _validate_database(path: Path) -> dict[str, int]:
         if check != [("ok",)]:
             raise RuntimeError("SQLite integrity_check did not return ok")
         tables = _counts(connection)
-        missing = set(MANDATORY_TABLES) - set(tables)
+        missing = set(required_tables) - set(tables)
         if missing:
             raise RuntimeError("trading-ledger tables missing: " + ",".join(sorted(missing)))
         return tables
@@ -86,7 +88,9 @@ def _validate_database(path: Path) -> dict[str, int]:
         connection.close()
 
 
-def _snapshot_sqlite(source: Path, destination: Path) -> dict[str, int]:
+def _snapshot_sqlite(
+    source: Path, destination: Path, required_tables: tuple[str, ...] = MANDATORY_TABLES,
+) -> dict[str, int]:
     if not source.is_file() or source.is_symlink():
         raise FileNotFoundError("source SQLite ledger is missing or is a symlink")
     if source.resolve() == destination.resolve():
@@ -96,12 +100,13 @@ def _snapshot_sqlite(source: Path, destination: Path) -> dict[str, int]:
     reader = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)
     writer = sqlite3.connect(str(destination), timeout=15)
     try:
+        reader.execute("PRAGMA query_only=ON")
         reader.backup(writer, pages=256, sleep=0.1)
         writer.commit()
     finally:
         writer.close()
         reader.close()
-    return _validate_database(destination)
+    return _validate_database(destination, required_tables)
 
 
 def _copy_companion(source: Path, destination: Path) -> bool:
@@ -147,6 +152,19 @@ def create_snapshot(source: Path, output_dir: Path) -> dict[str, Any]:
             stable = _copy_companion(candidate, destination)
             companions_stable = companions_stable and stable
             sources.append((name, destination, stable))
+        journal_counts = None
+        journal_setting = os.getenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", "").strip()
+        if journal_setting:
+            journal_path = Path(journal_setting)
+            journal_copy = stage_dir / SUBMISSION_JOURNAL
+            if journal_path.stat().st_size > MAX_COMPANION_BYTES:
+                raise ValueError("submission journal exceeds maximum safe snapshot size")
+            journal_counts = _snapshot_sqlite(journal_path, journal_copy, SUBMISSION_JOURNAL_TABLES)
+            if journal_copy.stat().st_size > MAX_COMPANION_BYTES:
+                raise ValueError("submission journal snapshot exceeds maximum safe size")
+            # These are two database snapshots. Their presence does not prove
+            # a single atomic accounting cutoff or complete writer coverage.
+            sources.append((SUBMISSION_JOURNAL, journal_copy, True))
         for name, file, stable in sources:
             members[name] = {
                 "bytes": file.stat().st_size,
@@ -167,6 +185,8 @@ def create_snapshot(source: Path, output_dir: Path) -> dict[str, Any]:
             "historical_fill_completeness_verified": False,
             "restart_persistence_verified": False,
         }
+        if journal_counts is not None:
+            manifest["submission_journal_sqlite_tables"] = journal_counts
         manifest_file = stage_dir / "manifest.json"
         manifest_file.write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -259,6 +279,7 @@ def _unpack_bounded_archive(archive_path: Path, stage_dir: Path) -> tuple[str, .
     """
     limits = {"trade_ledger.db": MAX_SQLITE_BYTES, "manifest.json": MAX_MANIFEST_BYTES}
     limits.update({name: MAX_COMPANION_BYTES for name, _, _ in OPTIONAL_FILES})
+    limits[SUBMISSION_JOURNAL] = MAX_COMPANION_BYTES
     max_members = len(limits)
     max_headers = max_members * 2 + 2
     max_tar_bytes = sum(limits.values()) + (max_headers + 2) * (512 + 16384)
@@ -365,7 +386,7 @@ def verify_snapshot(
                 source_stat = os.fstat(original.fileno())
                 max_compressed = (
                     MAX_SQLITE_BYTES + MAX_MANIFEST_BYTES
-                    + len(OPTIONAL_FILES) * MAX_COMPANION_BYTES + 2 * 1024 * 1024
+                    + (len(OPTIONAL_FILES) + 1) * MAX_COMPANION_BYTES + 2 * 1024 * 1024
                 )
                 if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size > max_compressed:
                     raise ValueError("unsafe or oversized source archive")
@@ -417,22 +438,26 @@ def verify_snapshot(
         if counts != manifest.get("sqlite_tables"):
             raise ValueError("SQLite counts do not match manifest")
 
+        journal_present = SUBMISSION_JOURNAL in names
+        if journal_present != ("submission_journal_sqlite_tables" in manifest):
+            raise ValueError("submission journal metadata and member mismatch")
+        journal_counts = None
+        if journal_present:
+            journal_counts = _validate_database(stage_dir / SUBMISSION_JOURNAL, SUBMISSION_JOURNAL_TABLES)
+            if journal_counts != manifest["submission_journal_sqlite_tables"]:
+                raise ValueError("submission journal counts do not match manifest")
+
         if exercise_restore:
-            restored = stage_dir / "_isolated_restore.db"
-            reader = sqlite3.connect(
-                (stage_dir / "trade_ledger.db").resolve().as_uri() + "?mode=ro",
-                uri=True, timeout=15,
-            )
-            writer = sqlite3.connect(str(restored), timeout=15)
-            try:
-                reader.execute("PRAGMA query_only=ON")
-                reader.backup(writer, pages=256, sleep=0.1)
-                writer.commit()
-            finally:
-                writer.close()
-                reader.close()
-            if _validate_database(restored) != counts:
+            restored = _snapshot_sqlite(stage_dir / "trade_ledger.db", stage_dir / "_isolated_restore.db")
+            if restored != counts:
                 raise ValueError("isolated restore did not preserve table counts")
+            if journal_present:
+                restored_journal = _snapshot_sqlite(
+                    stage_dir / SUBMISSION_JOURNAL, stage_dir / "_journal_restore.db",
+                    SUBMISSION_JOURNAL_TABLES,
+                )
+                if restored_journal != journal_counts:
+                    raise ValueError("submission journal restore did not preserve table counts")
     result = dict(manifest)
     if exercise_restore:
         result["isolated_restore_test_verified"] = True
