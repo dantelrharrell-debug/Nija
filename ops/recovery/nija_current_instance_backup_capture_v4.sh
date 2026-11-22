@@ -36,8 +36,9 @@ done
 
 # Verified Git object IDs of the four files in the deployed release commit.
 # This is an exact source-code pin, NOT a broker-identity attestation.
-python -S - <<'PY'
+python -S - "$EXPECTED_COMMIT" <<'PY'
 import hashlib
+import sys
 from pathlib import Path
 pins = {
   'nija_state_store_persistence_audit_v441.py': '54b8109658dd7ca9031edad7c0092f3402b92613',
@@ -45,6 +46,8 @@ pins = {
   'nija_account_state_offhost_evidence_v449.py': 'bab7e59613b3777a803213496021f5eab09731c0',
   'nija_legacy_global_state_evidence_v462.py': '2ae98af7e7edfc4be4be413a46ae2ff877c44726',
 }
+if sys.argv[1] == 'f7ffa0692c8c00466a8a58587aa186a63b74687b':
+  pins['nija_trade_ledger_snapshot_v436.py'] = '82f58e244733fe2599a5d9a87cdae2fb78ca1737'
 for name, expected in pins.items():
   raw = (Path('/app/scripts') / name).read_bytes()
   actual = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()

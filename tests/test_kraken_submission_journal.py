@@ -135,3 +135,39 @@ def test_sqlite_backup_restore_preserves_resolved_and_ambiguous_intents(tmp_path
         reopened.reserve("ambiguous")
     with pytest.raises(SubmissionDenied, match="unresolved"):
         reopened.reserve("new")
+
+
+def test_interrupted_install_allows_clean_retry(tmp_path, monkeypatch):
+    path = tmp_path / "journal.db"
+
+    def fail_connect(*args, **kwargs):
+        raise sqlite3.OperationalError("installation interrupted")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(sqlite3, "connect", fail_connect)
+        with pytest.raises(sqlite3.OperationalError):
+            initialize_journal(path, SCOPE)
+    assert not path.exists()
+    initialize_journal(path, SCOPE)
+    assert KrakenSubmissionJournal(path, SCOPE).unresolved_count() == 0
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_concurrent_install_preserves_winner_and_pending_intent(tmp_path):
+    path = tmp_path / "journal.db"
+
+    def install(scope):
+        try:
+            initialize_journal(path, scope)
+        except FileExistsError:
+            return None
+        return scope
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        winners = [s for s in pool.map(install, (SCOPE, "user:other:kraken")) if s]
+    assert len(winners) == 1
+    journal = KrakenSubmissionJournal(path, winners[0])
+    journal.reserve("pending")
+    with pytest.raises(FileExistsError):
+        initialize_journal(path, SCOPE)
+    assert journal.unresolved_count() == 1
