@@ -93,3 +93,32 @@ def assess(snapshot: Snapshot) -> Assessment:
     else:
         state = State.CONTROLLED
     return Assessment(state, tuple(blockers), verified)
+
+def assess_authenticated(snapshot: Snapshot, verified_observations: frozenset[str],
+                         *, evidence_errors: tuple[str, ...] = (),
+                         authenticated_gate: bool = False) -> Assessment:
+    """Read-only production-facing projection of separately verified evidence.
+
+    A caller's Boolean assertions never establish authenticated readiness.
+    This method remains diagnostic-only and cannot enable any order.
+    """
+    if set(verified_observations) - set(REQUIRED_OBSERVATIONS):
+        raise ValueError("unknown_verified_observation")
+    filtered = {name: name in verified_observations for name in REQUIRED_OBSERVATIONS}
+    sanitized = Snapshot(
+        protected_artifacts_verified=snapshot.protected_artifacts_verified,
+        collector_installed=snapshot.collector_installed,
+        observations=filtered,
+        broker_reconciled=snapshot.broker_reconciled,
+        security_certified=snapshot.security_certified,
+        independent_receipts_verified=snapshot.independent_receipts_verified,
+        explicit_bounded_authorization=snapshot.explicit_bounded_authorization,
+        canonical_gate_allows_orders=authenticated_gate and snapshot.canonical_gate_allows_orders,
+        material_integrity_failure=snapshot.material_integrity_failure,
+    )
+    result = assess(sanitized)
+    if evidence_errors and result.state in (State.READY_FOR_APPROVAL, State.CONTROLLED):
+        return Assessment(State.VERIFYING, result.blockers + tuple(evidence_errors),
+                          result.observations_verified)
+    return Assessment(result.state, result.blockers + tuple(evidence_errors),
+                      result.observations_verified)
