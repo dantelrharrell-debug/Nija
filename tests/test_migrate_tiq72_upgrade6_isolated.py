@@ -84,7 +84,8 @@ def test_apply_requires_separate_backup_restore_gate():
             module.migrate(url(),apply=True,connect=lambda *a,**k:db)
     assert db.commits==0 and db.rollbacks==1
 
-def test_apply_checks_all_tables_and_commits_only_on_success():
+def test_apply_checks_all_tables_and_commits_only_on_success(monkeypatch):
+    monkeypatch.setattr(module, 'schema_contract_verified', lambda cursor: True)
     db=Connection()
     with patch.dict("os.environ",{"NIJA_TIQ72_ISOLATED_SCHEMA_APPLY":"APPROVED_TEST_ONLY", "NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED":"APPROVED"}):
         assert module.migrate(url(),apply=True,connect=lambda *a,**k:db)=="isolated_test_schema_installed"
@@ -101,6 +102,19 @@ def test_missing_table_rolls_back():
             module.migrate(url(),apply=True,connect=lambda *a,**k:db)
     assert db.commits==0 and db.rollbacks==1
 
+
+def test_matching_table_names_with_invalid_contract_rollback(monkeypatch):
+    # Names alone were previously accepted; invalid constraints must never commit.
+    db = Connection()
+    monkeypatch.setattr(module, "schema_contract_verified", lambda cursor: False)
+    with patch.dict("os.environ", {
+        "NIJA_TIQ72_ISOLATED_SCHEMA_APPLY": "APPROVED_TEST_ONLY",
+        "NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED": "APPROVED",
+    }):
+        with pytest.raises(module.MigrationDenied, match="schema_contract_postcondition_failed"):
+            module.migrate(url(), apply=True, connect=lambda *a, **k: db)
+    assert db.commits == 0 and db.rollbacks == 1 and db.closed == 1
+
 def test_provider_exception_is_redacted():
     def connect(*a,**k): raise RuntimeError("secret-in-provider-exception")
     with pytest.raises(module.MigrationDenied,match="private_database_operation_failed") as e:
@@ -109,6 +123,7 @@ def test_provider_exception_is_redacted():
 
 @pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
 def test_schema_line_endings_preserve_one_transaction(tmp_path, monkeypatch, line_ending):
+    monkeypatch.setattr(module, 'schema_contract_verified', lambda cursor: True)
     schema = tmp_path / "schema.sql"
     original = module.SCHEMA.read_text()
     schema.write_bytes(original.replace("\n", line_ending).encode())
