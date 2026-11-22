@@ -9,6 +9,7 @@ must verify the terminal exchange order and local ledger before settlement.
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import os
 import re
 import sqlite3
@@ -24,29 +25,38 @@ def initialize_journal(path: Path, account_scope: str) -> None:
     """Provision an empty journal explicitly in an existing private directory."""
     if not account_scope:
         raise ValueError("account scope required")
-    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    os.close(fd)
-    with closing(sqlite3.connect(path)) as db, db:
-        db.execute("PRAGMA synchronous=FULL")
-        db.execute("BEGIN IMMEDIATE")
-        db.execute("CREATE TABLE account (scope TEXT PRIMARY KEY NOT NULL)")
-        db.execute("INSERT INTO account VALUES (?)", (account_scope,))
-        db.execute("""
-            CREATE TABLE submission (
-                intent_id TEXT PRIMARY KEY NOT NULL,
-                reserved_at REAL NOT NULL,
-                broker_order_id TEXT UNIQUE
-            )
-        """)
-        db.execute("""
-            CREATE TABLE submission_resolution (
-                intent_id TEXT PRIMARY KEY NOT NULL REFERENCES submission(intent_id),
-                observed_at REAL NOT NULL,
-                terminal_status TEXT NOT NULL,
-                broker_evidence_sha256 TEXT NOT NULL,
-                ledger_evidence_sha256 TEXT NOT NULL
-            )
-        """)
+    # The canonical name becomes visible only after the schema transaction
+    # commits. A hard link on the same filesystem never replaces an old journal.
+    with TemporaryDirectory(prefix=".kraken-journal-", dir=path.parent) as staging:
+        staged = Path(staging) / "journal.db"
+        staged.touch(mode=0o600, exist_ok=False)
+        with closing(sqlite3.connect(staged)) as db, db:
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("CREATE TABLE account (scope TEXT PRIMARY KEY NOT NULL)")
+            db.execute("INSERT INTO account VALUES (?)", (account_scope,))
+            db.execute("""
+                CREATE TABLE submission (
+                    intent_id TEXT PRIMARY KEY NOT NULL,
+                    reserved_at REAL NOT NULL,
+                    broker_order_id TEXT UNIQUE
+                )
+            """)
+            db.execute("""
+                CREATE TABLE submission_resolution (
+                    intent_id TEXT PRIMARY KEY NOT NULL REFERENCES submission(intent_id),
+                    observed_at REAL NOT NULL,
+                    terminal_status TEXT NOT NULL,
+                    broker_evidence_sha256 TEXT NOT NULL,
+                    ledger_evidence_sha256 TEXT NOT NULL
+                )
+            """)
+        os.link(staged, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
 
 class KrakenSubmissionJournal:
