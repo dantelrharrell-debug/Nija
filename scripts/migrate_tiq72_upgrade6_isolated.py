@@ -5,6 +5,17 @@ import argparse
 import os
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
+from importlib.util import module_from_spec, spec_from_file_location
+
+# Resolve the adjacent read-only catalog verifier for both direct script
+# execution and importlib-loaded offline migration tests.
+_contract_spec = spec_from_file_location(
+    "tiq72_readonly_contract",
+    Path(__file__).resolve().with_name("tiq72_isolated_db_readonly_preflight.py"),
+)
+_contract_module = module_from_spec(_contract_spec)
+_contract_spec.loader.exec_module(_contract_module)
+schema_contract_verified = _contract_module.schema_contract_verified
 
 DB = "nija_tiq72_upgrade6_isolated_test"
 HOST = "dpg-dbqeq90ae00c7386p970-a"
@@ -75,6 +86,11 @@ def migrate(url, apply=False, connect=None):
                 cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE %s", ("tiq72_v515_%",))
                 if not TABLES.issubset({row[0] for row in cursor.fetchall()}):
                     raise MigrationDenied("schema_postcondition_failed")
+                # Table names alone cannot certify test-only checks, foreign keys,
+                # types, and required ready indexes. Reuse the read-only
+                # PostgreSQL catalog verifier before committing any DDL.
+                if not schema_contract_verified(cursor):
+                    raise MigrationDenied("schema_contract_postcondition_failed")
             db.commit()
             return "isolated_test_schema_installed"
         except Exception:
