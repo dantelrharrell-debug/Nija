@@ -1,5 +1,15 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Kraken operational checkpoint — November 22, 2026 (documentation only)
+
+**Certification status: UNVERIFIED; do not infer live-order authorization.** Recent reported GitHub work includes [PR #4090](https://github.com/dantelrharrell-debug/Nija/pull/4090) (bounded historical Kraken reads), [PR #4092](https://github.com/dantelrharrell-debug/Nija/pull/4092) (release-to-main integration), and the durable-intent review commit `1f11160eb06623a4388ccaba523dc1a509900d91`. These references describe source-level progress, **not** authenticated proof of the current Render runtime or successful live-trading certification. Check current PR/merge status, deployed SHA and immutable image before marking any item complete.
+
+**Next required evidence:** follow [production issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890) for exact-release source-integrity assertions and any changed recovery-file hashes; verify all mandatory security and artifact checks on the deployment artifact; inspect Render service `srv-d98dsr5aeets73fpbaqg` and protected startup files; demonstrate final-interpreter collector installation and 13/13 fresh account-scoped pretrade observations; independently reconcile Kraken history, positions, orders, fills, protective exits and durable intent/nonce/Redis fences; verify operator authority, kill switch, risk publisher, monitoring and rollback.
+
+**Order-admission rule:** retain `allow_new_orders=false` and fail-closed controls until all required gates have independently verifiable production evidence and a distinct, bounded owner authorization is recorded. A README update, merged PR, successful offline test or reported deployment cannot activate trading.
+
+---
+
 ## Operational readiness checkpoint — November 20, 2026 (documentation review)
 
 **Verdict: NOT CERTIFIED FOR LIVE TRADING.** This checkpoint documents repository and issue evidence, **not a fresh authenticated Render inspection**. The most recent production observations verified in [issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890) are dated November 15, 2026: deployed startup reported `protected_startup_artifacts_missing`, `collector_installed=false`, `producer_status=collector_missing`, and **13/13 required pretrade observations missing**. A later successful build, merge, or service health check does not by itself supersede those runtime findings.
