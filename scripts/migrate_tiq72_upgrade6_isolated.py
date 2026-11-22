@@ -5,7 +5,17 @@ import argparse
 import os
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
-from scripts.tiq72_isolated_db_readonly_preflight import schema_contract_verified
+from importlib.util import module_from_spec, spec_from_file_location
+
+# Resolve the adjacent read-only catalog verifier for both direct script
+# execution and importlib-loaded offline migration tests.
+_contract_spec = spec_from_file_location(
+    "tiq72_readonly_contract",
+    Path(__file__).resolve().with_name("tiq72_isolated_db_readonly_preflight.py"),
+)
+_contract_module = module_from_spec(_contract_spec)
+_contract_spec.loader.exec_module(_contract_module)
+schema_contract_verified = _contract_module.schema_contract_verified
 
 DB = "nija_tiq72_upgrade6_isolated_test"
 HOST = "dpg-dbqeq90ae00c7386p970-a"
