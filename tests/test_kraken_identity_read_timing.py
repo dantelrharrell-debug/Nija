@@ -166,3 +166,50 @@ def test_thread_local_scope_and_exception_cleanup(rig):
                 raise RuntimeError("synthetic failure")
         assert timing._LOCAL.capture is outer
     assert timing._LOCAL.capture is None
+
+
+@pytest.mark.parametrize("reply", ["ack", "ambiguous", "transport_error"])
+def test_canonical_direct_writer_reserves_before_transport(rig, tmp_path, monkeypatch, reply):
+    from bot.kraken_submission_journal import (
+        KrakenSubmissionJournal, SubmissionDenied, initialize_journal,
+    )
+    from bot.runtime_correlation import runtime_correlation_scope
+
+    path = tmp_path / "submissions.db"
+    scope = "platform:kraken"
+    initialize_journal(path, scope)
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(path))
+    journal = KrakenSubmissionJournal(path, scope)
+
+    def query(method, params):
+        rig.calls.append(method)
+        assert journal.unresolved_count() == 1
+        assert params["cl_ord_id"] == journal._client_order_id("first")
+        if reply == "transport_error":
+            raise TimeoutError("offline timeout")
+        return {"error": [], "result": {"txid": ["order-id"]} if reply == "ack" else {}}
+
+    rig.broker.api.query_private = query
+    with runtime_correlation_scope(intent_id="first"):
+        if reply == "transport_error":
+            with pytest.raises(TimeoutError):
+                rig.broker._kraken_private_call("AddOrder", {})
+        else:
+            rig.broker._kraken_private_call("AddOrder", {})
+        with pytest.raises(SubmissionDenied, match="already reserved"):
+            rig.broker._kraken_private_call("AddOrder", {})
+    with runtime_correlation_scope(intent_id="different"):
+        with pytest.raises(SubmissionDenied, match="unresolved"):
+            rig.broker._kraken_private_call("AddOrder", {})
+    assert rig.calls == ["AddOrder"]
+
+
+def test_canonical_direct_writer_storage_failure_stops_dispatch(rig, tmp_path, monkeypatch):
+    from bot.kraken_submission_journal import SubmissionDenied
+    from bot.runtime_correlation import runtime_correlation_scope
+
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(tmp_path / "missing.db"))
+    with runtime_correlation_scope(intent_id="first"):
+        with pytest.raises(SubmissionDenied, match="missing"):
+            rig.broker._kraken_private_call("AddOrder", {})
+    assert rig.calls == []

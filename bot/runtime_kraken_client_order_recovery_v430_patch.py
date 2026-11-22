@@ -38,6 +38,7 @@ from types import ModuleType
 from typing import Any
 
 from bot.durable_recovery_state import read_recovery_state, write_recovery_state
+from bot.kraken_submission_journal import configured_journal_path
 
 LOGGER = logging.getLogger("nija.runtime_kraken_client_order_recovery_v430")
 MARKER = "20260921-runtime-kraken-client-order-recovery-v430"
@@ -208,6 +209,12 @@ def _patch_class(cls: type) -> bool:
         if str(method or "").strip().lower() == "addorder" and not validation_only:
             existing_client = str(safe.get("cl_ord_id") or "").strip()
             has_userref = safe.get("userref") not in (None, "")
+            if configured_journal_path() and not getattr(self, "_gateway_url", None):
+                # The direct journal reserves its own stable client ID before transport.
+                response = current(self, method, safe, *args, **kwargs)
+                if not existing_client and not has_userref and (txids := _txids(response)):
+                    _seed_txids(txids, pair=str(safe.get("pair") or ""), side=str(safe.get("type") or ""))
+                return response
             if not existing_client and not has_userref:
                 generated_id = _new_client_id()
                 safe["cl_ord_id"] = generated_id
