@@ -1,5 +1,15 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Kraken recovery follow-up — November 22, 2026 (repository documentation)
+
+**New review references:** [PR #4094](https://github.com/dantelrharrell-debug/Nija/pull/4094) addresses history-recovery source pins; [PR #4096](https://github.com/dantelrharrell-debug/Nija/pull/4096) addresses durable submission intent; [PR #4099](https://github.com/dantelrharrell-debug/Nija/pull/4099) and [PR #4100](https://github.com/dantelrharrell-debug/Nija/pull/4100) address deployed snapshot-tool verification and atomic journal installation. [PR #4101](https://github.com/dantelrharrell-debug/Nija/pull/4101) is a release synchronization reference. **Verify each PR's merge status, exact SHA, and CI results before treating its changes as integrated.** These references do not prove that the recovery tool or journals are installed in production.
+
+**Operator verification sequence:** (1) compare exact protected-release and deployed-image SHAs; (2) check the history-recovery source pins and exact-file digests; (3) verify deployed snapshot-tool provenance and atomic, durable journal installation without overwriting valid records; (4) reconcile Kraken balances, history, fills, open orders, exits, positions, fees, nonce ownership and submission-intent deduplication; (5) authenticate protected startup registration in the final interpreter and 13/13 fresh pretrade observations; (6) confirm exact-image security/artifact gates, alerting and rollback. Record evidence in [issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890), with timestamps and redacted account-scoped identifiers.
+
+**Current certification:** not established by this documentation. Preserve `allow_new_orders=false`, kill-switch and fail-closed behavior. No second Kraken client or nonce writer; no fabricated receipts or approvals. A separate explicit bounded go-live authorization is required after production evidence passes.
+
+---
+
 ## Kraken operational checkpoint — November 22, 2026 (documentation only)
 
 **Certification status: UNVERIFIED; do not infer live-order authorization.** Recent reported GitHub work includes [PR #4090](https://github.com/dantelrharrell-debug/Nija/pull/4090) (bounded historical Kraken reads), [PR #4092](https://github.com/dantelrharrell-debug/Nija/pull/4092) (release-to-main integration), and the durable-intent review commit `1f11160eb06623a4388ccaba523dc1a509900d91`. These references describe source-level progress, **not** authenticated proof of the current Render runtime or successful live-trading certification. Check current PR/merge status, deployed SHA and immutable image before marking any item complete.
