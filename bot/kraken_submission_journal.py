@@ -217,7 +217,11 @@ def query_direct_order(broker, method, params, *, assert_deadline):
     the reservation unresolved. The verified recovery path must resolve it.
     """
     path = configured_journal_path()
-    if not path or (method == "AddOrder" and params.get("validate") is True):
+    if method == "AddOrder" and params.get("validate") is True:
+        return broker.api.query_private(method, params)
+    if method == "AddOrder" and not path:
+        raise SubmissionDenied("durable Kraken submission journal not configured")
+    if not path:
         return broker.api.query_private(method, params)
     if method != "AddOrder":
         raise SubmissionDenied("order method lacks journal support")
