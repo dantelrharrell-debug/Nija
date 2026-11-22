@@ -171,3 +171,19 @@ def test_concurrent_install_preserves_winner_and_pending_intent(tmp_path):
     with pytest.raises(FileExistsError):
         initialize_journal(path, SCOPE)
     assert journal.unresolved_count() == 1
+
+
+def test_live_add_order_requires_configured_journal(monkeypatch):
+    from bot.kraken_submission_journal import query_direct_order
+
+    monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
+
+    class NoTransport:
+        def query_private(self, method, params):
+            raise AssertionError("unprotected live order reached Kraken transport")
+
+    class Broker:
+        api = NoTransport()
+
+    with pytest.raises(SubmissionDenied, match="not configured"):
+        query_direct_order(Broker(), "AddOrder", {"pair": "XBTUSD"}, assert_deadline=lambda method: None)
