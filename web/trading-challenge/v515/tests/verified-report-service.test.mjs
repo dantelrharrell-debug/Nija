@@ -68,6 +68,13 @@ test("cross-account TEST receipts never generate or reopen a paid report",async(
  assert.equal(reportReads,0);
  assert.equal(f.writes,0);
 });
+test("trusted canonical selection rejects cross-account Stripe receipt proof",async()=>{
+ const f=fixture({price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT});
+ await deny(f,"test_product_mismatch",{
+   testOffer:{price:TEST_PRICE,product:TEST_PRODUCT}
+ });
+ assert.equal(f.writes,0);
+});
 test("verified NIJA TEST receipts still support owner-scoped report recovery",async()=>{
  const testOffer={price:TEST_PRICE,product:TEST_PRODUCT};
  const f=fixture(testOffer);
