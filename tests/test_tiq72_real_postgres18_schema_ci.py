@@ -142,6 +142,36 @@ class EphemeralPostgresSchemaTests(unittest.TestCase):
         )
         self.assertFalse(schema_contract_verified(self.cursor))
 
+    def test_same_named_fk_points_to_wrong_unique_column(self):
+        # Both columns are TEXT and the wrong target has a UNIQUE index.
+        # Table-name-only foreign-key validation would miss this drift.
+        from scripts.tiq72_isolated_db_readonly_preflight import schema_contract_verified
+        self.cursor.execute(
+            "ALTER TABLE tiq72_v515_reports "
+            "DROP CONSTRAINT tiq72_v515_reports_reservation_id_fkey"
+        )
+        self.cursor.execute(
+            "ALTER TABLE tiq72_v515_reports "
+            "ADD CONSTRAINT tiq72_v515_reports_reservation_id_fkey "
+            "FOREIGN KEY (reservation_id) "
+            "REFERENCES tiq72_v515_reservations(stripe_session)"
+        )
+        self.assertFalse(schema_contract_verified(self.cursor))
+
+    def test_same_named_but_not_valid_check_fails_attestation(self):
+        # NOT VALID is not equivalent to the reviewed enforced contract.
+        from scripts.tiq72_isolated_db_readonly_preflight import schema_contract_verified
+        self.cursor.execute(
+            "ALTER TABLE tiq72_v515_reservations "
+            "DROP CONSTRAINT tiq72_v515_session_test_only"
+        )
+        self.cursor.execute(
+            "ALTER TABLE tiq72_v515_reservations "
+            "ADD CONSTRAINT tiq72_v515_session_test_only "
+            "CHECK (stripe_session IS NULL OR stripe_session LIKE 'cs_test_%') NOT VALID"
+        )
+        self.assertFalse(schema_contract_verified(self.cursor))
+
     def test_owner_attempt_key_is_unique(self):
         self.insert_run()
         with self.assertRaises(self.driver.errors.UniqueViolation):
