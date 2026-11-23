@@ -107,6 +107,16 @@ test("NIJA verified TEST offer remains usable with trusted selection",async()=>{
  assert.equal(f.reserved,1);
  assert.equal(f.attached,1);
 });
+test("provider returning cross-account price cannot reserve a run",async()=>{
+ const f=fixture({price:TEST_PRICE,product:TEST_PRODUCT});
+ f.price.id=ISOLATED_TEST_PRICE;
+ f.price.product=ISOLATED_TEST_PRODUCT;
+ await assert.rejects(f.run(),/verified_test_price_required/);
+ assert.equal(f.priceCalls,1);
+ assert.equal(f.reserved,0);
+ assert.equal(f.created,0);
+ assert.equal(f.attached,0);
+});
 test("unapproved TEST offer is rejected before any provider requests",async()=>{
  const f=fixture({price:"price_untrusted",product:ISOLATED_TEST_PRODUCT});
  await assert.rejects(f.run(),/test_product_mismatch/);
