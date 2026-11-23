@@ -95,12 +95,19 @@ test("unknown path remains private and not routed",async()=>{
  assert.equal(res.statusCode,404);assert.equal(f.stripeCalls,0);
 });
 
-test("signed HTTP adapter uses only the trusted isolated TEST offer",async()=>{
- const f=fixture({testOffer:{price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT}});
+test("HTTP adapter rejects cross-account TEST offer before it can mount",()=>{
+ assert.throws(()=>fixture({
+   testOffer:{price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT}
+ }),/test_product_mismatch/);
+ assert.throws(()=>fixture({
+   testOffer:{price:"price_attacker",product:ISOLATED_TEST_PRODUCT}
+ }),/test_product_mismatch/);
+});
+test("HTTP adapter retains verified NIJA TEST offer",async()=>{
+ const f=fixture({testOffer:{price:TEST_PRICE,product:TEST_PRODUCT}});
  const res=await f.call(req("POST","/sandbox/checkout",
   {origin,"x-csrf-token":csrf},body));
  assert.equal(res.statusCode,200);
  assert.equal(f.stripeCalls,2);
- assert.throws(()=>fixture({testOffer:{price:"price_attacker",product:ISOLATED_TEST_PRODUCT}}),
-  /test_product_mismatch/);
+ assert.equal(f.storeCalls,2);
 });

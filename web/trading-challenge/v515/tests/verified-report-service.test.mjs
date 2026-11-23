@@ -52,12 +52,36 @@ test("recovery rejects unprotected store interface",async()=>{
  await assert.rejects(recoverFreshPaidReport({ownerId,runId,store:f.store,stripe:f.stripe}),/protected_report_store_required/);
 });
 
-test("isolated TEST offer reports require the current verified product and price",async()=>{
- const testOffer={price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT};
- const f=fixture(testOffer);
- const report=await call(f,{testOffer});
- assert.ok(report);assert.equal(f.writes,1);
+test("cross-account TEST receipts never generate or reopen a paid report",async()=>{
+ const unverified={price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT};
+ const f=fixture(unverified);
+ await deny(f,"test_product_mismatch",{testOffer:unverified});
+ assert.equal(f.writes,0);
  const old=fixture();
- await deny(old,"test_product_mismatch",{testOffer});
+ await deny(old,"test_product_mismatch",{testOffer:unverified});
  assert.equal(old.writes,0);
+ let reportReads=0;
+ f.store.getOwnedPaidReport=async()=>{reportReads++;return {iq:93};};
+ await assert.rejects(recoverFreshPaidReport({
+   ownerId,runId,store:f.store,stripe:f.stripe,testOffer:unverified
+ }),/test_product_mismatch/);
+ assert.equal(reportReads,0);
+ assert.equal(f.writes,0);
+});
+test("trusted canonical selection rejects cross-account Stripe receipt proof",async()=>{
+ const f=fixture({price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT});
+ await deny(f,"test_product_mismatch",{
+   testOffer:{price:TEST_PRICE,product:TEST_PRODUCT}
+ });
+ assert.equal(f.writes,0);
+});
+test("verified NIJA TEST receipts still support owner-scoped report recovery",async()=>{
+ const testOffer={price:TEST_PRICE,product:TEST_PRODUCT};
+ const f=fixture(testOffer);
+ f.store.getOwnedPaidReport=async()=>({iq:93});
+ const report=await recoverFreshPaidReport({
+   ownerId,runId,store:f.store,stripe:f.stripe,testOffer
+ });
+ assert.equal(report.iq,93);
+ assert.equal(f.writes,1);
 });
