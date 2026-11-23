@@ -2,6 +2,7 @@
 """Review-only TIQ72 isolated test migration. Never migrate billing, course or Kraken."""
 from __future__ import annotations
 import argparse
+import hashlib
 import os
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
@@ -21,6 +22,9 @@ DB = "nija_tiq72_upgrade6_isolated_test"
 HOST = "dpg-dbqeq90ae00c7386p970-a"
 USER = "nija_tiq72_upgrade6_isolated_test_user"
 SCHEMA = Path(__file__).resolve().parents[1] / "web/trading-challenge/v515/server/sql/tiq72-v515-report-ledger.sql"
+# Independently reviewed GitHub blob 85a0f7b9d080e9d713e28878f17575ee90229c4e.
+# Only line-ending normalization is allowed; substantive source edits fail closed.
+EXPECTED_SCHEMA_SHA256 = "780bb927929bde65cb19942bcd3c4e1df8461b1e7a1754ee01c83523224ec39f"
 TABLES = frozenset(("tiq72_v515_runs", "tiq72_v515_reservations", "tiq72_v515_reports", "tiq72_v515_verified_events"))
 
 class MigrationDenied(Exception):
@@ -43,7 +47,10 @@ def verify_private_url(value):
 
 def migrate(url, apply=False, connect=None):
     verify_private_url(url)
-    sql=SCHEMA.read_text(encoding="utf-8")
+    raw_sql = SCHEMA.read_bytes()
+    if hashlib.sha256(raw_sql.replace(b"\r\n", b"\n")).hexdigest() != EXPECTED_SCHEMA_SHA256:
+        raise MigrationDenied("reviewed_schema_digest_mismatch")
+    sql = raw_sql.decode("utf-8")
     if (not sql.startswith("-- TIQ v515 test-only durable ledger.") or
         "BEGIN;" not in sql or "COMMIT;" not in sql or
         any("CREATE TABLE IF NOT EXISTS "+t not in sql for t in TABLES)):
