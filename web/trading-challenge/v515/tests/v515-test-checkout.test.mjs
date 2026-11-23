@@ -90,15 +90,22 @@ test("rejects non-Stripe hosted payment URL",async()=>{
  await assert.rejects(f.run(),/hosted_checkout_url_required/);assert.equal(f.attached,0);
 });
 
-test("approved isolated TEST offer is used for pricing and Checkout, legacy default retained",async()=>{
+test("cross-account TEST offer cannot create checkout or reserve a run",async()=>{
  const f=fixture({price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT});
+ await assert.rejects(f.run(),/test_product_mismatch/);
+ assert.equal(f.priceCalls,0);
+ assert.equal(f.created,0);
+ assert.equal(f.reserved,0);
+ assert.equal(f.attached,0);
+});
+test("NIJA verified TEST offer remains usable with trusted selection",async()=>{
+ const f=fixture({price:TEST_PRICE,product:TEST_PRODUCT});
  const result=await f.run();
+ assert.equal(result.runId,"run-test");
  assert.equal(f.priceCalls,1);
  assert.equal(f.created,1);
- assert.equal(result.runId,"run-test");
- const legacy=fixture();
- await legacy.run();
- assert.equal(legacy.created,1);
+ assert.equal(f.reserved,1);
+ assert.equal(f.attached,1);
 });
 test("unapproved TEST offer is rejected before any provider requests",async()=>{
  const f=fixture({price:"price_untrusted",product:ISOLATED_TEST_PRODUCT});
