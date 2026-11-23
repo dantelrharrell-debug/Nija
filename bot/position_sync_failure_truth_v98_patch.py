@@ -133,6 +133,15 @@ def _reuse_exact_kraken_snapshot_locked(broker: Any, result: list[Any], authorit
         expected_rows, error = normalise(result)
         ok, _reason, rows, _age, checked_generation = status(broker)
         if error or not ok or rows != expected_rows or checked_generation != generation:
+            # Only comparison outcomes are logged; never emit account positions,
+            # balance values, credentials, or raw authenticated evidence.
+            LOGGER.warning(
+                "KRAKEN_SNAPSHOT_REUSE_CHECK_FAILED "
+                "normalisation_error=%s status_ok=%s normalised_rows_match=%s "
+                "generation_match=%s fail_closed=true secrets_logged=false",
+                bool(error), bool(ok), rows == expected_rows,
+                checked_generation == generation,
+            )
             return False
         # Read in reverse publication order: v286 publishes the canonical
         # generation, raw rows, then raw generation. Reading canonical
