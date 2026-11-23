@@ -216,8 +216,6 @@ def query_direct_order(broker, method, params, *, assert_deadline):
     Transport failures and replies without a unique acknowledgment leave
     the reservation unresolved. The verified recovery path must resolve it.
     """
-    if method == "AddOrderBatch":
-        raise SubmissionDenied("Kraken batch order submission lacks journal support")
     # Batch submission has no durable per-order reservation/ACK mapping.
     # Reject before any transport call, even when a journal path is configured.
     if method == "AddOrderBatch":

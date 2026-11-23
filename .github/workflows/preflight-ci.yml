@@ -18,6 +18,18 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Verify Kraken journal Python syntax without imports
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for name in (
+              "bot/kraken_submission_journal.py",
+              "tests/test_kraken_submission_journal.py",
+          ):
+              ast.parse(Path(name).read_text(encoding="utf-8"), filename=name)
+          PY
+
       - name: Make scripts executable
         run: chmod +x ./scripts/prebuild-check.sh
 
