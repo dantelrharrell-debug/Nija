@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -190,6 +191,74 @@ class EphemeralPostgresSchemaTests(unittest.TestCase):
                 ("no-such-run", "no-such-reservation", "ci-owner-a",
                  "cs_test_ci_synthetic", "{}"),
             )
+
+    def test_actual_guarded_migration_rolls_back_after_real_ddl(self):
+        """Execute real DDL inside a transaction; injected failure restores prior schema.
+
+        This test is restricted by setUpClass to loopback-only GitHub Actions PG18.
+        It uses the existing disposable CI database and no Render credentials.
+        """
+        from scripts import migrate_tiq72_upgrade6_isolated as migration
+
+        def table_oids(cursor):
+            cursor.execute(
+                "SELECT c.relname, c.oid FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='public' AND c.relkind='r' "
+                "AND c.relname = ANY(%s) ORDER BY c.relname",
+                (list(TABLES),),
+            )
+            return cursor.fetchall()
+
+        before = table_oids(self.cursor)
+        self.assertEqual(len(before), 4)
+        isolated_connection = self.driver.connect(**self.connection_args)
+        # Use the same real psycopg transaction for the fixture's DROP, the
+        # migration's CREATE statements and the final injected failure.
+        try:
+            with isolated_connection.cursor() as cursor:
+                cursor.execute(
+                    "DROP TABLE tiq72_v515_verified_events, tiq72_v515_reports, "
+                    "tiq72_v515_reservations, tiq72_v515_runs CASCADE"
+                )
+
+            def fail_after_real_ddl(cursor):
+                cursor.execute(
+                    "SELECT tablename FROM pg_catalog.pg_tables "
+                    "WHERE schemaname='public' AND tablename = ANY(%s)",
+                    (list(TABLES),),
+                )
+                self.assertEqual({row[0] for row in cursor.fetchall()}, TABLES)
+                raise migration.MigrationDenied("synthetic_failure_after_ddl")
+
+            # Restrict the source's host/identity check to the disposable CI role.
+            # Connection object is injected; no network call is made from migrate.
+            test_url = "postgresql://nija_tiq72_ci:synthetic@127.0.0.1:5432/nija_tiq72_ci_scratch"
+            with (
+                patch.object(migration, "HOST", "127.0.0.1"),
+                patch.object(migration, "DB", CI_DB),
+                patch.object(migration, "USER", CI_ROLE),
+                patch.object(migration, "schema_contract_verified", fail_after_real_ddl),
+                patch.dict(os.environ, {
+                    "NIJA_TIQ72_ISOLATED_SCHEMA_APPLY": "APPROVED_TEST_ONLY",
+                    "NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED": "APPROVED",
+                }),
+            ):
+                with self.assertRaisesRegex(
+                    migration.MigrationDenied, "synthetic_failure_after_ddl"
+                ):
+                    migration.migrate(
+                        test_url, apply=True,
+                        connect=lambda *args, **kwargs: isolated_connection,
+                    )
+        finally:
+            if not isolated_connection.closed:
+                isolated_connection.rollback()
+                isolated_connection.close()
+
+        # The original four tables must survive with their ORIGINAL identities,
+        # not four newly committed replacements from the migration.
+        self.assertEqual(table_oids(self.cursor), before)
 
     def test_transaction_rollback_does_not_leave_a_test_run(self):
         self.insert_run()
