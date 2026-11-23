@@ -31,21 +31,26 @@ COLUMNS = {
         "canonical_run": ("jsonb", "NO"),
         "canonical_digest": ("text", "NO"),
         "attempt_key": ("text", "NO"), "version": ("text", "NO"),
+        "created_at": ("timestamp with time zone", "NO"),
     },
     "tiq72_v515_reservations": {
         "reservation_id": ("text", "NO"), "run_id": ("text", "NO"),
         "owner_id": ("text", "NO"), "stripe_session": ("text", "YES"),
         "state": ("text", "NO"),
+        "created_at": ("timestamp with time zone", "NO"),
+        "updated_at": ("timestamp with time zone", "NO"),
     },
     "tiq72_v515_reports": {
         "run_id": ("text", "NO"), "reservation_id": ("text", "NO"),
         "owner_id": ("text", "NO"), "stripe_session": ("text", "NO"),
         "report": ("jsonb", "NO"),
+        "created_at": ("timestamp with time zone", "NO"),
     },
     "tiq72_v515_verified_events": {
         "event_id": ("text", "NO"), "event_type": ("text", "NO"),
         "reservation_id": ("text", "NO"),
         "stripe_session": ("text", "NO"),
+        "received_at": ("timestamp with time zone", "NO"),
     },
 }
 # Each entry is (table, constraint_name, PostgreSQL constraint type,
@@ -88,6 +93,35 @@ REQUIRED_CHECK_DEFINITIONS = {
     ("tiq72_v515_verified_events", "tiq72_v515_event_test_session"):
         "checkstripe_sessionlike'cs_test_%'",
 }
+# Require exact column order and referenced keys, not just trusted names/types.
+# These strings are normalized PostgreSQL pg_get_constraintdef forms.
+REQUIRED_KEY_DEFINITIONS = {
+    ("tiq72_v515_runs", "tiq72_v515_runs_pkey"): "primarykeyrun_id",
+    ("tiq72_v515_runs", "tiq72_v515_unique_attempt"):
+        "uniqueowner_id,attempt_key",
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_pkey"):
+        "primarykeyreservation_id",
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_run_id_key"):
+        "uniquerun_id",
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_stripe_session_key"):
+        "uniquestripe_session",
+    ("tiq72_v515_reservations", "tiq72_v515_reservations_run_id_fkey"):
+        "foreignkeyrun_idreferencestiq72_v515_runsrun_id",
+    ("tiq72_v515_reports", "tiq72_v515_reports_pkey"): "primarykeyrun_id",
+    ("tiq72_v515_reports", "tiq72_v515_reports_reservation_id_key"):
+        "uniquereservation_id",
+    ("tiq72_v515_reports", "tiq72_v515_reports_stripe_session_key"):
+        "uniquestripe_session",
+    ("tiq72_v515_reports", "tiq72_v515_reports_run_id_fkey"):
+        "foreignkeyrun_idreferencestiq72_v515_runsrun_id",
+    ("tiq72_v515_reports", "tiq72_v515_reports_reservation_id_fkey"):
+        "foreignkeyreservation_idreferencestiq72_v515_reservationsreservation_id",
+    ("tiq72_v515_verified_events", "tiq72_v515_verified_events_pkey"):
+        "primarykeyevent_id",
+    ("tiq72_v515_verified_events", "tiq72_v515_verified_events_reservation_id_fkey"):
+        "foreignkeyreservation_idreferencestiq72_v515_reservationsreservation_id",
+}
+
 REQUIRED_INDEX_DEFINITIONS = {
     ("tiq72_v515_reservations", "tiq72_v515_res_owner_run"):
         "usingbtreeowner_id,run_id",
@@ -120,16 +154,18 @@ def schema_contract_verified(cursor):
         (table, column): (data_type, nullable)
         for table, column, data_type, nullable in cursor.fetchall()
     }
-    if any(
-        columns.get((table, column)) != spec
+    expected_columns = {
+        (table, column): spec
         for table, specs in COLUMNS.items()
         for column, spec in specs.items()
-    ):
+    }
+    # Even an additional unreviewed column changes the isolated contract.
+    if columns != expected_columns:
         return False
 
     cursor.execute(
         "SELECT t.relname, con.conname, con.contype, ref.relname, "
-        "pg_catalog.pg_get_constraintdef(con.oid) "
+        "pg_catalog.pg_get_constraintdef(con.oid), con.convalidated "
         "FROM pg_catalog.pg_constraint con "
         "JOIN pg_catalog.pg_class t ON t.oid=con.conrelid "
         "JOIN pg_catalog.pg_namespace ns ON ns.oid=t.relnamespace "
@@ -138,18 +174,25 @@ def schema_contract_verified(cursor):
         (list(TABLES),),
     )
     constraints = {
-        (table, name): (kind, foreign, definition)
-        for table, name, kind, foreign, definition in cursor.fetchall()
+        (table, name): (kind, foreign, definition, validated)
+        for table, name, kind, foreign, definition, validated in cursor.fetchall()
     }
     if any(
         (table, name) not in constraints or
-        constraints[(table, name)][:2] != (kind, reference)
+        constraints[(table, name)][:2] != (kind, reference) or
+        constraints[(table, name)][3] is not True
         for table, name, kind, reference in CONSTRAINTS
     ):
         return False
     if any(
         normalized_catalog_definition(constraints[pair][2]) != expected
         for pair, expected in REQUIRED_CHECK_DEFINITIONS.items()
+    ):
+        return False
+
+    if any(
+        normalized_catalog_definition(constraints[pair][2]) != expected
+        for pair, expected in REQUIRED_KEY_DEFINITIONS.items()
     ):
         return False
 
