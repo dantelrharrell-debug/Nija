@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'scripts/migrate_tiq72_upgrade6_isolated.py'
+      - 'scripts/tiq72_isolated_db_readonly_preflight.py'
+      - 'tests/test_tiq72_isolated_db_readonly_preflight.py'
       - 'tests/test_migrate_tiq72_upgrade6_isolated.py'
       - 'tests/test_tiq72_real_postgres18_schema_ci.py'
       - 'web/trading-challenge/v515/server/sql/tiq72-v515-report-ledger.sql'
@@ -28,7 +30,7 @@ jobs:
       - name: Syntax check (no DB connection)
         run: python -m py_compile scripts/migrate_tiq72_upgrade6_isolated.py tests/test_migrate_tiq72_upgrade6_isolated.py
       - name: Mock database identity, backup, transaction and rollback
-        run: python -m pytest -q tests/test_migrate_tiq72_upgrade6_isolated.py
+        run: python -m pytest -q tests/test_migrate_tiq72_upgrade6_isolated.py tests/test_tiq72_isolated_db_readonly_preflight.py
 
   ephemeral-postgres18:
     name: Validate actual v515 DDL on disposable PostgreSQL 18

@@ -81,12 +81,16 @@ class TestIsolatedReadOnlyPreflight(unittest.TestCase):
 class FakeCatalogCursor:
     """Synthetic catalog shapes. Executes no SQL outside an in-memory mock."""
     def __init__(self, *, wrong_column=False, missing_constraint=False,
-                 invalid_index=False, weak_check=False, reversed_index=False):
+                 invalid_index=False, weak_check=False, reversed_index=False,
+                 wrong_key=False, unvalidated=False, extra_column=False):
         self.wrong_column = wrong_column
         self.missing_constraint = missing_constraint
         self.invalid_index = invalid_index
         self.weak_check = weak_check
         self.reversed_index = reversed_index
+        self.wrong_key = wrong_key
+        self.unvalidated = unvalidated
+        self.extra_column = extra_column
         self.rows = []
         self.seen = []
 
@@ -100,6 +104,8 @@ class FakeCatalogCursor:
                 for table, specs in preflight.COLUMNS.items()
                 for column, (data_type, nullable) in specs.items()
             ]
+            if self.extra_column:
+                self.rows.append(("tiq72_v515_runs", "unexpected", "text", "YES"))
         elif "pg_catalog.pg_constraint" in query:
             rows = list(preflight.CONSTRAINTS)
             if self.missing_constraint:
@@ -116,7 +122,15 @@ class FakeCatalogCursor:
                 (table, name, kind, foreign,
                  "CHECK (true)" if self.weak_check and
                  name == "tiq72_v515_session_test_only"
-                 else expected.get(name, "OTHER CONSTRAINT"))
+                 else "PRIMARY KEY (owner_id)" if self.wrong_key and
+                 name == "tiq72_v515_runs_pkey"
+                 else expected.get(
+                     name,
+                     preflight.REQUIRED_KEY_DEFINITIONS.get(
+                         (table, name), "OTHER CONSTRAINT"
+                     )
+                 ),
+                 not (self.unvalidated and name == "tiq72_v515_run_version"))
                 for table, name, kind, foreign in rows
             ]
         elif "pg_catalog.pg_index" in query:
@@ -160,6 +174,18 @@ class TestIsolatedSchemaContract(unittest.TestCase):
     def test_same_named_reversed_index_denies(self):
         self.assertFalse(preflight.schema_contract_verified(
             FakeCatalogCursor(reversed_index=True)))
+
+    def test_same_named_wrong_primary_key_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(wrong_key=True)))
+
+    def test_unvalidated_constraint_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(unvalidated=True)))
+
+    def test_extra_unreviewed_column_denies(self):
+        self.assertFalse(preflight.schema_contract_verified(
+            FakeCatalogCursor(extra_column=True)))
 
     def test_invalid_required_index_denies(self):
         self.assertFalse(preflight.schema_contract_verified(
