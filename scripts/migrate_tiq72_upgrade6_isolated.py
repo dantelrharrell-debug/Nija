@@ -67,19 +67,6 @@ def migrate(url, apply=False, connect=None):
                     raise MigrationDenied("apply_gate_required")
                 if os.getenv("NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED")!="APPROVED":
                     raise MigrationDenied("backup_restore_gate_required")
-                # A database identity match is not enough: refuse to write
-                # when unrelated user tables exist, including in other schemas.
-                # Catalog metadata stays private; never return table names.
-                cursor.execute(
-                    "SELECT schemaname, tablename FROM pg_tables "
-                    "WHERE schemaname NOT IN ('pg_catalog','information_schema') "
-                    "AND schemaname NOT LIKE 'pg_toast%'"
-                )
-                if any(
-                    schema != "public" or name not in TABLES
-                    for schema, name in cursor.fetchall()
-                ):
-                    raise MigrationDenied("isolated_database_inventory_mismatch")
                 # Source schema is BEGIN/COMMIT wrapped for standalone psql.
                 # Strip only those boundary statements so verification and all
                 # table creation remain within the SAME psycopg transaction.
@@ -95,6 +82,19 @@ def migrate(url, apply=False, connect=None):
                 commands = commands[start:finish]
                 if "BEGIN;" in commands or "COMMIT;" in commands:
                     raise MigrationDenied("nested_transaction_disallowed")
+                # A database identity match is not enough: refuse to write
+                # when unrelated user tables exist, including in other schemas.
+                # Catalog metadata stays private; never return table names.
+                cursor.execute(
+                    "SELECT schemaname, tablename FROM pg_tables "
+                    "WHERE schemaname NOT IN ('pg_catalog','information_schema') "
+                    "AND schemaname NOT LIKE 'pg_toast%'"
+                )
+                if any(
+                    schema != "public" or name not in TABLES
+                    for schema, name in cursor.fetchall()
+                ):
+                    raise MigrationDenied("isolated_database_inventory_mismatch")
                 cursor.execute(commands)
                 cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE %s", ("tiq72_v515_%",))
                 if not TABLES.issubset({row[0] for row in cursor.fetchall()}):
