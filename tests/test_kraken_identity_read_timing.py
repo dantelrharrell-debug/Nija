@@ -143,16 +143,30 @@ def test_uninstrumented_gateway_retains_conservative_deadline(rig):
         rig.provider()
 
 
-def test_mutation_uses_unchanged_nonce_and_deadline_guards(rig):
-    with timing.capture_identity_read(rig.broker.api, rig.clock.time) as capture:
-        rig.broker._kraken_private_call("AddOrder", {"synthetic": True})
-    assert rig.calls == [("AddOrder", {"synthetic": True})]
-    assert rig.deadlines == ["AddOrder", "AddOrder"]
-    assert capture.attempts == 0
-    rig.broker.nonce_manager.can_issue_nonce = lambda key: False
-    with pytest.raises(RuntimeError, match="Nonce issuance blocked"):
-        rig.broker._kraken_private_call("AddOrder", {})
+def test_mutation_uses_unchanged_nonce_and_deadline_guards(rig, tmp_path, monkeypatch):
+    from bot.kraken_submission_journal import KrakenSubmissionJournal, initialize_journal
+    from bot.runtime_correlation import runtime_correlation_scope
+
+    path = tmp_path / "mutation-journal.db"
+    initialize_journal(path, "platform:kraken")
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(path))
+    journal = KrakenSubmissionJournal(path, "platform:kraken")
+
+    with runtime_correlation_scope(intent_id="mutation-guard"):
+        with timing.capture_identity_read(rig.broker.api, rig.clock.time) as capture:
+            rig.broker._kraken_private_call("AddOrder", {"synthetic": True})
+        expected_client_id = journal._client_order_id("mutation-guard")
+        assert rig.calls == [("AddOrder", {"synthetic": True, "cl_ord_id": expected_client_id})]
+        # Journal reservation adds a third pre-transport deadline assertion.
+        # Assert each bound, rather than weakening or suppressing the guard.
+        assert rig.deadlines == ["AddOrder", "AddOrder", "AddOrder"]
+        assert capture.attempts == 0
+        rig.broker.nonce_manager.can_issue_nonce = lambda key: False
+        with pytest.raises(RuntimeError, match="Nonce issuance blocked"):
+            rig.broker._kraken_private_call("AddOrder", {})
+
     assert len(rig.calls) == 1
+    assert journal.unresolved_count() == 1
 
 
 def test_thread_local_scope_and_exception_cleanup(rig):
