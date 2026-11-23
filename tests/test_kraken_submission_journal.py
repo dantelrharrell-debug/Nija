@@ -187,3 +187,49 @@ def test_live_add_order_requires_configured_journal(monkeypatch):
 
     with pytest.raises(SubmissionDenied, match="not configured"):
         query_direct_order(Broker(), "AddOrder", {"pair": "XBTUSD"}, assert_deadline=lambda method: None)
+
+
+@pytest.mark.parametrize("journal_configured", [False, True])
+@pytest.mark.parametrize("validate_only", [False, True])
+def test_batch_order_rejected_without_transport(
+    monkeypatch, tmp_path, journal_configured, validate_only,
+):
+    from bot.kraken_submission_journal import query_direct_order
+
+    if journal_configured:
+        monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(tmp_path / "journal.db"))
+    else:
+        monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
+
+    class NoTransport:
+        def query_private(self, method, params):
+            raise AssertionError("unsupported AddOrderBatch reached Kraken transport")
+
+    class Broker:
+        api = NoTransport()
+
+    with pytest.raises(SubmissionDenied, match="batch order"):
+        query_direct_order(
+            Broker(), "AddOrderBatch", {"orders": [], "validate": validate_only},
+            assert_deadline=lambda method: None,
+        )
+
+
+def test_validate_only_add_order_still_allowed_without_journal(monkeypatch):
+    from bot.kraken_submission_journal import query_direct_order
+
+    monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
+    calls = []
+
+    class Transport:
+        def query_private(self, method, params):
+            calls.append((method, dict(params)))
+            return {"error": [], "result": {"descr": {}}}
+
+    class Broker:
+        api = Transport()
+
+    params = {"pair": "XBTUSD", "validate": True}
+    result = query_direct_order(Broker(), "AddOrder", params, assert_deadline=lambda method: None)
+    assert result["error"] == []
+    assert calls == [("AddOrder", params)]
