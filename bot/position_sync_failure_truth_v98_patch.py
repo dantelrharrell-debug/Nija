@@ -114,17 +114,23 @@ def _reuse_exact_kraken_snapshot_locked(broker: Any, result: list[Any], authorit
         generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0))
         raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1))
         raw = getattr(broker, "_nija_authoritative_position_raw_rows_v286", None)
+        # These checks precede the normalized comparison diagnostic. Report only
+        # a reason code, never raw rows, account identifiers, or credentials.
         if generation < 1 or raw_generation != generation:
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=generation_invalid_or_mismatch fail_closed=true secrets_logged=false")
             return False
         if not isinstance(raw, (tuple, list)) or len(raw) != len(result):
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=raw_rows_shape_or_count_mismatch fail_closed=true secrets_logged=false")
             return False
         if any(not isinstance(row, Mapping) for row in raw):
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=raw_row_invalid fail_closed=true secrets_logged=false")
             return False
         raw = tuple(dict(row) for row in raw)
         if any(
             not isinstance(returned, Mapping) or observed != dict(returned)
             for observed, returned in zip(raw, result)
         ):
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=raw_rows_mismatch fail_closed=true secrets_logged=false")
             return False
         status = getattr(authority, "_snapshot_status", None)
         normalise = getattr(authority, "_snapshot_rows", None)
