@@ -187,3 +187,29 @@ def test_live_add_order_requires_configured_journal(monkeypatch):
 
     with pytest.raises(SubmissionDenied, match="not configured"):
         query_direct_order(Broker(), "AddOrder", {"pair": "XBTUSD"}, assert_deadline=lambda method: None)
+
+
+@pytest.mark.parametrize("journal_configured", [False, True])
+def test_add_order_batch_never_reaches_transport(tmp_path, monkeypatch, journal_configured):
+    """Batch orders must fail closed until every order has durable journal support."""
+    from bot.kraken_submission_journal import query_direct_order
+
+    if journal_configured:
+        monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(tmp_path / "journal.db"))
+    else:
+        monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
+
+    calls = []
+
+    class NoTransport:
+        def query_private(self, method, params):
+            calls.append((method, params))
+            raise AssertionError("unjournaled batch reached Kraken")
+
+    class Broker:
+        api = NoTransport()
+
+    for params in ({"orders": [{"pair": "XBTUSD"}]}, {"validate": True, "orders": []}):
+        with pytest.raises(SubmissionDenied, match="batch Kraken order submission"):
+            query_direct_order(Broker(), "AddOrderBatch", params, assert_deadline=lambda method: None)
+    assert calls == []
