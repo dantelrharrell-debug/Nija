@@ -157,7 +157,9 @@ def test_mutation_uses_unchanged_nonce_and_deadline_guards(rig, tmp_path, monkey
             rig.broker._kraken_private_call("AddOrder", {"synthetic": True})
         expected_client_id = journal._client_order_id("mutation-guard")
         assert rig.calls == [("AddOrder", {"synthetic": True, "cl_ord_id": expected_client_id})]
-        assert rig.deadlines == ["AddOrder", "AddOrder"]
+        # Journal reservation adds a third pre-transport deadline assertion.
+        # Assert each bound, rather than weakening or suppressing the guard.
+        assert rig.deadlines == ["AddOrder", "AddOrder", "AddOrder"]
         assert capture.attempts == 0
         rig.broker.nonce_manager.can_issue_nonce = lambda key: False
         with pytest.raises(RuntimeError, match="Nonce issuance blocked"):
