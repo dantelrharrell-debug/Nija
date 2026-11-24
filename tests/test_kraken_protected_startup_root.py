@@ -361,6 +361,49 @@ def test_nonregular_source_does_not_block_on_read(protected):
     assert root.register_from_protected_root() == "protected_startup_registration_denied"
 
 
+@pytest.mark.parametrize("reason", [
+    "outside_mount", "not_regular", "writable_by_others",
+    "owner_not_allowed", "size_invalid",
+])
+def test_manifest_read_denial_names_only_the_failed_policy(
+    protected, monkeypatch, caplog, reason,
+):
+    path = protected.directory / root.MANIFEST_NAME
+    if reason == "outside_mount":
+        outside = protected.directory.parent / "must-not-be-logged.json"
+        outside.write_text("must-not-be-logged-payload")
+        path.unlink()
+        path.symlink_to(outside)
+    elif reason == "not_regular":
+        path.unlink()
+        path.mkdir()
+    elif reason == "writable_by_others":
+        path.chmod(0o622)
+    elif reason == "owner_not_allowed":
+        def metadata(_fd):
+            return SimpleNamespace(st_mode=0o100600, st_size=1, st_uid=os.geteuid() + 1)
+        monkeypatch.setattr(root.os, "fstat", metadata)
+    else:
+        path.chmod(0o600)
+        path.write_bytes(b"")
+    loader = Mock()
+    monkeypatch.setattr(root, "_load_verified_source", loader)
+
+    assert root.register_from_protected_root() == "protected_startup_registration_denied"
+    assert startup.startup_binding_registration_state() == "missing"
+    assert attestation._COLLECTOR is None
+    loader.assert_not_called()
+    protected.wiring.private_call.assert_not_called()
+    records = [record for record in caplog.records if record.name == root.LOGGER.name]
+    assert [record.getMessage() for record in records] == [
+        f"KRAKEN_PROTECTED_STARTUP_ARTIFACT_DENIED stage=manifest_read reason={reason} "
+        "authorizes_orders=false",
+    ]
+    assert records[0].exc_info is None
+    assert str(path) not in caplog.text
+    assert "must-not-be-logged" not in caplog.text
+
+
 def test_preexisting_registration_is_preserved_without_loading_files(protected, monkeypatch):
     existing_factory, existing_verify = Mock(), Mock()
     startup.register_reviewed_startup_binding(existing_factory, verify_receipts=existing_verify)

@@ -9,6 +9,7 @@ Missing/invalid artifacts never install a collector or authorize orders.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import Enum
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -47,23 +48,46 @@ class ProtectedStartupDenied(ValueError):
     """Fixed denial only; protected contents never enter diagnostics."""
 
 
+class _ArtifactReadReason(Enum):
+    OUTSIDE_MOUNT = "outside_mount"
+    NOT_REGULAR = "not_regular"
+    WRITABLE_BY_OTHERS = "writable_by_others"
+    OWNER_NOT_ALLOWED = "owner_not_allowed"
+    SIZE_INVALID = "size_invalid"
+
+
+class _ArtifactReadDenied(ProtectedStartupDenied):
+    def __init__(self, reason: _ArtifactReadReason) -> None:
+        super().__init__("protected_file_denied")
+        self.reason = reason
+
+
 def _read_protected(name: str, maximum_bytes: int) -> bytes:
     # Render secret volumes may use symlinks into a versioned directory. Follow
     # those only inside the fixed protected root; read/hash/compile the same bytes.
     path = SECRET_ROOT / name
     resolved = path.resolve(strict=True)
     if not resolved.is_relative_to(SECRET_ROOT.resolve(strict=True)):
-        raise ProtectedStartupDenied("protected_path_denied")
+        raise _ArtifactReadDenied(_ArtifactReadReason.OUTSIDE_MOUNT)
     descriptor = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(descriptor, "rb") as stream:
-        metadata = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o022
-                or metadata.st_uid not in {0, os.geteuid()}
-                or not 0 < metadata.st_size <= maximum_bytes):
-            raise ProtectedStartupDenied("protected_file_denied")
-        source = stream.read(maximum_bytes + 1)
+    try:
+        # Classify the opened file before wrapping it; fdopen can reject a
+        # directory itself before the regular-file check is reached.
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise _ArtifactReadDenied(_ArtifactReadReason.NOT_REGULAR)
+        if metadata.st_mode & 0o022:
+            raise _ArtifactReadDenied(_ArtifactReadReason.WRITABLE_BY_OTHERS)
+        if metadata.st_uid not in {0, os.geteuid()}:
+            raise _ArtifactReadDenied(_ArtifactReadReason.OWNER_NOT_ALLOWED)
+        if not 0 < metadata.st_size <= maximum_bytes:
+            raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID)
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            source = stream.read(maximum_bytes + 1)
+    finally:
+        os.close(descriptor)
     if not 0 < len(source) <= maximum_bytes:
-        raise ProtectedStartupDenied("protected_file_denied")
+        raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID)
     return source
 
 
@@ -177,6 +201,16 @@ def register_from_protected_root() -> str:
         return "protected_startup_permission_denied"
     except FileNotFoundError:
         return "protected_startup_artifacts_missing"
+    except _ArtifactReadDenied as denial:
+        # Only the reader's closed set of labels is safe to include here.
+        if stage in {"manifest_read", "source_read"} and type(denial.reason) is _ArtifactReadReason:
+            LOGGER.warning(
+                "KRAKEN_PROTECTED_STARTUP_ARTIFACT_DENIED stage=%s reason=%s authorizes_orders=false",
+                stage, denial.reason.value,
+            )
+        else:
+            LOGGER.warning("KRAKEN_PROTECTED_STARTUP_STAGE_DENIED stage=%s authorizes_orders=false", stage)
+        return "protected_startup_registration_denied"
     except (Exception, SystemExit):
         # Only an internal literal is logged; never include the exception or
         # protected paths, values, source contents or receipt details.
