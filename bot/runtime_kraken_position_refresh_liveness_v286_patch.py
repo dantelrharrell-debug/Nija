@@ -475,7 +475,7 @@ def _record_snapshot_failure(broker: Any, reason: str) -> None:
             LOGGER.exception("KRAKEN_CANONICAL_FAILURE_DIRECT_REVOCATION_V286_ERROR")
 
 
-def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
+def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> int:
     # A failed canonical row preparation must invalidate the prior Balance
     # snapshot; otherwise v305 could restore stale authenticated success.
     try:
@@ -528,6 +528,26 @@ def _record_snapshot_success(broker: Any, rows: list[dict[str, Any]]) -> None:
             raise RuntimeError("kraken_raw_snapshot_publication_failed") from exc
             raise RuntimeError("v286_raw_snapshot_publication_failed") from exc
 
+        return generation
+
+
+class _PublishedBalanceRows(list):
+    """Worker result with the generation published atomically by v286."""
+
+    def __init__(self, rows: list[dict[str, Any]], generation: int):
+        super().__init__(rows)
+        self.generation = generation
+
+
+class _InFlightBalanceRows(list):
+    """Rows with an internal reference to the one flight that handed them off."""
+
+    def __init__(self, rows: list[dict[str, Any]], broker: Any, flight: dict[str, Any], generation: int):
+        super().__init__(dict(row) for row in rows)
+        self.broker = broker
+        self.flight = flight
+        self.generation = generation
+
 
 def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
     if broker is None or not _connected(broker):
@@ -569,14 +589,14 @@ def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
     except Exception as exc:
         _record_snapshot_failure(broker, "kraken_balance_rows_build_failed")
         raise RuntimeError("kraken_balance_rows_build_failed") from exc
-    _record_snapshot_success(broker, rows)
+    generation = _record_snapshot_success(broker, rows)
     LOGGER.critical(
         "KRAKEN_AUTHORITATIVE_BALANCE_V286_FETCHED marker=%s account=%s held_assets=%d authoritative_balance=true price_required_for_enumeration=false dust_hidden=false unsupported_hidden=false synthetic_empty=false",
         MARKER,
         str(getattr(broker, "account_identifier", "unknown")),
         len(rows),
     )
-    return rows
+    return _PublishedBalanceRows(rows, generation)
 
 
 def _finish_auth_flight(flight: dict[str, Any], broker: Any) -> None:
@@ -610,9 +630,11 @@ def _balance_rows_while_waiting(broker: Any, flight: dict[str, Any]) -> list[dic
                 return None
             rows = v312._rows_from_observation(broker, observation)
             v312._log_handoff(broker, observation, rows, "inflight_short_ttl_handoff")
+            generation = getattr(broker, "_nija_authoritative_position_raw_generation_v286", 0)
+            result = _InFlightBalanceRows(rows, broker, flight, generation)
         # The existing worker remains registered and may finish normally. This
         # handoff neither cancels it nor authorizes a replacement private read.
-        return rows
+        return result
     except Exception:
         LOGGER.debug("Kraken in-flight authenticated Balance handoff unavailable", exc_info=True)
         return None
@@ -650,7 +672,7 @@ def _authoritative_positions(broker: Any) -> list[dict[str, Any]]:
         # handoff during the wait, without issuing broker I/O or extending it.
         rows = _balance_rows_while_waiting(broker, flight)
         if rows is not None:
-            return [dict(row) for row in rows]
+            return rows
         remaining = deadline - time.monotonic()
         if remaining <= 0.0:
             age = max(0.0, time.monotonic() - _float(flight.get("started_at")))
@@ -687,6 +709,38 @@ class _KrakenAuthoritativeProxy:
 
     def get_positions(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return _authoritative_positions(object.__getattribute__(self, "_broker"))
+
+
+def _check_v98_fetch_result(broker: Any, result: Any, verify: Any) -> tuple[bool, Any]:
+    """Validate a completed same-flight worker response without a second read.
+
+    The original handoff can be superseded before v98 gets the writer lock.
+    Only the exact worker from that handoff can replace it, and only while
+    that worker's authentic publication is still the current generation.
+    Ordinary rows and every candidate still use v98's unmodified verifier.
+    """
+    if type(result) is not _InFlightBalanceRows or type(broker) is not _KrakenAuthoritativeProxy:
+        return verify(broker, result), result
+    real = object.__getattribute__(broker, "_broker")
+    if result.broker is not real:
+        return False, result
+    with _AUTH_LOCK:
+        flight = result.flight
+        worker = flight.get("result") if flight["event"].is_set() and flight.get("error") is None else None
+        generation = getattr(real, "_nija_authoritative_position_raw_generation_v286", 0)
+        replaced = (
+            type(worker) is _PublishedBalanceRows
+            and worker.generation == generation
+            and worker.generation > result.generation
+        )
+        candidate = [dict(row) for row in worker] if replaced else list(result)
+        accepted = verify(broker, candidate)
+        if replaced and accepted:
+            LOGGER.info(
+                "KRAKEN_V286_SAME_FLIGHT_WORKER_SNAPSHOT_VERIFIED "
+                "exact_raw_rows=true duplicate_balance_read=false readiness_granted=false"
+            )
+        return accepted, candidate
 
 
 def _strong_proof(broker: Any) -> tuple[bool, str]:
