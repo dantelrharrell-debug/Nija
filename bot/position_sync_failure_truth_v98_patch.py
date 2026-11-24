@@ -229,7 +229,14 @@ class _FetchProofProxy:
             raise
 
         try:
-            snapshot_ok = _publish_v285_snapshot_if_loaded(broker, result)
+            owner = sys.modules.get("bot.runtime_kraken_position_refresh_liveness_v286_patch")
+            if owner is None:
+                owner = sys.modules.get("runtime_kraken_position_refresh_liveness_v286_patch")
+            check = getattr(owner, "_check_v98_fetch_result", None)
+            if callable(check):
+                snapshot_ok, result = check(broker, result, _publish_v285_snapshot_if_loaded)
+            else:
+                snapshot_ok = _publish_v285_snapshot_if_loaded(broker, result)
         except BaseException as exc:
             object.__setattr__(self, "fetch_ok", False)
             object.__setattr__(self, "fetch_error", f"v285_snapshot_publish_error:{type(exc).__name__}:{exc}")
