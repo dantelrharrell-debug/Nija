@@ -685,7 +685,6 @@ def _authoritative_positions(broker: Any) -> list[dict[str, Any]]:
                 "started_at": time.monotonic(),
                 "finished_at": 0.0,
             }
-            _AUTH_FLIGHTS[key] = flight
             thread = threading.Thread(
                 target=_finish_auth_flight,
                 args=(flight, broker),
@@ -693,7 +692,14 @@ def _authoritative_positions(broker: Any) -> list[dict[str, Any]]:
                 daemon=True,
             )
             flight["thread"] = thread
-            thread.start()
+            _AUTH_FLIGHTS[key] = flight
+            try:
+                thread.start()
+            except RuntimeError:
+                # No worker will signal this event. Let the next caller try
+                # a new read instead of reusing a permanently pending flight.
+                _AUTH_FLIGHTS.pop(key, None)
+                raise
             started = True
         else:
             started = False

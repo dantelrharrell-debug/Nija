@@ -33,6 +33,26 @@ class KrakenInflightBalanceHandoffTests(unittest.TestCase):
         self.observations_patch.start()
         self.addCleanup(self.observations_patch.stop)
 
+    def test_worker_start_failure_allows_next_refresh_to_retry(self) -> None:
+        broker = KrakenBroker()
+        rows = [{"symbol": "BTC-USD", "quantity": 0.001}]
+        with (
+            patch.object(v286, "_AUTH_FLIGHTS", {}),
+            patch.object(v286, "_fetch_unpublished_authoritative_rows", return_value=rows) as fetch,
+            patch.object(v286, "_record_snapshot_success", return_value=1) as publish,
+        ):
+            with patch.object(threading.Thread, "start", side_effect=RuntimeError("worker unavailable")):
+                with self.assertRaisesRegex(RuntimeError, "worker unavailable"):
+                    v286._authoritative_positions(broker)
+            self.assertNotIn(id(broker), v286._AUTH_FLIGHTS)
+            fetch.assert_not_called()
+            publish.assert_not_called()
+
+            self.assertEqual(v286._authoritative_positions(broker), rows)
+            fetch.assert_called_once_with(broker)
+            publish.assert_called_once_with(broker, rows)
+            broker._kraken_private_call.assert_not_called()
+
     def test_balance_arriving_during_wait_is_consumed_before_expiry(self) -> None:
         broker = KrakenBroker()
         event = threading.Event()
