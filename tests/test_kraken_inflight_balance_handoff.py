@@ -138,7 +138,7 @@ class KrakenInflightBalanceHandoffTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, {"NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY": "1"}),
-            patch.object(v286, "_fetch_authoritative_rows_sync", side_effect=fail_fetch),
+            patch.object(v286, "_fetch_unpublished_authoritative_rows", side_effect=fail_fetch),
             patch.object(v286, "_build_authoritative_rows", return_value=rows),
             patch.object(v286, "_record_snapshot_success", side_effect=record),
         ):
@@ -156,7 +156,7 @@ class KrakenInflightBalanceHandoffTests(unittest.TestCase):
         v312._record_observation(broker, {"error": [], "result": {}})
         with (
             patch.dict(os.environ, {"NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY": "1"}),
-            patch.object(v286, "_fetch_authoritative_rows_sync", side_effect=RuntimeError("exchange failed")),
+            patch.object(v286, "_fetch_unpublished_authoritative_rows", side_effect=RuntimeError("exchange failed")),
             patch.object(v286, "_record_snapshot_success") as recorder,
         ):
             v286._finish_auth_flight(flight, broker)
