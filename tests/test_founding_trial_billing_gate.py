@@ -98,3 +98,18 @@ def test_missing_inputs_fail_closed():
     result = evaluate_sandbox_billing_candidate(trial=None, consent=None, notice=None, now=NOW)
     assert result.status == "not_ready"
     assert len(result.reasons) >= 5
+
+
+@pytest.mark.parametrize("duration_days", [1, 13, 15])
+def test_noncanonical_window_is_rejected_even_with_consistent_notice(fixtures, duration_days):
+    trial, consent, notice = fixtures
+    incorrect_end = START + timedelta(days=duration_days)
+    result = decide(
+        fixtures,
+        trial=replace(trial, ends_at=incorrect_end.isoformat()),
+        consent=consent,
+        notice=replace(notice, ends_at=incorrect_end, first_charge_at=incorrect_end),
+        now=incorrect_end + timedelta(minutes=2),
+    )
+    assert result.status == "not_ready"
+    assert "trial_window_invalid" in result.reasons
