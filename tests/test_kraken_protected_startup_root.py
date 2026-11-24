@@ -1,5 +1,6 @@
 """Offline signed code/receipt handoff; no production approvals or broker I/O."""
 import ast
+from contextlib import nullcontext
 from dataclasses import replace
 import hashlib
 import json
@@ -363,7 +364,7 @@ def test_nonregular_source_does_not_block_on_read(protected):
 
 @pytest.mark.parametrize("reason", [
     "outside_mount", "not_regular", "writable_by_others",
-    "owner_not_allowed", "size_invalid",
+    "owner_not_allowed", "size_invalid", "file_over_limit", "read_empty", "read_over_limit",
 ])
 def test_manifest_read_denial_names_only_the_failed_policy(
     protected, monkeypatch, caplog, reason,
@@ -383,9 +384,14 @@ def test_manifest_read_denial_names_only_the_failed_policy(
         def metadata(_fd):
             return SimpleNamespace(st_mode=0o100600, st_size=1, st_uid=os.geteuid() + 1)
         monkeypatch.setattr(root.os, "fstat", metadata)
-    else:
+    elif reason in {"read_empty", "read_over_limit"}:
+        data = b"" if reason == "read_empty" else b"x" * 65537
+        stream = Mock()
+        stream.read.return_value = data
+        monkeypatch.setattr(root.os, "fdopen", Mock(return_value=nullcontext(stream)))
+    elif reason in {"size_invalid", "file_over_limit"}:
         path.chmod(0o600)
-        path.write_bytes(b"")
+        path.write_bytes(b"" if reason == "size_invalid" else b"x" * 65537)
     loader = Mock()
     monkeypatch.setattr(root, "_load_verified_source", loader)
 
@@ -395,9 +401,11 @@ def test_manifest_read_denial_names_only_the_failed_policy(
     loader.assert_not_called()
     protected.wiring.private_call.assert_not_called()
     records = [record for record in caplog.records if record.name == root.LOGGER.name]
+    case = {"size_invalid": "file_empty", "file_over_limit": "file_over_limit",
+            "read_empty": "read_empty", "read_over_limit": "read_over_limit"}.get(reason)
+    label = f"size_invalid size_case={case}" if case else reason
     assert [record.getMessage() for record in records] == [
-        f"KRAKEN_PROTECTED_STARTUP_ARTIFACT_DENIED stage=manifest_read reason={reason} "
-        "authorizes_orders=false",
+        f"KRAKEN_PROTECTED_STARTUP_ARTIFACT_DENIED stage=manifest_read reason={label} authorizes_orders=false",
     ]
     assert records[0].exc_info is None
     assert str(path) not in caplog.text
