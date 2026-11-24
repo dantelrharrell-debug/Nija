@@ -90,7 +90,7 @@ def test_authoritative_position_single_flight_reuses_inflight(monkeypatch):
         release.wait(2)
         return [{"symbol": "BTC-USD", "quantity": 0.5}]
 
-    monkeypatch.setattr(v286, "_fetch_authoritative_rows_sync", fetch)
+    monkeypatch.setattr(v286, "_fetch_unpublished_authoritative_rows", fetch)
     results = []
 
     t1 = threading.Thread(target=lambda: results.append(v286._authoritative_positions(broker)))

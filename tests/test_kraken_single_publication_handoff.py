@@ -93,3 +93,31 @@ class TestSinglePublicationHandoff(unittest.TestCase):
         self.flight["error"] = RuntimeError("fixture error")
         self.flight["event"].set()
         self.assertIsNone(self.handoff())
+
+    def test_worker_snapshot_is_verifiable_when_it_is_logged(self):
+        first = self.handoff()
+        results = []
+
+        def on_worker_log(message, *_args, **_kwargs):
+            if message.startswith("KRAKEN_AUTHORITATIVE_BALANCE_V286_FETCHED"):
+                accepted, rows = v286._check_v98_fetch_result(
+                    self.proxy, first,
+                    lambda broker, candidate: v98._reuse_exact_kraken_snapshot(broker, candidate, v285),
+                )
+                results.append((self.flight["event"].is_set(), accepted, rows[0]["quantity"]))
+
+        with (
+            patch.object(self.broker, "_kraken_private_call", return_value={"result": {"XXBT": "2"}, "error": []}) as read,
+            patch.object(v286.LOGGER, "critical", side_effect=on_worker_log),
+        ):
+            v286._finish_auth_flight(self.flight, self.broker)
+        read.assert_called_once()
+        self.assertEqual(results, [(True, True, 2)])
+
+    def test_worker_error_completes_without_publishing_success(self):
+        self.handoff()
+        with patch.object(self.broker, "_kraken_private_call", side_effect=RuntimeError("fixture unavailable")):
+            v286._finish_auth_flight(self.flight, self.broker)
+        self.assertTrue(self.flight["event"].is_set())
+        self.assertIsNone(self.flight["result"])
+        self.assertIsInstance(self.flight["error"], RuntimeError)
