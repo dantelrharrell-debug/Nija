@@ -149,3 +149,27 @@ def test_billing_reader_failure_is_fail_closed_without_detail(flow):
     result = workflow.evaluate(MEMBER)
     assert result.rehearsal is None
     assert result.readiness.reasons == ("billing_evidence_unavailable",)
+
+
+def test_actual_rehearsal_can_verify_only_its_first_paid_sandbox_invoice(flow):
+    from founding_trial_sandbox_receipt import (
+        FOUNDING_STRIPE_TEST_PRICE,
+        SandboxInvoiceReadback,
+        TestBillingRun,
+        verify_first_sandbox_invoice,
+    )
+
+    workflow, state, _, _ = flow
+    record(workflow)
+    state.now = END
+    rehearsal = workflow.evaluate(MEMBER).rehearsal
+    run = TestBillingRun(rehearsal, "clock_fixture", "sub_fixture", "in_fixture")
+    evidence = SandboxInvoiceReadback(
+        FOUNDING_STRIPE_SANDBOX_ACCOUNT, False, run.test_clock_id,
+        run.subscription_id, run.invoice_id, (FOUNDING_STRIPE_TEST_PRICE,),
+        (run.invoice_id,), END, END + timedelta(hours=1), "paid", "usd", 5000, 5000, 0,
+    )
+    reader = SimpleNamespace(read_invoice=lambda invoice_id: evidence)
+    assert verify_first_sandbox_invoice(run, reader)
+    wrong_schedule = replace(rehearsal, first_charge_at=END - timedelta(days=1))
+    assert not verify_first_sandbox_invoice(replace(run, rehearsal=wrong_schedule), reader)
