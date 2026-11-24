@@ -56,10 +56,18 @@ class _ArtifactReadReason(Enum):
     SIZE_INVALID = "size_invalid"
 
 
+class _ArtifactSizeCase(Enum):
+    FILE_EMPTY = "file_empty"
+    FILE_OVER_LIMIT = "file_over_limit"
+    READ_EMPTY = "read_empty"
+    READ_OVER_LIMIT = "read_over_limit"
+
+
 class _ArtifactReadDenied(ProtectedStartupDenied):
-    def __init__(self, reason: _ArtifactReadReason) -> None:
+    def __init__(self, reason: _ArtifactReadReason, *, size_case: _ArtifactSizeCase | None = None) -> None:
         super().__init__("protected_file_denied")
         self.reason = reason
+        self.size_case = size_case
 
 
 def _read_protected(name: str, maximum_bytes: int) -> bytes:
@@ -80,14 +88,18 @@ def _read_protected(name: str, maximum_bytes: int) -> bytes:
             raise _ArtifactReadDenied(_ArtifactReadReason.WRITABLE_BY_OTHERS)
         if metadata.st_uid not in {0, os.geteuid()}:
             raise _ArtifactReadDenied(_ArtifactReadReason.OWNER_NOT_ALLOWED)
-        if not 0 < metadata.st_size <= maximum_bytes:
-            raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID)
+        if metadata.st_size <= 0:
+            raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID, size_case=_ArtifactSizeCase.FILE_EMPTY)
+        if metadata.st_size > maximum_bytes:
+            raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID, size_case=_ArtifactSizeCase.FILE_OVER_LIMIT)
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             source = stream.read(maximum_bytes + 1)
     finally:
         os.close(descriptor)
-    if not 0 < len(source) <= maximum_bytes:
-        raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID)
+    if not source:
+        raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID, size_case=_ArtifactSizeCase.READ_EMPTY)
+    if len(source) > maximum_bytes:
+        raise _ArtifactReadDenied(_ArtifactReadReason.SIZE_INVALID, size_case=_ArtifactSizeCase.READ_OVER_LIMIT)
     return source
 
 
@@ -204,10 +216,16 @@ def register_from_protected_root() -> str:
     except _ArtifactReadDenied as denial:
         # Only the reader's closed set of labels is safe to include here.
         if stage in {"manifest_read", "source_read"} and type(denial.reason) is _ArtifactReadReason:
-            LOGGER.warning(
-                "KRAKEN_PROTECTED_STARTUP_ARTIFACT_DENIED stage=%s reason=%s authorizes_orders=false",
-                stage, denial.reason.value,
-            )
+            if denial.reason is _ArtifactReadReason.SIZE_INVALID and type(denial.size_case) is _ArtifactSizeCase:
+                LOGGER.warning(
+                    "KRAKEN_PROTECTED_STARTUP_ARTIFACT_DENIED stage=%s reason=%s size_case=%s authorizes_orders=false",
+                    stage, denial.reason.value, denial.size_case.value,
+                )
+            else:
+                LOGGER.warning(
+                    "KRAKEN_PROTECTED_STARTUP_ARTIFACT_DENIED stage=%s reason=%s authorizes_orders=false",
+                    stage, denial.reason.value,
+                )
         else:
             LOGGER.warning("KRAKEN_PROTECTED_STARTUP_STAGE_DENIED stage=%s authorizes_orders=false", stage)
         return "protected_startup_registration_denied"
