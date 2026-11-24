@@ -114,38 +114,45 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_python_audits_enforce_findings(self) -> None:
         for name in ("security-scan.yml", "artifact-scanning.yml"):
             workflow = yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
-            audit_steps = [
-                step for job in workflow["jobs"].values()
+            executable = (
+                "$RUNNER_TEMP/nija-pip-audit/bin/pip-audit"
+                if name == "artifact-scanning.yml" else "pip-audit"
+            )
+            prefix = f'"{executable}" ' if executable.startswith("$") else f"{executable} "
+            audits = [
+                (step, line.strip())
+                for job in workflow["jobs"].values()
                 for step in job.get("steps", [])
-                if any(line.strip().startswith("pip-audit ")
-                       for line in step.get("run", "").splitlines())
+                for line in step.get("run", "").splitlines()
+                if line.strip().startswith(prefix)
             ]
-            self.assertTrue(audit_steps, name)
-            for step in audit_steps:
+            self.assertTrue(audits, name)
+            for step, command in audits:
                 self.assertNotIn("continue-on-error", step)
                 self.assertNotIn("if", step)
                 self.assertNotIn("||", step["run"])
-                commands = [
-                    line.strip() for line in step["run"].splitlines()
-                    if line.strip().startswith("pip-audit ")
-                ]
-                for command in commands:
-                    args = shlex.split(command)
-                    self.assertEqual(args[0], "pip-audit")
-                    self.assertIn("--desc", args)
-                    self.assertNotIn("--ignore-vuln", args)
-                    if name == "artifact-scanning.yml":
-                        self.assertIn("-r", args)
-                        self.assertEqual(args[args.index("-r") + 1],
-                                         "${{ matrix.requirements }}")
+                args = shlex.split(command)
+                self.assertEqual(args[0], executable)
+                self.assertIn("--desc", args)
+                self.assertFalse(any(arg.startswith("--ignore-vuln") for arg in args))
+                if name == "artifact-scanning.yml":
+                    self.assertIn("-r", args)
+                    self.assertEqual(args[args.index("-r") + 1],
+                                     "${{ matrix.requirements }}")
         workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
         manifests = workflow["jobs"]["python-package-scan"]["strategy"]["matrix"]["requirements"]
         self.assertEqual(set(manifests), {
             "requirements.txt", "requirements-billing.txt", "requirements-member-broker.txt",
         })
         guarddog = next(step for step in workflow["jobs"]["python-package-scan"]["steps"]
-                        if "guarddog pypi" in step.get("run", ""))
-        self.assertIn("guarddog pypi verify", guarddog["run"])
+                        if 'nija-guarddog/bin/guarddog" pypi verify' in step.get("run", ""))
+        self.assertIn(
+            '"$RUNNER_TEMP/nija-guarddog/bin/guarddog" pypi verify "${{ matrix.requirements }}"',
+            guarddog["run"],
+        )
+        self.assertIn("--exit-non-zero-on-finding", guarddog["run"])
+        self.assertIn('scripts/check_guarddog_report.py guarddog-report.json "$guarddog_status"',
+                      guarddog["run"])
         self.assertIn("steps.production-deps.outcome == 'success'", guarddog["if"])
         self.assertNotIn("continue-on-error", guarddog)
         self.assertNotIn("||", guarddog["run"])
