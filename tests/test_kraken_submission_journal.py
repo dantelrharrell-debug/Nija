@@ -194,30 +194,39 @@ def test_live_add_order_requires_configured_journal(monkeypatch):
 def test_batch_order_rejected_without_transport(
     monkeypatch, tmp_path, journal_configured, validate_only,
 ):
-def test_add_order_batch_never_reaches_transport(tmp_path, monkeypatch, journal_configured):
-    """Batch orders must fail closed until every order has durable journal support."""
+    """Deny batch submissions before transport with or without a journal."""
     from bot.kraken_submission_journal import query_direct_order
 
     if journal_configured:
-        monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(tmp_path / "journal.db"))
+        monkeypatch.setenv(
+            "NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(tmp_path / "journal.db")
+        )
     else:
         monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
 
+    calls = []
+
     class NoTransport:
         def query_private(self, method, params):
+            calls.append((method, dict(params)))
             raise AssertionError("unsupported AddOrderBatch reached Kraken transport")
 
     class Broker:
         api = NoTransport()
 
-    with pytest.raises(SubmissionDenied, match="batch order"):
+    params = {
+        "orders": [] if validate_only else [{"pair": "XBTUSD"}],
+        "validate": validate_only,
+    }
+    with pytest.raises(SubmissionDenied, match=r"(?:Kraken batch|batch Kraken) order submission lacks journal support"):
         query_direct_order(
-            Broker(), "AddOrderBatch", {"orders": [], "validate": validate_only},
-            assert_deadline=lambda method: None,
+            Broker(), "AddOrderBatch", params, assert_deadline=lambda method: None,
         )
+    assert calls == []
 
 
 def test_validate_only_add_order_still_allowed_without_journal(monkeypatch):
+    """Preserve the single-order validation behavior; never execute a trade."""
     from bot.kraken_submission_journal import query_direct_order
 
     monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
@@ -232,20 +241,8 @@ def test_validate_only_add_order_still_allowed_without_journal(monkeypatch):
         api = Transport()
 
     params = {"pair": "XBTUSD", "validate": True}
-    result = query_direct_order(Broker(), "AddOrder", params, assert_deadline=lambda method: None)
+    result = query_direct_order(
+        Broker(), "AddOrder", params, assert_deadline=lambda method: None,
+    )
     assert result["error"] == []
     assert calls == [("AddOrder", params)]
-    calls = []
-
-    class NoTransport:
-        def query_private(self, method, params):
-            calls.append((method, params))
-            raise AssertionError("unjournaled batch reached Kraken")
-
-    class Broker:
-        api = NoTransport()
-
-    for params in ({"orders": [{"pair": "XBTUSD"}]}, {"validate": True, "orders": []}):
-        with pytest.raises(SubmissionDenied, match="batch Kraken order submission"):
-            query_direct_order(Broker(), "AddOrderBatch", params, assert_deadline=lambda method: None)
-    assert calls == []
