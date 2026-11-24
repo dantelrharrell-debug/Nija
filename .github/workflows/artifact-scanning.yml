@@ -138,15 +138,20 @@ jobs:
     - name: Install dependencies
       id: production-deps
       run: |
-        python -m pip install --upgrade pip
-        pip install -r "${{ matrix.requirements }}"
+        set -euo pipefail
+        # Exercise the application manifest without putting scanners into the same environment.
+        python -m venv "$RUNNER_TEMP/nija-production-deps"
+        "$RUNNER_TEMP/nija-production-deps/bin/python" -m pip install --upgrade pip
+        "$RUNNER_TEMP/nija-production-deps/bin/python" -m pip install -r "${{ matrix.requirements }}"
 
     - name: Run pip-audit for vulnerability scanning
       run: |
-        pip install pip-audit==2.10.1
+        set -euo pipefail
+        python -m venv "$RUNNER_TEMP/nija-pip-audit"
+        "$RUNNER_TEMP/nija-pip-audit/bin/python" -m pip install pip-audit==2.10.1
         # Audit the exact production manifest, not the mutable runner environment.
         # The latter includes scanner tooling and may miss declared pins.
-        pip-audit -r "${{ matrix.requirements }}" --desc --output pip-audit-report.json --format json
+        "$RUNNER_TEMP/nija-pip-audit/bin/pip-audit" -r "${{ matrix.requirements }}" --desc --output pip-audit-report.json --format json
 
     - name: Upload pip-audit report
       uses: actions/upload-artifact@v4
@@ -159,8 +164,9 @@ jobs:
       if: ${{ !cancelled() && steps.production-deps.outcome == 'success' }}
       run: |
         set -euo pipefail
-        pip install 'guarddog==3.2.0'
-        if guarddog pypi verify "${{ matrix.requirements }}" --output-format json --exit-non-zero-on-finding > guarddog-report.json; then
+        python -m venv "$RUNNER_TEMP/nija-guarddog"
+        "$RUNNER_TEMP/nija-guarddog/bin/python" -m pip install 'guarddog==3.2.0'
+        if "$RUNNER_TEMP/nija-guarddog/bin/guarddog" pypi verify "${{ matrix.requirements }}" --output-format json --exit-non-zero-on-finding > guarddog-report.json; then
           guarddog_status=0
         else
           guarddog_status=$?
