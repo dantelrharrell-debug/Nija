@@ -79,9 +79,12 @@ jobs:
       run: |
         set -eu
         GITLEAKS_VERSION=8.24.3
+        # Publisher checksum for the exact Linux x64 archive in the v8.24.3 release.
+        GITLEAKS_SHA256=9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
         curl --fail --location --silent --show-error \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
           -o /tmp/gitleaks.tar.gz
+        printf '%s  %s\n' "$GITLEAKS_SHA256" /tmp/gitleaks.tar.gz | sha256sum --check --strict
         tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
         base="${{ github.event.pull_request.base.sha }}"
         head="${{ github.event.pull_request.head.sha }}"
