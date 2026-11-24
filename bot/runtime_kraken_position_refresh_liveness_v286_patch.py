@@ -628,9 +628,26 @@ def _balance_rows_while_waiting(broker: Any, flight: dict[str, Any]) -> list[dic
             observation = v312._fresh_observation(broker, not_before=float(flight["started_at"]))
             if observation is None:
                 return None
+            identity = observation.get("identity")
+            handoff = flight.get("inflight_balance_handoff")
+            if handoff is not None:
+                first_identity, first_generation, first_rows = handoff
+                # One provisional publication per flight. A second waiter must
+                # not reprice the same Balance or overwrite the first waiter
+                # with a newer observation while the normal worker is pending.
+                raw_generation = getattr(broker, "_nija_authoritative_position_raw_generation_v286", 0)
+                canonical_generation = getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0)
+                if (
+                    identity is not None
+                    and identity is first_identity
+                    and first_generation == raw_generation == canonical_generation
+                ):
+                    return _InFlightBalanceRows(first_rows, broker, flight, first_generation)
+                return None
             rows = v312._rows_from_observation(broker, observation)
-            v312._log_handoff(broker, observation, rows, "inflight_short_ttl_handoff")
             generation = getattr(broker, "_nija_authoritative_position_raw_generation_v286", 0)
+            flight["inflight_balance_handoff"] = (identity, generation, tuple(dict(row) for row in rows))
+            v312._log_handoff(broker, observation, rows, "inflight_short_ttl_handoff")
             result = _InFlightBalanceRows(rows, broker, flight, generation)
         # The existing worker remains registered and may finish normally. This
         # handoff neither cancels it nor authorizes a replacement private read.
