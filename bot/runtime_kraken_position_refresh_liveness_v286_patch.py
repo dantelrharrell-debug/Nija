@@ -549,7 +549,7 @@ class _InFlightBalanceRows(list):
         self.generation = generation
 
 
-def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
+def _fetch_unpublished_authoritative_rows(broker: Any) -> list[dict[str, Any]]:
     if broker is None or not _connected(broker):
         if broker is not None:
             _record_snapshot_failure(broker, "kraken_broker_not_connected")
@@ -589,31 +589,47 @@ def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
     except Exception as exc:
         _record_snapshot_failure(broker, "kraken_balance_rows_build_failed")
         raise RuntimeError("kraken_balance_rows_build_failed") from exc
-    generation = _record_snapshot_success(broker, rows)
+    return rows
+
+
+def _log_authoritative_fetch(broker: Any, rows: list[dict[str, Any]]) -> None:
     LOGGER.critical(
         "KRAKEN_AUTHORITATIVE_BALANCE_V286_FETCHED marker=%s account=%s held_assets=%d authoritative_balance=true price_required_for_enumeration=false dust_hidden=false unsupported_hidden=false synthetic_empty=false",
         MARKER,
         str(getattr(broker, "account_identifier", "unknown")),
         len(rows),
     )
-    return _PublishedBalanceRows(rows, generation)
+
+
+def _fetch_authoritative_rows_sync(broker: Any) -> list[dict[str, Any]]:
+    rows = _fetch_unpublished_authoritative_rows(broker)
+    result = _PublishedBalanceRows(rows, _record_snapshot_success(broker, rows))
+    _log_authoritative_fetch(broker, rows)
+    return result
 
 
 def _finish_auth_flight(flight: dict[str, Any], broker: Any) -> None:
     result = None
     error = None
     try:
-        result = _fetch_authoritative_rows_sync(broker)
+        rows = _fetch_unpublished_authoritative_rows(broker)
     except BaseException as exc:
+        rows = None
         error = exc
-    # Completion and in-flight handoff adoption share one publication lock.
-    # Do not hold it during broker I/O: waiters must remain able to adopt
-    # authenticated evidence while the original request is pending.
+    # Publish the exact worker generation and make it visible to a provisional
+    # caller in one critical section. Broker I/O and valuation stay outside.
     with _AUTH_LOCK:
+        if rows is not None:
+            try:
+                result = _PublishedBalanceRows(rows, _record_snapshot_success(broker, rows))
+            except BaseException as exc:
+                error = exc
         flight["result"] = result
         flight["error"] = error
         flight["finished_at"] = time.monotonic()
         flight["event"].set()
+    if result is not None:
+        _log_authoritative_fetch(broker, result)
 
 
 def _balance_rows_while_waiting(broker: Any, flight: dict[str, Any]) -> list[dict[str, Any]] | None:
