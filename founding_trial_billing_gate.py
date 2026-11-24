@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
+from founding_trial_contract import TrialWindow
 from founding_trial_ledger import TrialRecord
 
 FOUNDING_MONTHLY_USD = Decimal("50.00")
@@ -76,12 +77,15 @@ def evaluate_sandbox_billing_candidate(
         try:
             start = _utc(datetime.fromisoformat(trial.starts_at or ""))
             end = _utc(datetime.fromisoformat(trial.ends_at or ""))
+            if start is None or end is None:
+                raise ValueError("trial timestamps must be timezone-aware")
+            TrialWindow(starts_at=start, ends_at=end)
         except ValueError:
             start = end = None
-        if start is None or end is None or end <= start:
             reasons.append("trial_window_invalid")
-        elif current is not None and current < end:
-            reasons.append("trial_not_expired")
+        else:
+            if current is not None and current < end:
+                reasons.append("trial_not_expired")
     if consent is None or not consent.recurring_charge_accepted:
         reasons.append("consent_missing")
     elif (
