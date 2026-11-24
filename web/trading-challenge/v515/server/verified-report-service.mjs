@@ -3,20 +3,21 @@ import {buildReport} from "../offline_tiq_premium/tiq_report.mjs";
 import {validateRun} from "../offline_tiq_premium/tiq_engine.mjs";
 import {TEST_PRICE,TEST_PRODUCT} from "./tiq72-test-offer.mjs";
 export {TEST_PRICE,TEST_PRODUCT};
+// Historical isolated TEST identifiers are retained for negative regression
+// fixtures only. The connected NIJA sandbox account does not own this offer.
+// No checkout, webhook, report or receipt validation may authorize it.
 export const ISOLATED_TEST_PRICE="price_1UddqtI0gfJjTf3EksOST6m3";
 export const ISOLATED_TEST_PRODUCT="prod_VexmVpVMZjIj6Y";
 export class PaidReportDenied extends Error {constructor(code){super(code);this.name="PaidReportDenied";}}
-// Keep legacy sandbox receipts compatible; the isolated sandbox may select
-// ONLY the separately verified new TEST offer, never a browser-provided ID.
+// Only the independently verified NIJA TEST-account offer is authorized.
+// The trusted server selects this pair, not the browser or a stale account.
 export function resolveTestOffer(offer) {
   if(offer===undefined)return Object.freeze({price:TEST_PRICE,product:TEST_PRODUCT});
   if(offer!==null && typeof offer==='object' && !Array.isArray(offer) &&
      Object.getPrototypeOf(offer)===Object.prototype &&
      Object.keys(offer).length===2 &&
-     ((offer.price===TEST_PRICE && offer.product===TEST_PRODUCT) ||
-      (offer.price===ISOLATED_TEST_PRICE &&
-       offer.product===ISOLATED_TEST_PRODUCT)))
-    return Object.freeze({price:offer.price,product:offer.product});
+     offer.price===TEST_PRICE && offer.product===TEST_PRODUCT)
+    return Object.freeze({price:TEST_PRICE,product:TEST_PRODUCT});
   throw new PaidReportDenied('test_product_mismatch');
 }
 const idOf=x=>typeof x==="string"?x:x?.id;

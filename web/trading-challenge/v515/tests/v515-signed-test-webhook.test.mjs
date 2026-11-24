@@ -113,14 +113,37 @@ test("invalid refund amount never revokes",async()=>{
  assert.equal(f.records.length,0);
 });
 
-test("new isolated TEST price is verified for payment and reversal events",async()=>{
- const offer={price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT};
+test("cross-account TEST offer cannot grant or reverse entitlements",async()=>{
+ const unverified={price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT};
+ const paid=fixture("checkout.session.completed",unverified);
+ await assert.rejects(paid.run(),/test_product_mismatch/);
+ assert.equal(paid.records.length,0);
+ const reversal=fixture("charge.refunded",unverified);
+ reversal.charge.amount_refunded=100;
+ await assert.rejects(reversal.run(),/test_product_mismatch/);
+ assert.equal(reversal.records.length,0);
+ const verified=fixture("checkout.session.completed");
+ await assert.rejects(verified.run({testOffer:unverified}),/test_product_mismatch/);
+ assert.equal(verified.records.length,0);
+});
+test("trusted canonical TEST selection rejects cross-account Stripe line items",async()=>{
+ const oldOffer={price:ISOLATED_TEST_PRICE,product:ISOLATED_TEST_PRODUCT};
+ const verified={price:TEST_PRICE,product:TEST_PRODUCT};
+ const paid=fixture("checkout.session.completed",oldOffer);
+ await assert.rejects(paid.run({testOffer:verified}),/test_product_mismatch/);
+ assert.equal(paid.records.length,0);
+ const reversal=fixture("charge.refunded",oldOffer);
+ reversal.charge.amount_refunded=100;
+ await assert.rejects(reversal.run({testOffer:verified}),/wrong_test_product/);
+ assert.equal(reversal.records.length,0);
+});
+test("verified NIJA TEST offer supports signed payment and verified reversal",async()=>{
+ const offer={price:TEST_PRICE,product:TEST_PRODUCT};
  const paid=fixture("checkout.session.completed",offer);
  assert.equal((await paid.run()).processed,true);
+ assert.equal(paid.records.length,1);
  const reversal=fixture("charge.refunded",offer);
  reversal.charge.amount_refunded=100;
  assert.equal((await reversal.run()).processed,true);
- const legacy=fixture();
- await assert.rejects(legacy.run({testOffer:offer}),/test_product_mismatch/);
- assert.equal(legacy.records.length,0);
+ assert.equal(reversal.records.length,1);
 });

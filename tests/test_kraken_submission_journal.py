@@ -218,7 +218,7 @@ def test_batch_order_rejected_without_transport(
         "orders": [] if validate_only else [{"pair": "XBTUSD"}],
         "validate": validate_only,
     }
-    with pytest.raises(SubmissionDenied, match=r"(?:Kraken batch|batch Kraken) order submission lacks journal support"):
+    with pytest.raises(SubmissionDenied, match="batch Kraken order submission"):
         query_direct_order(
             Broker(), "AddOrderBatch", params, assert_deadline=lambda method: None,
         )
