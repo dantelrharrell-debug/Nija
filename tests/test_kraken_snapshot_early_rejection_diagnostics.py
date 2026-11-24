@@ -1,10 +1,8 @@
-"""Actual v98 module tests with synthetic, non-broker snapshot evidence."""
+"""Actual v98 guard regression tests; no broker I/O or credentials."""
 from __future__ import annotations
 
-import logging
+import unittest
 from types import SimpleNamespace
-
-import pytest
 
 from bot import position_sync_failure_truth_v98_patch as v98
 
@@ -27,36 +25,44 @@ def _fixture():
     return broker, authority, rows
 
 
-@pytest.mark.parametrize(
-    ("change", "reason"),
-    [
-        (lambda broker: setattr(broker, "_nija_authoritative_position_raw_generation_v286", 6), "generation_invalid_or_mismatch"),
-        (lambda broker: setattr(broker, "_nija_authoritative_position_raw_rows_v286", ()), "raw_rows_shape_or_count_mismatch"),
-        (lambda broker: setattr(broker, "_nija_authoritative_position_raw_rows_v286", ("invalid",)), "raw_row_invalid"),
-    ],
-)
-def test_early_rejection_reason_without_evidence(caplog, change, reason):
-    broker, authority, rows = _fixture()
-    change(broker)
-    with caplog.at_level(logging.WARNING):
-        assert v98._reuse_exact_kraken_snapshot_locked(broker, rows, authority) is False
-    messages = [record.getMessage() for record in caplog.records]
-    assert any("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=" + reason in msg for msg in messages)
-    assert all("TEST_ASSET" not in msg for msg in messages)
+class KrakenEarlyRejectionTests(unittest.TestCase):
+    def _reject(self, broker, authority, rows, reason):
+        with self.assertLogs(v98.LOGGER, level="WARNING") as captured:
+            self.assertFalse(
+                v98._reuse_exact_kraken_snapshot_locked(broker, rows, authority)
+            )
+        self.assertTrue(any(
+            "KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=" + reason in msg
+            for msg in captured.output
+        ))
+        self.assertTrue(all("TEST_ASSET" not in msg for msg in captured.output))
+
+    def test_generation_mismatch(self):
+        broker, authority, rows = _fixture()
+        broker._nija_authoritative_position_raw_generation_v286 = 6
+        self._reject(broker, authority, rows, "generation_invalid_or_mismatch")
+
+    def test_raw_count_mismatch(self):
+        broker, authority, rows = _fixture()
+        broker._nija_authoritative_position_raw_rows_v286 = ()
+        self._reject(broker, authority, rows, "raw_rows_shape_or_count_mismatch")
+
+    def test_malformed_raw_row(self):
+        broker, authority, rows = _fixture()
+        broker._nija_authoritative_position_raw_rows_v286 = ("invalid",)
+        self._reject(broker, authority, rows, "raw_row_invalid")
+
+    def test_different_returned_rows(self):
+        broker, authority, _ = _fixture()
+        self._reject(broker, authority, _rows(2), "raw_rows_mismatch")
+
+    def test_exact_snapshot_accepted(self):
+        broker, authority, rows = _fixture()
+        with self.assertNoLogs(v98.LOGGER, level="WARNING"):
+            self.assertTrue(
+                v98._reuse_exact_kraken_snapshot_locked(broker, rows, authority)
+            )
 
 
-def test_different_returned_rows_rejected_and_logged(caplog):
-    broker, authority, _rows_original = _fixture()
-    with caplog.at_level(logging.WARNING):
-        assert v98._reuse_exact_kraken_snapshot_locked(broker, _rows(2), authority) is False
-    assert any(
-        "KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=raw_rows_mismatch" in record.getMessage()
-        for record in caplog.records
-    )
-
-
-def test_exact_snapshot_accepted_without_early_warning(caplog):
-    broker, authority, rows = _fixture()
-    with caplog.at_level(logging.WARNING):
-        assert v98._reuse_exact_kraken_snapshot_locked(broker, rows, authority) is True
-    assert not any("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED" in record.getMessage() for record in caplog.records)
+if __name__ == "__main__":
+    unittest.main()
