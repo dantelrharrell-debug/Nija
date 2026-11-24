@@ -197,6 +197,69 @@ def test_bad_approved_source_denies_without_exporting_contents(protected, capsys
     assert "private-source-payload" not in repr(capsys.readouterr())
 
 
+@pytest.mark.parametrize("stage", [
+    "manifest_read", "manifest_parse", "receipt_validation", "source_read",
+    "source_digest", "source_import", "source_interface", "receipt_revalidation",
+    "canonical_registration",
+])
+def test_generic_denials_log_only_fixed_stage_and_keep_existing_status(
+    protected, monkeypatch, caplog, stage
+):
+    def deny(*args, **kwargs):
+        raise RuntimeError("private-source-payload /do-not-report-this-path")
+
+    if stage in {"manifest_read", "source_read"}:
+        target = root.MANIFEST_NAME if stage == "manifest_read" else root.SOURCE_NAME
+        original_read = root._read_protected
+
+        def failing_read(name, limit):
+            if name == target:
+                deny()
+            return original_read(name, limit)
+
+        monkeypatch.setattr(root, "_read_protected", failing_read)
+    elif stage in {"receipt_validation", "receipt_revalidation"}:
+        original_verify = root.verify_startup_receipt_set
+        calls = 0
+
+        def failing_verifier(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == (1 if stage == "receipt_validation" else 2):
+                deny()
+            return original_verify(*args, **kwargs)
+
+        monkeypatch.setattr(root, "verify_startup_receipt_set", failing_verifier)
+    else:
+        failure_points = {
+            "manifest_parse": "_manifest",
+            "source_digest": "_receipt",
+            "source_import": "_load_verified_source",
+            "canonical_registration": "register_canonical_kraken_collector_startup",
+        }
+        if stage == "source_interface":
+            class ReviewSource:
+                def __getattr__(self, name):
+                    deny()
+
+            monkeypatch.setattr(root, "_load_verified_source", lambda _source: ReviewSource())
+        else:
+            monkeypatch.setattr(root, failure_points[stage], deny)
+
+    assert root.register_from_protected_root() == "protected_startup_registration_denied"
+    assert startup.startup_binding_registration_state() == "missing"
+    assert attestation._COLLECTOR is None
+    assert root.MODULE_NAME not in sys.modules
+    protected.wiring.private_call.assert_not_called()
+    records = [r for r in caplog.records if r.name == root.LOGGER.name]
+    assert [r.getMessage() for r in records] == [
+        f"KRAKEN_PROTECTED_STARTUP_STAGE_DENIED stage={stage} authorizes_orders=false"
+    ]
+    assert records[0].exc_info is None
+    assert "private-source-payload" not in caplog.text
+    assert "/do-not-report-this-path" not in caplog.text
+
+
 def test_approved_source_cannot_accidentally_self_register_during_import(protected):
     protected.write(source=b'''from bot.kraken_startup_evidence_binding import register_reviewed_startup_binding
 register_reviewed_startup_binding(lambda **kwargs: None, verify_receipts=lambda binding: False)

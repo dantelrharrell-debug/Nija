@@ -13,6 +13,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import logging
 import os
 from pathlib import Path
 import stat
@@ -30,6 +31,7 @@ from bot.kraken_startup_receipts import (
     StartupReceiptTrust, _receipt, _unique_object, verify_startup_receipt_set,
 )
 
+LOGGER = logging.getLogger(__name__)
 SECRET_ROOT = Path("/etc/secrets")
 MANIFEST_NAME = ".render-kraken-startup-binding.json"
 SOURCE_NAME = ".render-kraken-startup-root.py"
@@ -129,20 +131,29 @@ def register_from_protected_root() -> str:
         return "incomplete_startup_binding_preserved"
     module = None
     registered_here = False
+    stage = "manifest_read"
     try:
-        trust, receipts = _manifest(_read_protected(MANIFEST_NAME, 65536))
+        manifest_bytes = _read_protected(MANIFEST_NAME, 65536)
+        stage = "manifest_parse"
+        trust, receipts = _manifest(manifest_bytes)
+        stage = "receipt_validation"
         if not verify_startup_receipt_set(receipts, trust):
             return "protected_startup_receipts_denied"
+        stage = "source_read"
         source = _read_protected(SOURCE_NAME, 131072)
+        stage = "source_digest"
         review = _receipt(receipts["independent_review"])["payload"]
         if review["artifact_sha256"] != hashlib.sha256(source).hexdigest():
             return "protected_startup_source_digest_denied"
+        stage = "source_import"
         with protected_source_import_guard():
             module = _load_verified_source(source)
+        stage = "source_interface"
         resolver = getattr(module, "resolve_sources", None)
         reviewer = getattr(module, "review_sources", None)
         if not callable(resolver) or not callable(reviewer):
             return "protected_startup_source_interface_denied"
+        stage = "receipt_revalidation"
         if not verify_startup_receipt_set(receipts, trust):
             return "protected_startup_receipts_denied"
 
@@ -156,6 +167,7 @@ def register_from_protected_root() -> str:
         def review_sources(sources: ReviewedCanonicalKrakenSources) -> Any:
             return reviewer(sources, trust=trust)
 
+        stage = "canonical_registration"
         register_canonical_kraken_collector_startup(
             trust=trust, resolve_sources=resolve_sources, review_sources=review_sources,
         )
@@ -166,6 +178,9 @@ def register_from_protected_root() -> str:
     except FileNotFoundError:
         return "protected_startup_artifacts_missing"
     except (Exception, SystemExit):
+        # Only an internal literal is logged; never include the exception or
+        # protected paths, values, source contents or receipt details.
+        LOGGER.warning("KRAKEN_PROTECTED_STARTUP_STAGE_DENIED stage=%s authorizes_orders=false", stage)
         return "protected_startup_registration_denied"
     finally:
         if module is not None and not registered_here and sys.modules.get(MODULE_NAME) is module:
