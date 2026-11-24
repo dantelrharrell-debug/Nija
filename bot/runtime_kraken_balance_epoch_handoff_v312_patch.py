@@ -138,6 +138,7 @@ def _record_observation(broker: Any, response: Any) -> bool:
     now = time.monotonic()
     with _LOCK:
         _OBSERVATIONS[key] = {
+            "identity": object(),
             "response": _clone(response),
             "observed_at": now,
             "account": str(getattr(broker, "account_identifier", "unknown") or "unknown"),
@@ -172,6 +173,7 @@ def _fresh_observation(broker: Any, *, not_before: float) -> dict[str, Any] | No
         if not _valid_balance_response(response):
             return None
         return {
+            "identity": row.get("identity"),
             "response": _clone(response),
             "observed_at": observed_at,
             "age_s": age,
