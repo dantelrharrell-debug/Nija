@@ -46,22 +46,53 @@ jobs:
     - name: Build Docker image
       id: build-image
       run: |
+        set -euo pipefail
         # Dockerfiles do not accept GH_TOKEN; never pass GitHub secrets as build args.
-        # Use Docker Hub to avoid ECR Public rate limits. 
-        # A failed pull still fails this job; scanners remain mandatory. 
-        docker build --no-cache \
+        # Use Docker Hub to avoid ECR Public rate limits.
+        # A failed pull still fails this job; scanners remain mandatory.
+        docker buildx build --load --no-cache --progress=plain \
+          --metadata-file "$RUNNER_TEMP/nija-container-build.json" \
           --build-arg PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
           -f ${{ matrix.dockerfile }} \
           -t ${{ steps.image-name.outputs.image }} \
-          .
+          . 2>&1 | tee "$RUNNER_TEMP/nija-container-build.log"
+
+    - name: Record the local image selected for scanning
+      id: scan-target
+      env:
+        IMAGE: ${{ steps.image-name.outputs.image }}
+        DOCKERFILE: ${{ matrix.dockerfile }}
+      run: |
+        set -euo pipefail
+        image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+        [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+        metadata="$RUNNER_TEMP/nija-container-build.json"
+        config_digest=$(jq -r '."containerimage.config.digest" // empty' "$metadata")
+        manifest_digest=$(jq -r '."containerimage.digest" // empty' "$metadata")
+        # The Docker archive exporter can omit digests from the metadata file.
+        # Use its plain export records when those fields are absent.
+        build_log="$RUNNER_TEMP/nija-container-build.log"
+        if [[ -z "$config_digest" ]]; then
+          config_digest=$(sed -En 's/^#[0-9]+ exporting config (sha256:[0-9a-f]{64}) done$/\1/p' "$build_log" | sort -u)
+        fi
+        if [[ -z "$manifest_digest" ]]; then
+          manifest_digest=$(sed -En 's/^#[0-9]+ exporting manifest (sha256:[0-9a-f]{64}) done$/\1/p' "$build_log" | sort -u)
+        fi
+        [[ "$config_digest" == "$image_id" ]]
+        [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+        commit=$(git rev-parse HEAD)
+        printf 'id=%s\n' "$image_id" >> "$GITHUB_OUTPUT"
+        printf 'commit=%s\ndockerfile=%s\nlocal_image_id=%s\nbuild_manifest_digest=%s\n' \
+          "$commit" "$DOCKERFILE" "$image_id" "$manifest_digest" > container-scan-target.txt
 
     - name: Run Trivy vulnerability scanner
       run: |
         bash scripts/run_trivy_scan.sh image \
+          --image-src docker \
           --format sarif \
           --output "trivy-results-${{ matrix.dockerfile }}.sarif" \
           --severity CRITICAL,HIGH \
-          "${{ steps.image-name.outputs.image }}"
+          "${{ steps.scan-target.outputs.id }}"
 
     - name: Upload Trivy results to GitHub Security
       uses: github/codeql-action/upload-sarif@v3
@@ -71,21 +102,22 @@ jobs:
         category: 'trivy-${{ matrix.dockerfile }}'
 
     - name: Run Trivy vulnerability scanner (table format)
-      if: ${{ !cancelled() && steps.build-image.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.scan-target.outcome == 'success' }}
       run: |
         bash scripts/run_trivy_scan.sh image \
+          --image-src docker \
           --format table \
           --severity CRITICAL,HIGH \
-          "${{ steps.image-name.outputs.image }}"
+          "${{ steps.scan-target.outputs.id }}"
 
     # Refresh the Grype scanner: v3 bundled an obsolete 0.74.4 release whose
     # stale vulnerability database caused scans to error. Keep DB age checks on.
     - name: Run Grype vulnerability scanner
-      if: ${{ !cancelled() && steps.build-image.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.scan-target.outcome == 'success' }}
       uses: anchore/scan-action@v7.4.0
       id: grype-scan
       with:
-        image: ${{ steps.image-name.outputs.image }}
+        image: docker:${{ steps.scan-target.outputs.id }}
         fail-build: true
         severity-cutoff: high
         cache-db: false
@@ -109,10 +141,11 @@ jobs:
 
     - name: Retain raw container scan evidence
       uses: actions/upload-artifact@v4
-      if: ${{ always() && (hashFiles(format('trivy-results-{0}.sarif', matrix.dockerfile)) != '' || steps.grype-scan.outputs.sarif != '') }}
+      if: ${{ always() && steps.scan-target.outcome == 'success' }}
       with:
         name: container-scan-${{ matrix.dockerfile }}
         path: |
+          container-scan-target.txt
           trivy-results-${{ matrix.dockerfile }}.sarif
           ${{ steps.grype-scan.outputs.sarif }}
 
