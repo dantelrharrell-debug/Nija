@@ -26,6 +26,8 @@ def capture(source: Path, output_dir: Path) -> dict:
 
 
 def restore(archive: Path, *, expected_sha256: str) -> dict:
+    if not isinstance(expected_sha256, str) or not expected_sha256.strip():
+        raise ValueError("independently recorded archive SHA-256 is required")
     manifest = snapshot.verify_snapshot(archive, expected_sha256=expected_sha256, exercise_restore=True)
     _require_verified_journal(manifest)
     return {

@@ -296,5 +296,7 @@ def test_journal_required_for_strict_capture_and_restore(tmp_path, monkeypatch):
 
     report = snapshot.create_snapshot(source, exports)
     archive = Path(report["archive"])
+    with pytest.raises(ValueError, match="independently recorded archive SHA-256 is required"):
+        journal_backup.restore(archive, expected_sha256=None)
     with pytest.raises(ValueError, match="required submission journal is missing from archive"):
         journal_backup.restore(archive, expected_sha256=report["sha256"])
