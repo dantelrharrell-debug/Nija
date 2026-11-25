@@ -1,5 +1,7 @@
 # ClickBank Foundations repair acceptance
 
+> **Superseded for new sales (2026-11-25):** ClickBank Compliance declined the existing course (seller nijaai, item 1, ticket 27287905). Do not implement or enable new ClickBank checkout or affiliate promotion. Retain this document as historical reconciliation requirements only. Preserve the two pending records and all existing entitlements; require authoritative historical receipts before any individual disposition. Use the existing Stripe Foundations architecture and its isolated TEST release gates for prospective sales. No provider switch, production deployment or live payment certification is implied by this document.
+
 Scope: existing $99 course only. Reuse CourseLedger and PortalStore; never invoke member trading activation or subscription billing.
 
 ## Implementation gates

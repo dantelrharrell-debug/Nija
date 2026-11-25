@@ -15,7 +15,7 @@ const ROUTE_META = {
   "/pricing": { title: "NIJA Pricing | $99 Course & Planned Founding 100", desc: "Compare NIJA\u0027s $99 one-time Trading Foundations course with the planned Founding 100 offer: 14 days free, then $50/month. The free waitlist does not charge a card." },
   "/apply": { title: "Apply for the Free NIJA Pilot | NIJA AI Trading LLC", desc: "Apply for NIJA\u0027s free early-access feedback pilot. Applying costs nothing and starts no trial or subscription. Founding 100 paid enrollment is separate and not open yet." },
   "/about": { title: "About NIJA AI Trading LLC | Founder & Mission", desc: "NIJA AI Trading LLC is an independent fintech company building AI-assisted trading education and technology for new traders." },
-  "/affiliate": { title: "NIJA Affiliate Program | Earn 30% Commission on Trading Education", desc: "Promote NIJA Trading Foundations and earn 30% commission on qualifying $99 sales through the NIJA ClickBank affiliate program." },
+  "/affiliate": { title: "NIJA Affiliate Program | Trading Education", desc: "Learn about NIJA trading education partnership opportunities. Course affiliate enrollment is not currently available." },
   "/investor-relations": { title: "Investor Relations | NIJA AI Trading LLC", desc: "NIJA AI Trading LLC investor information, growth projections, and how to request investor materials." },
   "/support": { title: "Customer Support | NIJA AI Trading LLC", desc: "Get help with NIJA Trading Foundations, course access, billing questions, and technical support." },
   "/brokerages": { title: "Open a Brokerage Account | NIJA AI Trading LLC", desc: "Create a supported brokerage account with Kraken, Coinbase, OKX, or Alpaca using NIJA's official referral links." },
