@@ -70,6 +70,7 @@ def test_timeout_recovery_uses_balance_observed_during_current_attempt(monkeypat
         return True
 
     fake_v286 = SimpleNamespace(
+        _AUTH_LOCK=threading.RLock(),
         _authoritative_positions=original,
         _build_authoritative_rows=build_rows,
         _record_snapshot_success=record_snapshot,
@@ -89,7 +90,7 @@ def test_non_timeout_position_failure_remains_fail_closed(monkeypatch):
     def original(_broker):
         raise RuntimeError("exchange payload invalid")
 
-    fake_v286 = SimpleNamespace(_authoritative_positions=original)
+    fake_v286 = SimpleNamespace(_AUTH_LOCK=threading.RLock(), _authoritative_positions=original)
     monkeypatch.setattr(v312, "_v286", lambda: fake_v286)
 
     assert v312._patch_v286_authoritative_positions() is True
@@ -173,3 +174,37 @@ def test_pre_read_handoff_falls_back_when_observation_changes_during_valuation(m
     assert fallback == [True]
     assert not recorded
     assert not flight["event"].is_set()
+
+
+@pytest.mark.parametrize("change", ["generation", "failure", "observation"])
+def test_timeout_recovery_preserves_timeout_if_valuation_races_with_new_evidence(monkeypatch, change):
+    broker = SimpleNamespace(account_identifier="fixture")
+    timeout = TimeoutError("authoritative flight pending")
+    publications = []
+
+    def original(_broker):
+        assert v312._record_observation(broker, _valid_balance())
+        raise timeout
+
+    def build_rows(_broker, _result):
+        if change == "generation":
+            broker._nija_authoritative_position_snapshot_generation_v285 = 1
+        elif change == "failure":
+            broker._nija_authoritative_position_failure_serial_v286 = 1
+        else:
+            assert v312._record_observation(broker, _valid_balance())
+        return [{"symbol": "BTC-USD", "quantity": 0.001}]
+
+    fake_v286 = SimpleNamespace(
+        _AUTH_LOCK=threading.RLock(),
+        _authoritative_positions=original,
+        _build_authoritative_rows=build_rows,
+        _record_snapshot_success=lambda *_: publications.append(True),
+    )
+    monkeypatch.setattr(v312, "_v286", lambda: fake_v286)
+    assert v312._patch_v286_authoritative_positions()
+
+    with pytest.raises(TimeoutError) as raised:
+        fake_v286._authoritative_positions(broker)
+    assert raised.value is timeout
+    assert not publications
