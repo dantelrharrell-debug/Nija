@@ -212,12 +212,14 @@ def inspect_kraken_ledger(
                         issues.append("pending_kraken_close_already_in_trade_ledger")
 
         if historical_backup is not None or historical_sha256 is not None:
-            if (historical_backup is None or historical_sha256 is None
-                    or historical_backup.samefile(actual)):
+            if historical_backup is None or historical_sha256 is None:
                 issues.append("distinct_pinned_historical_backup_required")
             else:
                 try:
-                    counts.update(_compare_history(connection, historical_backup, historical_sha256))
+                    if historical_backup.samefile(actual):
+                        issues.append("distinct_pinned_historical_backup_required")
+                    else:
+                        counts.update(_compare_history(connection, historical_backup, historical_sha256))
                 except (sqlite3.Error, ValueError, OSError):
                     issues.append("historical_backup_comparison_unverified")
 
