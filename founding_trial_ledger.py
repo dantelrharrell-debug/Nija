@@ -101,7 +101,8 @@ class FoundingTrialLedger:
                 conn.execute('COMMIT')
                 return result
             except Exception:
-                conn.execute('ROLLBACK')
+                if conn.in_transaction:
+                    conn.execute('ROLLBACK')
                 raise
 
     def cancel(self, member_id: str) -> TrialRecord:
@@ -117,5 +118,6 @@ class FoundingTrialLedger:
                 conn.execute('COMMIT')
                 return self._record(row)
             except Exception:
-                conn.execute('ROLLBACK')
+                if conn.in_transaction:
+                    conn.execute('ROLLBACK')
                 raise
