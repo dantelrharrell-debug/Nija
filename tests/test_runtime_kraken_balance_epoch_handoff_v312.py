@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from types import SimpleNamespace
 
@@ -94,3 +95,81 @@ def test_non_timeout_position_failure_remains_fail_closed(monkeypatch):
     assert v312._patch_v286_authoritative_positions() is True
     with pytest.raises(RuntimeError, match="exchange payload invalid"):
         fake_v286._authoritative_positions(broker)
+
+
+def test_pre_read_handoff_publishes_completion_under_snapshot_writer_lock(monkeypatch):
+    broker = SimpleNamespace(account_identifier="fixture")
+    lock = threading.RLock()
+    event = threading.Event()
+    flight = {"started_at": time.monotonic(), "event": event}
+    rows = [{"symbol": "BTC-USD", "quantity": 0.001}]
+    assert v312._record_observation(broker, _valid_balance())
+    fallback = []
+
+    class SnapshotRows(list):
+        def __init__(self, values, generation):
+            super().__init__(values)
+            self.generation = generation
+
+    def recorder(_broker, result):
+        assert result == rows
+        return 1
+
+    observed_locked = []
+    original_set = event.set
+
+    def check_then_signal():
+        def probe():
+            acquired = lock.acquire(blocking=False)
+            observed_locked.append(not acquired)
+            if acquired:
+                lock.release()
+
+        t = threading.Thread(target=probe)
+        t.start()
+        t.join(2)
+        assert not t.is_alive()
+        original_set()
+
+    monkeypatch.setattr(event, "set", check_then_signal)
+    fake_v286 = SimpleNamespace(
+        _AUTH_LOCK=lock,
+        _PublishedBalanceRows=SnapshotRows,
+        _finish_auth_flight=lambda *_: fallback.append(True),
+        _build_authoritative_rows=lambda *_: rows,
+        _record_snapshot_success=recorder,
+    )
+    monkeypatch.setattr(v312, "_v286", lambda: fake_v286)
+    assert v312._patch_v286_finish_flight()
+    fake_v286._finish_auth_flight(flight, broker)
+    assert not fallback
+    assert event.is_set()
+    assert observed_locked == [True]
+    assert isinstance(flight["result"], SnapshotRows)
+    assert flight["result"].generation == 1
+    assert flight["result"] == rows
+
+
+def test_pre_read_handoff_falls_back_when_observation_changes_during_valuation(monkeypatch):
+    broker = SimpleNamespace(account_identifier="fixture")
+    flight = {"started_at": time.monotonic(), "event": threading.Event()}
+    assert v312._record_observation(broker, _valid_balance())
+    fallback = []
+    recorded = []
+
+    def build_rows(_broker, _result):
+        assert v312._record_observation(broker, {"error": [], "result": {"XXBT": "2"}})
+        return [{"symbol": "BTC-USD", "quantity": 0.001}]
+
+    fake_v286 = SimpleNamespace(
+        _AUTH_LOCK=threading.RLock(),
+        _finish_auth_flight=lambda *_: fallback.append(True),
+        _build_authoritative_rows=build_rows,
+        _record_snapshot_success=lambda *_: recorded.append(True),
+    )
+    monkeypatch.setattr(v312, "_v286", lambda: fake_v286)
+    assert v312._patch_v286_finish_flight()
+    fake_v286._finish_auth_flight(flight, broker)
+    assert fallback == [True]
+    assert not recorded
+    assert not flight["event"].is_set()

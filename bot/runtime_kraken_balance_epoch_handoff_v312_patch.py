@@ -181,17 +181,23 @@ def _fresh_observation(broker: Any, *, not_before: float) -> dict[str, Any] | No
         }
 
 
-def _rows_from_observation(broker: Any, observation: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _build_observation_rows(broker: Any, observation: Mapping[str, Any]) -> list[dict[str, Any]]:
     v286 = _v286()
     response = observation.get("response")
     if not _valid_balance_response(response):
         raise RuntimeError("v312_invalid_observation_response")
     result = response.get("result")
     builder = getattr(v286, "_build_authoritative_rows", None)
-    recorder = getattr(v286, "_record_snapshot_success", None)
-    if not callable(builder) or not callable(recorder):
+    if not callable(builder):
         raise RuntimeError("v312_v286_authoritative_helpers_unavailable")
-    rows = builder(broker, result)
+    return builder(broker, result)
+
+
+def _rows_from_observation(broker: Any, observation: Mapping[str, Any]) -> list[dict[str, Any]]:
+    recorder = getattr(_v286(), "_record_snapshot_success", None)
+    if not callable(recorder):
+        raise RuntimeError("v312_v286_authoritative_helpers_unavailable")
+    rows = _build_observation_rows(broker, observation)
     recorder(broker, rows)
     return [dict(row) for row in rows]
 
@@ -254,19 +260,23 @@ def _patch_v286_finish_flight() -> bool:
     def finish_auth_flight_v312(flight: dict[str, Any], broker: Any) -> None:
         started_at = _float(flight.get("started_at")) if isinstance(flight, dict) else 0.0
         observation = _fresh_observation(broker, not_before=started_at)
-        if observation is None:
+        if observation is None or observation.get("identity") is None:
             return original(flight, broker)
 
         try:
-            rows = _rows_from_observation(broker, observation)
-            flight["result"] = rows
-            flight["error"] = None
-            flight["finished_at"] = time.monotonic()
-            event = flight.get("event")
-            if callable(getattr(event, "set", None)):
-                event.set()
-            _log_handoff(broker, observation, rows, "new_flight_pre_read")
-            return None
+            # Valuation can perform bounded public I/O. Keep it outside the
+            # writer lock, then recheck the exact observation before publishing.
+            rows = _build_observation_rows(broker, observation)
+            with v286._AUTH_LOCK:
+                fresh = _fresh_observation(broker, not_before=started_at)
+                if fresh is not None and fresh.get("identity") is observation["identity"]:
+                    generation = v286._record_snapshot_success(broker, rows)
+                    flight["result"] = v286._PublishedBalanceRows(rows, generation)
+                    flight["error"] = None
+                    flight["finished_at"] = time.monotonic()
+                    flight["event"].set()
+                else:
+                    fresh = None
         except Exception as exc:
             LOGGER.warning(
                 "KRAKEN_BALANCE_EPOCH_V312_HANDOFF_DEFERRED marker=%s account=%s source=new_flight_pre_read "
@@ -277,6 +287,9 @@ def _patch_v286_finish_flight() -> bool:
                 exc,
             )
             return original(flight, broker)
+        if fresh is None:
+            return original(flight, broker)
+        _log_handoff(broker, fresh, rows, "new_flight_pre_read")
 
     setattr(finish_auth_flight_v312, _V286_FINISH_PATCH_ATTR, True)
     setattr(finish_auth_flight_v312, "__wrapped__", original)
