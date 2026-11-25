@@ -426,8 +426,13 @@ def test_real_scan_wrapper_rejects_changed_review_before_detection(tmp_path):
     commit()  # A clean committed checkout must still fail its stale review.
     result = invoke()
     assert result.returncode == 2
-    assert json.loads(report.read_text())["outcome"] == "scanner_error"
-    assert "changed source must remain private" not in report.read_text() + result.stdout + result.stderr
+    report_text = report.read_text()
+    evidence = json.loads(report_text)
+    assert evidence["outcome"] == "reviewed_source_context_changed"
+    assert evidence["exit_code"] == 2
+    assert evidence["scanner_exit_code"] == 0
+    assert evidence["findings"] == []
+    assert "changed source must remain private" not in report_text + result.stdout + result.stderr
 
 
 def test_marker_identity_collision_does_not_authorize_changed_pem_payload(tmp_path, monkeypatch):
