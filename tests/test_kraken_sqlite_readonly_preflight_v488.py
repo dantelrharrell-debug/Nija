@@ -105,6 +105,34 @@ class KrakenLedgerReadonlyPreflightTests(unittest.TestCase):
         self.assertIn("persistent_ledger_path_unverified", result["issues"])
         self.assertFalse(result["collector_install_allowed"])
 
+    def test_missing_optional_backup_does_not_abort_current_ledger_audit(self):
+        self.create_db(exits=True, pending=1)
+        before = self.db_path.read_bytes()
+        report = inspect_kraken_ledger(
+            self.db_path, persistent_root=self.root,
+            historical_backup=self.root / "missing.db", historical_sha256="0" * 64,
+        )
+        self.assertEqual(report["counts"]["pending_kraken_closes"], 1)
+        self.assertIn("historical_backup_comparison_unverified", report["issues"])
+        self.assertNotIn("readonly_ledger_query_failed", report["issues"])
+        self.assertNotIn("historical_unattributed_unchanged", report["counts"])
+        self.assertFalse(report["backup_restore_certified"])
+        self.assertFalse(report["collector_install_allowed"])
+        self.assertFalse(report["authorizes_orders"])
+        self.assertEqual(self.db_path.read_bytes(), before)
+
+    def test_historical_backup_hardlink_to_live_ledger_remains_denied(self):
+        self.create_db(exits=True)
+        alias = self.root / "alias.db"
+        alias.hardlink_to(self.db_path)
+        report = inspect_kraken_ledger(
+            self.db_path, persistent_root=self.root, historical_backup=alias,
+            historical_sha256=hashlib.sha256(self.db_path.read_bytes()).hexdigest(),
+        )
+        self.assertIn("distinct_pinned_historical_backup_required", report["issues"])
+        self.assertNotIn("historical_unattributed_unchanged", report["counts"])
+        self.assertFalse(report["backup_restore_certified"])
+
     def test_database_outside_root_denied(self):
         self.create_db()
         other = self.root / "other"
