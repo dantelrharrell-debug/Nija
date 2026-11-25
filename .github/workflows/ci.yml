@@ -85,6 +85,7 @@ jobs:
             bot/tests/test_commissioning_runtime.py \
             tests/test_kraken_collector_connection.py \
             tests/test_kraken_reviewed_collector_bridge.py \
+            tests/test_kraken_inventory_read_diagnostics.py \
             tests/test_kraken_same_flight_snapshot_handoff.py \
             tests/test_kraken_single_publication_handoff.py \
             tests/test_runtime_kraken_balance_epoch_handoff_v312.py \
