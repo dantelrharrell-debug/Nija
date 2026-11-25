@@ -25,8 +25,14 @@ RUN /usr/local/bin/python -m pip install --no-cache-dir --disable-pip-version-ch
     && /usr/local/bin/python -c "import importlib.metadata as m; assert m.version('setuptools') == '84.1.0'" \
     && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/METADATA \
     && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+# Dashboard uses the Python PostgreSQL driver, not psql/pg_dump.
+# Keep libpq while excluding the optional client wrapper and its full Perl stack.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libpq5 \
+    && ! dpkg-query -W -f='${binary:Package} ${db:Status-Status}\n' perl libperl5.40 2>/dev/null \
+       | grep -Eq '^(perl|libperl5[.]40)(:[a-z0-9-]+)? installed$' \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=deps-builder /opt/venv /opt/venv
+RUN /opt/venv/bin/python -I -c "import psycopg2"
 
 # Copy application code
 COPY . .
