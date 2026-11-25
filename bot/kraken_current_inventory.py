@@ -1,11 +1,15 @@
 """One bounded private inventory observation on the selected live broker."""
 import json
+import logging
 import math
 import time
 from typing import Any
 
 from bot.kraken_authenticated_balance_provider import _snapshot_digest
 from scripts.nija_kraken_readonly_history_collector_v441 import PAGE_SIZE, _broker_account_scope
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class InventoryDenied(ValueError):
@@ -38,7 +42,12 @@ def read_current_inventory(broker: Any, monitoring_category: Any) -> dict:
     ):
         check_owner()
         start = time.time()
-        payload = read(endpoint, dict(params), category=monitoring_category)
+        LOGGER.info("KRAKEN_INVENTORY_READ endpoint=%s phase=started", endpoint)
+        try:
+            payload = read(endpoint, dict(params), category=monitoring_category)
+        except Exception:
+            LOGGER.info("KRAKEN_INVENTORY_READ endpoint=%s phase=raised", endpoint)
+            raise
         end = time.time()
         check_owner()
         if (not math.isfinite(end) or not 0 < start <= end or start < previous or not isinstance(payload, dict)
@@ -65,4 +74,5 @@ def read_current_inventory(broker: Any, monitoring_category: Any) -> dict:
         observations[endpoint] = {"started_at": start, "finished_at": end, "result": result}
         if endpoint == "OpenOrders":
             observations[endpoint]["request_mode"] = "all_unfiltered_no_limit"
+        LOGGER.info("KRAKEN_INVENTORY_READ endpoint=%s phase=validated", endpoint)
     return {"inventory_read_succeeded": True, "observations": observations}
