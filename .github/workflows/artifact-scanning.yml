@@ -46,15 +46,16 @@ jobs:
     - name: Build Docker image
       id: build-image
       run: |
+        set -euo pipefail
         # Dockerfiles do not accept GH_TOKEN; never pass GitHub secrets as build args.
         # Use Docker Hub to avoid ECR Public rate limits.
         # A failed pull still fails this job; scanners remain mandatory.
-        docker buildx build --load --no-cache \
+        docker buildx build --load --no-cache --progress=plain \
           --metadata-file "$RUNNER_TEMP/nija-container-build.json" \
           --build-arg PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
           -f ${{ matrix.dockerfile }} \
           -t ${{ steps.image-name.outputs.image }} \
-          .
+          . 2>&1 | tee "$RUNNER_TEMP/nija-container-build.log"
 
     - name: Record the local image selected for scanning
       id: scan-target
@@ -66,8 +67,17 @@ jobs:
         image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE")
         [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
         metadata="$RUNNER_TEMP/nija-container-build.json"
-        config_digest=$(jq -er '."containerimage.config.digest"' "$metadata")
-        manifest_digest=$(jq -er '."containerimage.digest"' "$metadata")
+        config_digest=$(jq -r '."containerimage.config.digest" // empty' "$metadata")
+        manifest_digest=$(jq -r '."containerimage.digest" // empty' "$metadata")
+        # The Docker archive exporter can omit digests from the metadata file.
+        # Use its plain export records when those fields are absent.
+        build_log="$RUNNER_TEMP/nija-container-build.log"
+        if [[ -z "$config_digest" ]]; then
+          config_digest=$(sed -En 's/^#[0-9]+ exporting config (sha256:[0-9a-f]{64}) done$/\1/p' "$build_log" | sort -u)
+        fi
+        if [[ -z "$manifest_digest" ]]; then
+          manifest_digest=$(sed -En 's/^#[0-9]+ exporting manifest (sha256:[0-9a-f]{64}) done$/\1/p' "$build_log" | sort -u)
+        fi
         [[ "$config_digest" == "$image_id" ]]
         [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
         commit=$(git rev-parse HEAD)
