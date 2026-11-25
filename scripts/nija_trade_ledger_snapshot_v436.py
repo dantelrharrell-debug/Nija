@@ -129,13 +129,8 @@ def _copy_companion(source: Path, destination: Path) -> bool:
     )
 
 
-def create_snapshot(
-    source: Path, output_dir: Path, *, require_submission_journal: bool = False,
-) -> dict[str, Any]:
+def create_snapshot(source: Path, output_dir: Path) -> dict[str, Any]:
     """Create an integrity-checked local archive; require an off-host copy."""
-    journal_setting = os.getenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", "").strip()
-    if require_submission_journal and not journal_setting:
-        raise ValueError("required submission journal is not configured")
     os.umask(0o077)
     output_dir.mkdir(parents=True, exist_ok=True)
     if output_dir.is_symlink() or not output_dir.is_dir():
@@ -158,6 +153,7 @@ def create_snapshot(
             companions_stable = companions_stable and stable
             sources.append((name, destination, stable))
         journal_counts = None
+        journal_setting = os.getenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", "").strip()
         if journal_setting:
             journal_path = Path(journal_setting)
             journal_copy = stage_dir / SUBMISSION_JOURNAL
@@ -212,7 +208,7 @@ def create_snapshot(
         finally:
             if temp_path.exists():
                 temp_path.unlink()
-    verified = verify_snapshot(archive_path, require_submission_journal=require_submission_journal)
+    verified = verify_snapshot(archive_path)
     result = {
         "archive": str(archive_path),
         "sha256": _sha256(archive_path),
@@ -364,7 +360,7 @@ def _unpack_bounded_archive(archive_path: Path, stage_dir: Path) -> tuple[str, .
 
 def verify_snapshot(
     archive_path: Path, *, expected_sha256: str | None = None,
-    exercise_restore: bool = False, require_submission_journal: bool = False,
+    exercise_restore: bool = False,
 ) -> dict[str, Any]:
     """Pin source bytes once, then bounded-decode and test only an isolated copy.
 
@@ -445,8 +441,6 @@ def verify_snapshot(
         journal_present = SUBMISSION_JOURNAL in names
         if journal_present != ("submission_journal_sqlite_tables" in manifest):
             raise ValueError("submission journal metadata and member mismatch")
-        if require_submission_journal and not journal_present:
-            raise ValueError("required submission journal is missing from archive")
         journal_counts = None
         if journal_present:
             journal_counts = _validate_database(stage_dir / SUBMISSION_JOURNAL, SUBMISSION_JOURNAL_TABLES)
@@ -495,22 +489,12 @@ def main() -> int:
         "--expected-sha256", required=True,
         help="archive digest recorded on the original host before transfer",
     )
-    for command in (backup, check, restoration):
-        command.add_argument(
-            "--require-submission-journal", action="store_true",
-            help="Fail if the durable Kraken submission journal is missing",
-        )
     args = parser.parse_args()
     try:
         if args.action == "backup":
-            result = create_snapshot(
-                Path(args.source), Path(args.output_dir),
-                require_submission_journal=args.require_submission_journal,
-            )
+            result = create_snapshot(Path(args.source), Path(args.output_dir))
         elif args.action == "verify":
-            manifest = verify_snapshot(
-                Path(args.archive), require_submission_journal=args.require_submission_journal,
-            )
+            manifest = verify_snapshot(Path(args.archive))
             result = {
                 "integrity": "verified",
                 "sqlite_tables": manifest["sqlite_tables"],
@@ -523,7 +507,6 @@ def main() -> int:
                 Path(args.archive),
                 expected_sha256=args.expected_sha256,
                 exercise_restore=True,
-                require_submission_journal=args.require_submission_journal,
             )
             result = {
                 "integrity": "verified",
@@ -536,8 +519,6 @@ def main() -> int:
                 "NOTE": "This validates the supplied copy, not where it is stored or whether "
                         "history is complete; independently attest off-host retention.",
             }
-        if args.require_submission_journal:
-            result["submission_journal_verified"] = True
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     except Exception as exc:

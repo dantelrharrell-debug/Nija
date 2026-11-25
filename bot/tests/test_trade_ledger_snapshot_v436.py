@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts import nija_kraken_journal_backup as journal_backup
+
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "nija_trade_ledger_snapshot_v436.py"
 spec = importlib.util.spec_from_file_location("nija_trade_ledger_snapshot_v436", SCRIPT)
@@ -252,15 +254,11 @@ def test_configured_submission_journal_roundtrip_preserves_order_fence(tmp_path,
     journal.reserve("awaiting-terminal-proof")
     monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal_path))
 
-    report = snapshot.create_snapshot(
-        source, tmp_path / "exports", require_submission_journal=True,
-    )
+    report = journal_backup.capture(source, tmp_path / "exports")
+    assert report["submission_journal_verified"] is True
     archive = Path(report["archive"])
-    verified = snapshot.verify_snapshot(
-        archive, expected_sha256=report["sha256"], exercise_restore=True,
-        require_submission_journal=True,
-    )
-    assert verified["submission_journal_sqlite_tables"]["submission"] == 1
+    verified = journal_backup.restore(archive, expected_sha256=report["sha256"])
+    assert verified["submission_journal_verified"] is True
     assert verified["isolated_restore_test_verified"] is True
     assert verified["live_trading_eligible"] is False
 
@@ -293,13 +291,10 @@ def test_journal_required_for_strict_capture_and_restore(tmp_path, monkeypatch):
     monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
     exports = tmp_path / "exports"
     with pytest.raises(ValueError, match="required submission journal is not configured"):
-        snapshot.create_snapshot(source, exports, require_submission_journal=True)
+        journal_backup.capture(source, exports)
     assert not exports.exists()
 
     report = snapshot.create_snapshot(source, exports)
     archive = Path(report["archive"])
     with pytest.raises(ValueError, match="required submission journal is missing from archive"):
-        snapshot.verify_snapshot(
-            archive, expected_sha256=report["sha256"], exercise_restore=True,
-            require_submission_journal=True,
-        )
+        journal_backup.restore(archive, expected_sha256=report["sha256"])
