@@ -2,34 +2,69 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import sys
+from tempfile import TemporaryDirectory
 
 from scripts import nija_trade_ledger_snapshot_v436 as snapshot
 
 
-def _require_verified_journal(manifest: dict) -> None:
-    if "submission_journal_sqlite_tables" not in manifest:
-        raise ValueError("required submission journal is missing from archive")
+def _verify_account_journal(archive: Path, *, expected_sha256: str, exercise_restore: bool) -> None:
+    max_archive = (
+        snapshot.MAX_SQLITE_BYTES + snapshot.MAX_MANIFEST_BYTES
+        + (len(snapshot.OPTIONAL_FILES) + 1) * snapshot.MAX_COMPANION_BYTES + 2 * 1024 * 1024
+    )
+    with TemporaryDirectory(prefix="nija-journal-verify-") as temporary:
+        stage = Path(temporary)
+        pinned = stage / "input.tar.gz"
+        fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as source, pinned.open("xb") as target:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > max_archive:
+                raise ValueError("unsafe or oversized source archive")
+            remaining = info.st_size
+            while remaining:
+                chunk = source.read(min(remaining, snapshot.CHUNK_SIZE))
+                if not chunk:
+                    raise ValueError("source archive changed during snapshot")
+                target.write(chunk)
+                remaining -= len(chunk)
+            if source.read(1):
+                raise ValueError("source archive changed during snapshot")
+
+        manifest = snapshot.verify_snapshot(
+            pinned, expected_sha256=expected_sha256, exercise_restore=exercise_restore,
+        )
+        if "submission_journal_sqlite_tables" not in manifest:
+            raise ValueError("required submission journal is missing from archive")
+        snapshot._unpack_bounded_archive(pinned, stage)
+        journal = stage / snapshot.SUBMISSION_JOURNAL
+        with closing(sqlite3.connect(journal.as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
+            if db.execute("SELECT scope FROM account LIMIT 2").fetchall() != [("platform:kraken",)]:
+                raise ValueError("submission journal account scope mismatch")
+            if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise ValueError("submission journal contains invalid references")
 
 
 def capture(source: Path, output_dir: Path) -> dict:
     if not os.getenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", "").strip():
         raise ValueError("required submission journal is not configured")
     report = snapshot.create_snapshot(source, output_dir)
-    manifest = snapshot.verify_snapshot(Path(report["archive"]), expected_sha256=report["sha256"])
-    _require_verified_journal(manifest)
+    _verify_account_journal(
+        Path(report["archive"]), expected_sha256=report["sha256"], exercise_restore=False,
+    )
     return {**report, "submission_journal_verified": True, "live_trading_eligible": False}
 
 
 def restore(archive: Path, *, expected_sha256: str) -> dict:
     if not isinstance(expected_sha256, str) or not expected_sha256.strip():
         raise ValueError("independently recorded archive SHA-256 is required")
-    manifest = snapshot.verify_snapshot(archive, expected_sha256=expected_sha256, exercise_restore=True)
-    _require_verified_journal(manifest)
+    _verify_account_journal(archive, expected_sha256=expected_sha256, exercise_restore=True)
     return {
         "expected_archive_sha256_matched": True,
         "isolated_restore_test_verified": True,

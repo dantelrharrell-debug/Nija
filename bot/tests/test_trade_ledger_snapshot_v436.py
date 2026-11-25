@@ -300,3 +300,25 @@ def test_journal_required_for_strict_capture_and_restore(tmp_path, monkeypatch):
         journal_backup.restore(archive, expected_sha256=None)
     with pytest.raises(ValueError, match="required submission journal is missing from archive"):
         journal_backup.restore(archive, expected_sha256=report["sha256"])
+
+
+@pytest.mark.parametrize("problem", ["wrong_scope", "orphan_resolution"])
+def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch, problem):
+    from bot.kraken_submission_journal import initialize_journal
+
+    source = tmp_path / "live.db"
+    _ledger(source)
+    journal = tmp_path / "writer.db"
+    scope = "platform:other" if problem == "wrong_scope" else "platform:kraken"
+    initialize_journal(journal, scope)
+    if problem == "orphan_resolution":
+        with sqlite3.connect(journal) as db:
+            db.execute("INSERT INTO submission_resolution VALUES (?, ?, ?, ?, ?)",
+                       ("missing-intent", 1, "closed", "a" * 64, "b" * 64))
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal))
+    expected = "account scope mismatch" if problem == "wrong_scope" else "invalid references"
+    with pytest.raises(ValueError, match=expected):
+        journal_backup.capture(source, tmp_path / "strict")
+    archive = snapshot.create_snapshot(source, tmp_path / "legacy")
+    with pytest.raises(ValueError, match=expected):
+        journal_backup.restore(Path(archive["archive"]), expected_sha256=archive["sha256"])
