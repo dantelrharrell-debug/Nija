@@ -202,6 +202,13 @@ def _rows_from_observation(broker: Any, observation: Mapping[str, Any]) -> list[
     return [dict(row) for row in rows]
 
 
+def _snapshot_epoch(broker: Any) -> tuple[int, int]:
+    return (
+        getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0),
+        getattr(broker, "_nija_authoritative_position_failure_serial_v286", 0),
+    )
+
+
 def _log_handoff(broker: Any, observation: Mapping[str, Any], rows: list[dict[str, Any]], source: str) -> None:
     LOGGER.critical(
         "KRAKEN_BALANCE_EPOCH_V312_HANDOFF marker=%s account=%s source=%s held_assets=%d "
@@ -267,7 +274,7 @@ def _patch_v286_finish_flight() -> bool:
             # Valuation can perform bounded public I/O. Keep it outside the
             # writer lock, then recheck the exact observation before publishing.
             rows = _build_observation_rows(broker, observation)
-            with v286._AUTH_LOCK:
+            with v286._AUTH_LOCK, _LOCK:
                 fresh = _fresh_observation(broker, not_before=started_at)
                 if fresh is not None and fresh.get("identity") is observation["identity"]:
                     generation = v286._record_snapshot_success(broker, rows)
@@ -310,16 +317,28 @@ def _patch_v286_authoritative_positions() -> bool:
     @wraps(original)
     def authoritative_positions_v312(broker: Any):
         attempt_started = time.monotonic()
+        with v286._AUTH_LOCK:
+            initial_epoch = _snapshot_epoch(broker)
         try:
             return original(broker)
         except TimeoutError as timeout_exc:
             observation = _fresh_observation(broker, not_before=attempt_started)
-            if observation is None:
+            if observation is None or observation.get("identity") is None:
                 raise
             try:
-                rows = _rows_from_observation(broker, observation)
-                _log_handoff(broker, observation, rows, "bounded_wait_timeout_recovery")
-                return rows
+                rows = _build_observation_rows(broker, observation)
+                # A timed-out caller must not replace a worker publication
+                # or revive evidence after an authoritative failure.
+                with v286._AUTH_LOCK, _LOCK:
+                    fresh = _fresh_observation(broker, not_before=attempt_started)
+                    if (
+                        _snapshot_epoch(broker) != initial_epoch
+                        or fresh is None
+                        or fresh.get("identity") is not observation["identity"]
+                    ):
+                        fresh = None
+                    else:
+                        v286._record_snapshot_success(broker, rows)
             except Exception as exc:
                 LOGGER.warning(
                     "KRAKEN_BALANCE_EPOCH_V312_HANDOFF_DEFERRED marker=%s account=%s "
@@ -331,6 +350,10 @@ def _patch_v286_authoritative_positions() -> bool:
                     exc,
                 )
                 raise timeout_exc from exc
+            if fresh is None:
+                raise
+            _log_handoff(broker, fresh, rows, "bounded_wait_timeout_recovery")
+            return [dict(row) for row in rows]
 
     setattr(authoritative_positions_v312, _V286_POSITIONS_PATCH_ATTR, True)
     setattr(authoritative_positions_v312, "__wrapped__", original)
