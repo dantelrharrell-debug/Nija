@@ -38,6 +38,17 @@ def test_matches_first_paid_test_clock_invoice_and_accepts_later_finalization():
     assert verify()
 
 
+def test_fractional_trial_end_matches_next_whole_stripe_second():
+    due = DUE + timedelta(microseconds=500001)
+    run = replace(RUN, rehearsal=replace(RUN.rehearsal, first_charge_at=due))
+    stripe_due = DUE + timedelta(seconds=1)
+
+    assert verify(replace(RECEIPT, period_start=stripe_due, paid_at=stripe_due), run)
+    assert not verify(replace(RECEIPT, period_start=DUE), run)
+    assert not verify(replace(RECEIPT, period_start=stripe_due, paid_at=DUE), run)
+    assert not verify(replace(RECEIPT, period_start=stripe_due + timedelta(seconds=1)), run)
+
+
 @pytest.mark.parametrize("change", [
     dict(account_id="acct_wrong"), dict(livemode=True), dict(livemode=0),
     dict(test_clock_id="clock_wrong"), dict(subscription_id="sub_wrong"),

@@ -8,7 +8,7 @@ Never use webhook data or request-supplied fields as the independent readback.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from founding_trial_sandbox_workflow import (
@@ -67,8 +67,8 @@ def _aware(value: object) -> bool:
 def verify_first_sandbox_invoice(run: TestBillingRun, reader: SandboxInvoiceReader) -> bool:
     """Pass only the intended simulation's first and only $50 positive invoice.
 
-    The provider's billing-period start must equal the disclosed due timestamp.
-    Finalization/payment may occur later, but must not precede this timestamp.
+    The billing-period start must equal the first whole Stripe second at or
+    after the disclosed due time. Payment cannot precede that provider period.
     Zero-dollar trial invoices are deliberately excluded from positive IDs.
     """
     if not isinstance(run, TestBillingRun) or not isinstance(run.rehearsal, SandboxBillingRehearsal):
@@ -85,6 +85,10 @@ def verify_first_sandbox_invoice(run: TestBillingRun, reader: SandboxInvoiceRead
     ):
         return False
     try:
+        due = rehearsal.first_charge_at.astimezone(timezone.utc)
+        provider_start = due.replace(microsecond=0)
+        if due.microsecond:
+            provider_start += timedelta(seconds=1)
         invoice = reader.read_invoice(run.invoice_id)
         return (
             isinstance(invoice, SandboxInvoiceReadback)
@@ -96,9 +100,9 @@ def verify_first_sandbox_invoice(run: TestBillingRun, reader: SandboxInvoiceRead
             and invoice.price_ids == (FOUNDING_STRIPE_TEST_PRICE,)
             and invoice.positive_invoice_ids == (run.invoice_id,)
             and _aware(invoice.period_start)
-            and invoice.period_start == rehearsal.first_charge_at
+            and invoice.period_start.astimezone(timezone.utc) == provider_start
             and _aware(invoice.paid_at)
-            and invoice.paid_at >= rehearsal.first_charge_at
+            and invoice.paid_at.astimezone(timezone.utc) >= provider_start
             and invoice.status == "paid"
             and invoice.currency == "usd"
             and type(invoice.amount_due) is int
