@@ -1,10 +1,34 @@
 """Synthetic ledger tests; no broker, Stripe or production credentials."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
+import sqlite3
 
 import pytest
 
 from founding_trial_ledger import ExecutionOwnershipConflict, FoundingTrialLedger
+
+
+@pytest.mark.parametrize("operation", ["record_fill", "cancel"])
+def test_failed_write_lock_preserves_original_error(tmp_path, monkeypatch, operation):
+    path = tmp_path / "trial.db"
+    ledger = FoundingTrialLedger(path)
+    connect = ledger._connect
+
+    def without_wait():
+        conn = connect()
+        conn.execute("PRAGMA busy_timeout=0")
+        return conn
+
+    monkeypatch.setattr(ledger, "_connect", without_wait)
+    arguments = ("member",)
+    if operation == "record_fill":
+        arguments += ("execution", datetime.now(timezone.utc))
+    with closing(sqlite3.connect(path)) as blocker:
+        blocker.execute("BEGIN IMMEDIATE")
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            getattr(ledger, operation)(*arguments)
+    assert ledger.get("member") is None
 
 T0 = datetime(2026, 11, 23, 16, 0, tzinfo=timezone.utc)
 
