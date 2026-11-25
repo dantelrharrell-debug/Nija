@@ -84,7 +84,11 @@ jobs:
             bot/tests/test_commissioning_gate.py \
             bot/tests/test_commissioning_runtime.py \
             tests/test_kraken_collector_connection.py \
-            tests/test_kraken_reviewed_collector_bridge.py
+            tests/test_kraken_reviewed_collector_bridge.py \
+            tests/test_kraken_single_publication_handoff.py \
+            tests/test_runtime_kraken_balance_epoch_handoff_v312.py \
+            tests/test_runtime_kraken_position_refresh_liveness_v286.py \
+            bot/tests/test_trade_ledger_snapshot_v436.py
 
       - name: Verify Kraken source and final-interpreter startup contract offline
         env:
