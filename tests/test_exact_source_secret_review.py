@@ -426,7 +426,7 @@ def test_real_scan_wrapper_rejects_changed_review_before_detection(tmp_path):
     commit()  # A clean committed checkout must still fail its stale review.
     result = invoke()
     assert result.returncode == 2
-    assert json.loads(report.read_text())["outcome"] == "scanner_error"
+    assert json.loads(report.read_text())["outcome"] == "reviewed_source_context_changed"
     assert "changed source must remain private" not in report.read_text() + result.stdout + result.stderr
 
 
