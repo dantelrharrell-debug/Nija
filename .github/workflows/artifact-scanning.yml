@@ -49,11 +49,47 @@ jobs:
         # Dockerfiles do not accept GH_TOKEN; never pass GitHub secrets as build args.
         # Use Docker Hub to avoid ECR Public rate limits. 
         # A failed pull still fails this job; scanners remain mandatory. 
-        docker build --no-cache \
-          --build-arg PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
-          -f ${{ matrix.dockerfile }} \
-          -t ${{ steps.image-name.outputs.image }} \
-          .
+        if [ "$GITHUB_HEAD_REF" = "test/kraken-bookworm-image-20261125" ] && [ "${{ matrix.dockerfile }}" = "Dockerfile" ]; then
+          docker buildx build --load --no-cache --platform linux/amd64 \
+            --build-arg PYTHON_BASE=python:3.11-slim-bookworm@sha256:0f6686ddd2ccdb042d2b5b15f1cc6f015b2fdf5dc159fcccd9d4ad9d70904898 \
+            --metadata-file "$RUNNER_TEMP/nija-bookworm-image.json" \
+            -f Dockerfile -t "${{ steps.image-name.outputs.image }}" .
+        else
+          docker build --no-cache \
+            --build-arg PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
+            -f ${{ matrix.dockerfile }} \
+            -t ${{ steps.image-name.outputs.image }} \
+            .
+        fi
+
+    - name: Verify experimental image identity and offline smoke
+      if: ${{ github.head_ref == 'test/kraken-bookworm-image-20261125' && matrix.dockerfile == 'Dockerfile' }}
+      run: |
+        set -euo pipefail
+        image="${{ steps.image-name.outputs.image }}"
+        image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+        python - "$RUNNER_TEMP/nija-bookworm-image.json" "$image_id" <<'PY'
+        import json
+        import re
+        import sys
+        from pathlib import Path
+        metadata = json.loads(Path(sys.argv[1]).read_text())
+        manifest_digest = metadata['containerimage.digest']
+        assert re.fullmatch(r'sha256:[0-9a-f]{64}', manifest_digest)
+        assert metadata['containerimage.config.digest'] == sys.argv[2]
+        print('Scan manifest digest:', manifest_digest)
+        print('Scan image config digest:', sys.argv[2])
+        PY
+        docker run --rm --network none --entrypoint /bin/sh "$image" -ec \
+          'python -S -c "import sqlite3, ssl; assert sqlite3.sqlite_version and ssl.OPENSSL_VERSION"; git --version; redis-cli --version'
+
+    - name: Retain experimental image identity
+      if: ${{ github.head_ref == 'test/kraken-bookworm-image-20261125' && matrix.dockerfile == 'Dockerfile' && steps.build-image.outcome == 'success' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: bookworm-production-image-identity
+        path: ${{ runner.temp }}/nija-bookworm-image.json
+        if-no-files-found: error
 
     - name: Run Trivy vulnerability scanner
       run: |
