@@ -111,9 +111,12 @@ class RedisEvidenceTests(unittest.TestCase):
     """Strict certification denials and field-specific v452 output."""
 
     def setUp(self):
+        self.configure_inventory("a" * 64, ("reviewed:dedup", "reviewed:writer", "reviewed:nonce"), "d" * 64)
+
+    def configure_inventory(self, api_key_sha256, provider_ids, deployment_sha256):
         self.redis = ReadOnlyRedis()
         self.scope = ScopeObservation(
-            account="platform:kraken", api_key_sha256="a" * 64,
+            account="platform:kraken", api_key_sha256=api_key_sha256,
             process_lock_value="fence-token:instance=reviewed;boot=reviewed-boot",
             process_generation=12, nonce_owner="nonce-owner",
             nonce_fingerprint="nonce-process-fingerprint", nonce_lease_version=7,
@@ -129,10 +132,10 @@ class RedisEvidenceTests(unittest.TestCase):
         self.signing_key = b"unit-test-only-not-a-production-credential"
         self.manifest_key, self.members_key, self.record_prefix = inventory_keys(self.scope.account)
         self.binding = ReviewedBinding(
-            expected_scope=self.scope, provider_ids=("reviewed:dedup", "reviewed:writer", "reviewed:nonce"),
+            expected_scope=self.scope, provider_ids=provider_ids,
             review_reference="independent-review:fixture", coverage_sha256="0" * 64,
             submission_routes=("private:AddOrder", "pipeline:retry"),
-            deployment_sha256="d" * 64, source_binding_sha256="e" * 64, observe_scope=lambda: self.scope,
+            deployment_sha256=deployment_sha256, source_binding_sha256="e" * 64, observe_scope=lambda: self.scope,
             verify_coverage=lambda payload, signature: hmac.compare_digest(
                 hmac.new(self.signing_key, payload, hashlib.sha256).hexdigest(), signature),
         )

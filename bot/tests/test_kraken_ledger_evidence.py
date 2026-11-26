@@ -899,7 +899,7 @@ class KrakenLedgerEvidenceTests(unittest.TestCase):
         self.assertFalse(self.broker.calls)
         self.assertFalse(any(name == "bot" or name.startswith("bot.") for name in set(sys.modules) - before))
         self.assertEqual(module.__all__, [
-            "KrakenLedgerDenied", "ReviewedLedgerBinding", "make_kraken_ledger_evidence_provider",
+            "KrakenLedgerDenied", "ReviewedLedgerBinding", "ReviewedOpeningBaseline", "make_kraken_ledger_evidence_provider",
             "make_kraken_terminal_order_verifier", "offline_ledger_schema_sql",
         ])
 
