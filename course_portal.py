@@ -24,6 +24,7 @@ from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from course_fulfillment import expected_course_identity, expected_course_link, CourseLedger, reconcile_session
+from course_private_video import configured_catalog, video_response
 
 log = logging.getLogger("nija.billing.course_portal")
 COOKIE = "nija_foundations_session"
@@ -586,7 +587,30 @@ def register_course_portal(app, billing_store):
         body += '<div class="card"><ul>' + "".join(entries) + '</ul>' + player + '</div>'
         body += '<p><a href="/course-portal/file/NIJA_Foundations_Customer_Package.zip">Download complete package</a></p>'
         body += '<p>Scripts are not finished lesson videos. The certificate is a template.</p>'
+        _, videos = configured_catalog()
+        if videos:
+            body += '<section><h2>Lesson videos</h2>'
+            for key, item in videos.items():
+                body += ('<h3>' + html.escape(item["title"]) + '</h3>'
+                         '<video controls playsinline preload="none" style="width:100%" '
+                         'src="/course-portal/video/' + key + '"></video>')
+            body += '</section>'
         return _layout("Your Course Library", body)
+
+    @portal.get("/video/<lesson_id>")
+    def lesson_video(lesson_id):
+        # Revalidate the existing paid entitlement on every request, including seeks.
+        rec = _session_record() if _enabled(current_app) else None
+        if not rec:
+            return jsonify({"error": "verified_course_access_required"}), 403
+        root, videos = configured_catalog()
+        entry = videos.get(lesson_id)
+        if not entry or root is None:
+            return jsonify({"error": "asset_not_available"}), 404
+        try:
+            return video_response(root, entry)
+        except (OSError, ValueError):
+            return jsonify({"error": "asset_not_available"}), 404
 
     @portal.get("/file/<filename>")
     def file_download(filename):
