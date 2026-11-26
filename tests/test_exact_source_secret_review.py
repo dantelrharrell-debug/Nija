@@ -255,16 +255,10 @@ def test_supplemental_tiq72_review_is_source_bound_and_exact():
 
 def test_supplemental_source_drift_fails_closed(tmp_path):
     """Changed reviewed source must not inherit its old detector exception."""
-    review = json.loads((ROOT / TIQ72_MANIFEST).read_text())
-    manifest = tmp_path / TIQ72_MANIFEST
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(json.dumps(review))
-    for path in review["files"]:
-        source = tmp_path / path
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_bytes((ROOT / path).read_bytes())
+    # The checkout checks above enforce the actual approved review. Use an
+    # internally consistent fixture here so existing drift cannot mask this denial.
+    target, _ = fixture_review(tmp_path, manifest_path=TIQ72_MANIFEST)
     assert check_context(tmp_path, TIQ72_MANIFEST)
-    target = tmp_path / review["entries"][0]["path"]
     target.write_bytes(target.read_bytes() + b"\n// unreviewed code change\n")
     assert not check_context(tmp_path, TIQ72_MANIFEST)
 
@@ -335,10 +329,10 @@ def test_review_adds_only_the_exact_142_reviewed_identities():
     assert all(x["is_secret"] is False and x["is_verified"] is False for x in additions)
 
 
-def fixture_review(root, contents="public format marker\n"):
+def fixture_review(root, contents="public format marker\n", *, manifest_path=MANIFEST):
     source = root / "probe.py"
     source.write_text(contents)
-    manifest = root / MANIFEST
+    manifest = root / manifest_path
     manifest.parent.mkdir(parents=True)
     manifest.write_text(json.dumps({
         "schema_version": 1,
