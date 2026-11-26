@@ -19,13 +19,18 @@ populate the following additive contract before this reader can succeed:
   Active 'pending' rows must still be open; 'reconciled' rows must be terminal,
   fully represented by persisted fills. Unknown states deny.
 * ledger_evidence_state stores schema_version=1, revision, observed_at_epoch,
-  history_from_genesis=1 and unresolved_submission_count=0. Its source timestamp
+  and unresolved_submission_count=0. It marks history_from_genesis=1 for
+  complete historical reconciliation and 0 for a separately reviewed opening.
+  Its source timestamp
   is written by the persistence owner, NEVER refreshed by this reader.
 
 The strict initial contract supports fully attributed long BTC/USD and ETH/USD
 spot lots and quote-currency fees only. Deposited base assets, margin, other pairs, missing
-opening basis and unknown assets deny rather than invent accounting. Full
-authenticated Ledgers must balance from genesis and corroborate every fill.
+opening basis and unknown assets deny rather than invent accounting. The
+genesis path requires full authenticated Ledgers and matches every fill.
+The optional opening path pins authenticated history through a reviewed cutoff
+and exact historical rows and opening inventory from independent evidence.
+It covers zero post-cutoff activity only and cannot verify terminal submissions.
 The persistent root is an externally reviewed mount, not a durability claim;
 backup/restore, P&L, and atomic exchange snapshots are NOT certified.
 
@@ -148,6 +153,26 @@ class KrakenLedgerDenied(ValueError):
 
 
 @dataclass(frozen=True, eq=False)
+class ReviewedOpeningBaseline:
+    """Independently pinned, short-lived opening for a restart with no later activity.
+
+    The exact binding reviewer must verify the account and retained source
+    evidence, lot allocations, exit coverage, and why each pinned historical
+    exception cannot affect current exposure, orders, or outstanding intents.
+    The reader compares the reviewed pins to fresh authenticated and local data.
+    """
+
+    account: str
+    account_sha256: str
+    api_key_sha256: str
+    cutoff_epoch: float
+    expires_at_epoch: float
+    history_sha256: str
+    historical_rows_sha256: str
+    opening_inventory_sha256: str
+
+
+@dataclass(frozen=True, eq=False)
 class ReviewedLedgerBinding:
     """Exact objects and pins for an external, independently reviewed binding."""
 
@@ -161,6 +186,7 @@ class ReviewedLedgerBinding:
     monitoring_category: Any
     # Included in the exact binding reviewed by review_binding; never auto-selected.
     identity_method: str = "response_echo"
+    opening_baseline: ReviewedOpeningBaseline | None = None
 
 
 def _require(condition: bool, code: str) -> None:
@@ -257,6 +283,9 @@ def _routing_scope(broker: Any) -> str:
 def _private_reader(binding: ReviewedLedgerBinding) -> Callable:
     """Pin only the existing nonce-owning transport; never instantiate a client."""
     transport = getattr(binding.broker, "_kraken_private_call", None)
+    point_reads = {"Balance", "GetApiKeyInfo"}
+    if binding.opening_baseline is not None:
+        point_reads.update(("BalanceEx", "OpenPositions"))
     _require(callable(transport) and binding.monitoring_category is not None, "authenticated_transport_required")
 
     def read(endpoint: str, params: dict) -> Mapping:
@@ -269,7 +298,7 @@ def _private_reader(binding: ReviewedLedgerBinding) -> Callable:
         if endpoint == "OpenOrders":
             valid_keys.add("limit")
         _require((history and set(params) <= valid_keys and params.get("with_cursor") is True)
-                 or (endpoint in {"Balance", "GetApiKeyInfo"} and not params),
+                 or (endpoint in point_reads and not params),
                  "non_read_only_request_denied")
         _require(_routing_scope(binding.broker) == binding.account
                  and getattr(binding.broker, "_kraken_private_call", None) == transport,
@@ -342,7 +371,7 @@ def _identity(
              and (int(expiry) == 0 or int(expiry) > now)), "authenticated_key_expired_or_invalid")
 
 
-def _collect(read: Callable, max_pages: int) -> dict:
+def _collect(read: Callable, max_pages: int, *, check_opening: bool = False) -> dict:
     """Full cursor exhaustion, repeated history/orders, balance brackets (v441)."""
     def pages(endpoint: str, field: str) -> dict:
         rows, seen = {}, set()
@@ -379,11 +408,22 @@ def _collect(read: Callable, max_pages: int) -> dict:
         )}
 
     balance = read("Balance", {})
+    if check_opening:
+        wallet = read("BalanceEx", {})
+        _require(read("OpenPositions", {}) == {}, "opening_margin_exposure")
     first = history()
     _require(first == history(), "authenticated_history_changed")
     orders = pages("OpenOrders", "open")
     _require(orders == pages("OpenOrders", "open"), "authenticated_open_orders_changed")
     _require(balance == read("Balance", {}), "authenticated_balances_changed")
+    if check_opening:
+        _require(wallet == read("BalanceEx", {}) and read("OpenPositions", {}) == {},
+                 "opening_wallet_or_margin_changed")
+        _require(set(wallet) == set(balance) and all(
+            _number(row["balance"]) == _number(balance[asset])
+            and _number(row["credit"]) == _number(row["credit_used"]) == 0
+            for asset, row in wallet.items()
+        ), "opening_margin_or_wallet_unverified")
     return {"history": first, "open_orders": orders, "balance": balance}
 
 
@@ -460,7 +500,7 @@ def _snapshot(
         states = output["ledger_evidence_state"]
         _require(len(states) == 1, "ledger_snapshot_state_missing_or_duplicate")
         state = states[0]
-        _require(state["schema_version"] == 1 and state["history_from_genesis"] == 1
+        _require(state["schema_version"] == 1 and state["history_from_genesis"] == int(binding.opening_baseline is None)
                  and state["unresolved_submission_count"] == expected_unresolved
                  and _identifier(state["revision"]), "ledger_snapshot_state_unverified")
         _stamp(state["observed_at_epoch"], now)
@@ -472,7 +512,7 @@ def _snapshot(
         db.execute("ROLLBACK")
 
 
-def _reconcile(local: Mapping, observed: Mapping) -> tuple[dict, dict]:
+def _reconcile(local: Mapping, observed: Mapping, *, opening: bool = False) -> tuple[dict, dict]:
     history, broker_open = observed["history"], observed["open_orders"]
     trades, closed = history["trades"], history["closed"]
     _require(not set(closed) & set(broker_open), "broker_order_state_conflict")
@@ -481,6 +521,11 @@ def _reconcile(local: Mapping, observed: Mapping) -> tuple[dict, dict]:
     per_order = defaultdict(list)
     lots = defaultdict(lambda: Decimal("0"))
     lot_pairs = {}
+    if opening:
+        for row in local["open_positions"]:
+            lot = row["position_id"]
+            lots[lot] = _number(row["quantity"])
+            lot_pairs[lot] = _pair(row["symbol"])
     for row in local["trade_ledger"]:
         tid, oid, lot = row["exchange_trade_id"], _exchange_id(row["exchange_order_id"]), row["position_id"]
         _require(_identifier(tid) and tid.startswith("T") and tid not in fills
@@ -556,8 +601,9 @@ def _reconcile(local: Mapping, observed: Mapping) -> tuple[dict, dict]:
         _require(asset not in seen_assets, "duplicate_balance_asset_alias")
         seen_assets.add(asset)
         balances[asset] = _number(amount)
-    _require(all(asset_totals[asset] == balances[asset] for asset in set(asset_totals) | set(balances)),
-             "exchange_ledger_balance_mismatch")
+    if not opening:
+        _require(all(asset_totals[asset] == balances[asset] for asset in set(asset_totals) | set(balances)),
+                 "exchange_ledger_balance_mismatch")
     positions, base_totals, used = {}, defaultdict(lambda: Decimal("0")), set()
     for row in local["open_positions"]:
         lot = row["position_id"]
@@ -585,6 +631,8 @@ def _reconcile(local: Mapping, observed: Mapping) -> tuple[dict, dict]:
              "unaccounted_ledger_position")
     _require(all(base_totals[asset] == balances[asset] for asset in {"BTC", "ETH"}),
              "position_broker_balance_mismatch")
+    if opening:
+        _require(used == set(broker_open), "opening_order_without_protective_lot")
     pending_seen = set()
     for row in local["pending_kraken_closes"]:
         oid, lot = _exchange_id(row["exchange_order_id"]), row["position_id"]
@@ -608,6 +656,69 @@ def _reconcile(local: Mapping, observed: Mapping) -> tuple[dict, dict]:
             _require(any(fill["exchange_trade_id"] == tid and fill["position_id"] == lot
                          for fill in local["trade_ledger"]), "pending_close_lot_mismatch")
     return positions, expected_orders
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
+
+def _validate_opening(binding: ReviewedLedgerBinding, now: float) -> None:
+    baseline = binding.opening_baseline
+    _require(type(baseline) is ReviewedOpeningBaseline
+             and (baseline.account, baseline.account_sha256, baseline.api_key_sha256)
+             == (binding.account, binding.account_sha256, binding.api_key_sha256),
+             "opening_account_binding_mismatch")
+    _require(all(type(epoch) in (int, float) and math.isfinite(epoch)
+                 for epoch in (baseline.cutoff_epoch, baseline.expires_at_epoch))
+             and 0 < baseline.cutoff_epoch <= now < baseline.expires_at_epoch,
+             "opening_cutoff_or_expiry_invalid")
+    _require(all(isinstance(pin, str) and re.fullmatch(r"[a-f0-9]{64}", pin)
+                 for pin in (baseline.history_sha256, baseline.historical_rows_sha256,
+                             baseline.opening_inventory_sha256)), "opening_evidence_pins_required")
+
+
+def _reconcile_opening(
+    local: dict, observed: dict, baseline: ReviewedOpeningBaseline,
+) -> tuple[dict, dict]:
+    history = observed["history"]
+    for family, field in (("trades", "time"), ("closed", "closetm"), ("ledger", "time")):
+        for row in history[family].values():
+            stamp = row.get(field)
+            _require(type(stamp) in (int, float) and math.isfinite(stamp)
+                     and 0 < stamp <= baseline.cutoff_epoch, "opening_history_outside_cutoff")
+    _require(_digest(history) == baseline.history_sha256, "opening_history_changed")
+    historical = {key: local[key] for key in ("trade_ledger", "pending_kraken_closes")}
+    _require(_digest(historical) == baseline.historical_rows_sha256, "opening_historical_rows_changed")
+
+    opening_lots = {row["position_id"] for row in local["open_positions"]}
+    for row in historical["pending_kraken_closes"]:
+        order_id = _exchange_id(row["exchange_order_id"])
+        order = history["closed"].get(order_id)
+        _require(order is not None and order_id not in observed["open_orders"]
+                 and row["position_id"] not in opening_lots
+                 and row["state"] in {"historical_unattributed", "reconciled"},
+                 "opening_close_may_affect_current_state")
+        description = order["descr"]
+        _require(order["status"] in {"closed", "canceled", "expired"}
+                 and row["side"] == description["type"] == "sell"
+                 and _pair(row["symbol"]) == _pair(description["pair"])
+                 and _number(row["quantity"]) == _number(order["vol"])
+                 and _number(row["executed"]) == _number(order["vol_exec"]) > 0
+                 and _number(row["fee"]) == _number(order["fee"]),
+                 "opening_historical_close_terms_mismatch")
+    inventory = {
+        "balance": observed["balance"],
+        "positions": local["open_positions"],
+        "orders": local["ledger_open_orders"],
+    }
+    _require(_digest(inventory) == baseline.opening_inventory_sha256, "opening_inventory_mismatch")
+    _require(not set(history["closed"]) & set(observed["open_orders"]), "broker_order_state_conflict")
+
+    # Use the reviewed opening lots as quantities without inventing fills.
+    # The normal position, order and exit checks still run on fresh inputs.
+    current = {**local, "trade_ledger": [], "pending_kraken_closes": []}
+    observed_current = {**observed, "history": {family: {} for family in history}}
+    return _reconcile(current, observed_current, opening=True)
 
 
 def make_kraken_ledger_evidence_provider(
@@ -681,16 +792,23 @@ def _make_ledger_observer(
         try:
             _require(review_binding(binding) is True, "reviewed_binding_revoked")
             started = _stamp(clock(), clock())
+            baseline = binding.opening_baseline
+            if baseline is not None:
+                _require(terminal_order is None, "opening_cannot_verify_terminal_submission")
+                _validate_opening(binding, started)
             db, path, file_before = _open(binding)
             version = db.execute("PRAGMA data_version").fetchone()[0]
             local = _snapshot(db, binding, clock(), expected_unresolved=expected_unresolved)
             _identity(read, binding, clock(), clock=clock)
-            observed = _collect(read, max_pages)
+            observed = _collect(read, max_pages, check_opening=baseline is not None)
             _identity(read, binding, clock(), clock=clock)
             # Preserve exact small fees/partial fills even beside large balances.
             with localcontext() as decimal_context:
                 decimal_context.prec = 256
-                positions, orders = _reconcile(local, observed)
+                if baseline is None:
+                    positions, orders = _reconcile(local, observed)
+                else:
+                    positions, orders = _reconcile_opening(local, observed, baseline)
             finished = clock()
             _stamp(started, finished)
             _require(local == _snapshot(db, binding, finished, expected_unresolved=expected_unresolved)
@@ -698,7 +816,10 @@ def _make_ledger_observer(
                      and file_before == _file_identity(path), "concurrent_ledger_change")
             _require(review_binding(binding) is True, "reviewed_binding_revoked")
             source_stamp = min(started, local["ledger_evidence_state"][0]["observed_at_epoch"])
-            digest = hashlib.sha256(json.dumps(local, sort_keys=True, allow_nan=False).encode()).hexdigest()
+            digest = _digest(local)
+            if baseline is not None:
+                _validate_opening(binding, finished)
+                digest = _digest({"ledger": digest, "baseline": vars(baseline)})
             if terminal_order is not None:
                 intent_id, order_id, reserved_at, client_order_id = terminal_order
                 closed = observed["history"]["closed"]
@@ -721,7 +842,9 @@ def _make_ledger_observer(
                     "observed_at": finished, "terminal_status": order["status"], "client_order_id": client_order_id,
                     "broker_evidence_sha256": broker_digest, "ledger_evidence_sha256": digest,
                 }
+            evidence_expiry = {} if baseline is None else {"expires_at_epoch": baseline.expires_at_epoch}
             return {
+                **evidence_expiry,
                 "account": binding.account, "verified": True, "read_only": True,
                 "scope_verified": True, "source": "independent_ledger",
                 "provider_id": binding.provider_id, "evidence_id": uuid.uuid4().hex,
@@ -749,6 +872,6 @@ def _make_ledger_observer(
 
 
 __all__ = [
-    "KrakenLedgerDenied", "ReviewedLedgerBinding", "make_kraken_ledger_evidence_provider",
+    "KrakenLedgerDenied", "ReviewedLedgerBinding", "ReviewedOpeningBaseline", "make_kraken_ledger_evidence_provider",
     "make_kraken_terminal_order_verifier", "offline_ledger_schema_sql",
 ]

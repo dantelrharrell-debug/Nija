@@ -2,6 +2,7 @@
 import copy
 import multiprocessing
 import socket
+import sqlite3
 import sys
 import time
 from dataclasses import replace
@@ -10,12 +11,14 @@ from unittest.mock import Mock
 
 import pytest
 
+from bot import kraken_ledger_evidence as native_ledger
 from bot import kraken_native_four_source_binding as four
 from bot import kraken_redis_evidence as redis
 from bot import kraken_startup_evidence_binding as startup
 from bot import kraken_protected_startup_root as root
 from bot import pretrade_independent_attestation as diagnostic
 from bot.pretrade_attestation_validation_v452 import REQUIRED
+from bot.startup_two_phase_policy_v8 import evaluate_startup_transition
 from bot.tests import test_kraken_ledger_evidence as ledger_data
 from bot.tests import test_kraken_operator_authorization as operator_data
 from bot.tests import test_kraken_redis_evidence as redis_data
@@ -84,8 +87,69 @@ def wire_writer(broker, inventory, monkeypatch):
     broker.api = SimpleNamespace(key=broker.key, _nonce=broker._kraken_private_call_nonce)
 
 
+def bind_opening(ledger, journal, now, fault):
+    broker = ledger.broker
+    cutoff = now - 10
+    broker.data["ClosedOrders"][ledger_data.BUY]["closetm"] = cutoff - 1
+    for row in broker.data["Ledgers"].values():
+        row["time"] = cutoff - 1
+
+    # The opening holding has no locally attributed historical fill.
+    # Retain a legacy terminal close outside the current opening lot.
+    legacy_order = ledger_data.SELL
+    broker.data["ClosedOrders"][legacy_order] = {
+        **ledger_data.order(executed="2"), "status": "closed", "closetm": cutoff - 1, "fee": "2",
+    }
+    with sqlite3.connect(journal.path) as db:
+        db.execute("DELETE FROM trade_ledger")
+    journal.scope["account_scope"] = ledger.account
+    journal.insert("pending_kraken_closes", {
+        "user_id": "platform", "exchange_order_id": legacy_order,
+        "state": "historical_unattributed", "symbol": "BTC-USD", "side": "sell",
+        "position_id": "legacy-lot", "quantity": "2", "executed": "2", "fee": "2",
+    })
+    db, _, _ = native_ledger._open(ledger)
+    try:
+        local = native_ledger._snapshot(db, ledger, now)
+    finally:
+        db.close()
+    history = {key: broker.data[endpoint] for key, endpoint in (
+        ("trades", "TradesHistory"), ("closed", "ClosedOrders"), ("ledger", "Ledgers"),
+    )}
+    baseline = native_ledger.ReviewedOpeningBaseline(
+        account=ledger.account, account_sha256=ledger.account_sha256, api_key_sha256=ledger.api_key_sha256,
+        cutoff_epoch=cutoff, expires_at_epoch=now + 45, history_sha256=native_ledger._digest(history),
+        historical_rows_sha256=native_ledger._digest({
+            key: local[key] for key in ("trade_ledger", "pending_kraken_closes")
+        }),
+        opening_inventory_sha256=native_ledger._digest({
+            "balance": broker.balance, "positions": local["open_positions"], "orders": local["ledger_open_orders"],
+        }),
+    )
+    journal.update("ledger_evidence_state", "history_from_genesis", 0)
+    if fault == "missing":
+        return ledger
+    if fault == "stale":
+        baseline = replace(baseline, expires_at_epoch=now - 1)
+    if fault == "wrong-account":
+        baseline = replace(baseline, account_sha256="0" * 64)
+    if fault == "holding":
+        broker.balance["XXBT"] = "3"
+    if fault == "order":
+        broker.data["OpenOrders"][ledger_data.SELL] = ledger_data.order()
+    if fault == "intent":
+        journal.update("ledger_evidence_state", "unresolved_submission_count", 1)
+    if fault == "exit":
+        del broker.data["OpenOrders"][ledger_data.STOP]
+    if fault == "replay":
+        broker.data["TradesHistory"][ledger_data.TID]["time"] = cutoff + 1
+    if fault == "legacy-change":
+        journal.update("pending_kraken_closes", "fee", "3")
+    return replace(ledger, opening_baseline=baseline)
+
+
 @pytest.fixture
-def rehearsal(protected, native_position_sources, kill_source, monkeypatch):
+def rehearsal(protected, native_position_sources, kill_source, monkeypatch, request):
     now = time.time()
     w = protected.wiring
     trust = w.signed.trust
@@ -93,10 +157,15 @@ def rehearsal(protected, native_position_sources, kill_source, monkeypatch):
     ledger = replace(native_position_sources.binding, provider_id=ids["position_ledger_reconciliation"])
     journal = native_position_sources.fixture
     journal.update("ledger_evidence_state", "observed_at_epoch", now - 3)
+    fault = getattr(request, "param", None)
+    if fault is not None:
+        ledger = bind_opening(ledger, journal, now, fault)
     broker = ledger.broker
     broker._nija_authoritative_position_snapshot_at_wall_v285 = now - 2
     w.sources.manager.platform_brokers = {"kraken": broker}
     monkeypatch.setitem(sys.modules, "bot.broker_manager", SimpleNamespace(KrakenBroker=type(broker)))
+    broker.place_order = Mock(side_effect=AssertionError("order submission"))
+    broker.cancel_order = Mock(side_effect=AssertionError("order cancellation"))
     network = Mock(side_effect=AssertionError("network access"))
     monkeypatch.setattr(socket.socket, "connect", network)
     monkeypatch.setattr(socket.socket, "connect_ex", network)
@@ -107,9 +176,10 @@ def rehearsal(protected, native_position_sources, kill_source, monkeypatch):
             result = dict(apiKey=broker.key, iban=broker.iban, validUntil="0", queryFrom="0", queryTo="0",
                           permissions=["query-funds", "query-open-trades", "query-closed-trades", "query-ledger"])
         elif endpoint == "BalanceEx":
-            result = {k: {"balance": v, "hold_trade": "0"} for k, v in broker.balance.items()}
+            result = {k: {"balance": v, "hold_trade": "0", "credit": "0", "credit_used": "0"}
+                      for k, v in broker.balance.items()}
         elif endpoint == "OpenPositions":
-            result = {}
+            result = {"position": {"margin": "1"}} if fault == "margin" else {}
         else:
             return None
         return {"result": result, "error": []}
@@ -167,6 +237,33 @@ def assert_complete(r):
     assert set(report["checks"]) == set(REQUIRED)
     assert all(report["checks"].values()), [k for k, v in report["checks"].items() if not v]
     assert report["authorizes_orders"] is False
+    checks = report["checks"]
+    facts = {
+        "authenticated_pretrade_certificate": all(checks.values()),
+        "broker_permissions": checks["account_permissions"],
+        "broker_identity": checks["account_identity"],
+        "broker_balances": checks["broker_balances"],
+        "ledger_reconciled": checks["position_ledger_reconciliation"],
+        "protective_exits_verified": checks["protective_exit_readback"],
+        "open_orders_reconciled": checks["open_order_reconciliation"],
+        "duplicate_fence_clear": checks["duplicate_order_fence"],
+        "writer_lease_valid": checks["writer_lease"],
+        "nonce_ready": checks["nonce_sequence"],
+        "risk_ready": checks["risk_limits"],
+        "strategy_ready": checks["position_sync"],
+        "capital_ready": True,
+        "kill_switch_clear": checks["kill_switch_clear"],
+        "operator_authorized": checks["operator_authorization"],
+        "account_scope_verified": checks["account_identity"],
+        "backup_restore_certified": True,
+    }
+    decision = evaluate_startup_transition(facts, pending_execution=False, posttrade_verified=False)
+    assert decision["pretrade_candidate_ready"] is True
+    assert decision["activation_allowed"] is False
+    pending = evaluate_startup_transition(facts, pending_execution=True, posttrade_verified=False)
+    assert pending["pretrade_candidate_ready"] is False
+    r.broker.place_order.assert_not_called()
+    r.broker.cancel_order.assert_not_called()
     assert before == [path.read_bytes() for path in files]
     assert inventory == r.inventory.redis.values
     assert {method for method, _, _ in r.broker.calls} == READ_ENDPOINTS
@@ -174,6 +271,7 @@ def assert_complete(r):
     r.broker._kraken_private_call_nonce.assert_not_called()
 
 
+@pytest.mark.parametrize("rehearsal", [None, "opening"], indirect=True)
 def test_native_install_and_restart(rehearsal):
     # Each child inherits the unregistered parent and reopens the same protected files and database.
     assert diagnostic._COLLECTOR is None
@@ -203,6 +301,16 @@ def test_reject_incomplete_install(rehearsal, fault):
         return
     assert boot(r) == "collector_registration_failed"
     assert diagnostic._COLLECTOR is None
+    report = diagnostic.inspect_authenticated_attestations("platform:kraken")
+    assert not all(report["checks"].values())
+    assert report["authorizes_orders"] is False
+
+
+@pytest.mark.parametrize("rehearsal", [
+    "missing", "stale", "wrong-account", "holding", "margin", "order", "intent", "exit", "replay", "legacy-change",
+], indirect=True)
+def test_opening_denials_through_protected_startup(rehearsal):
+    assert boot(rehearsal) == "collector_registration_failed"
     report = diagnostic.inspect_authenticated_attestations("platform:kraken")
     assert not all(report["checks"].values())
     assert report["authorizes_orders"] is False
