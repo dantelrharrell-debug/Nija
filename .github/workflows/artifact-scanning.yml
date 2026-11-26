@@ -70,13 +70,13 @@ jobs:
         config_digest=$(jq -r '."containerimage.config.digest" // empty' "$metadata")
         manifest_digest=$(jq -r '."containerimage.digest" // empty' "$metadata")
         # The Docker archive exporter can omit digests from the metadata file.
-        # Use its plain export records when those fields are absent.
+        # Plain export records may include an elapsed duration before 'done'.
         build_log="$RUNNER_TEMP/nija-container-build.log"
         if [[ -z "$config_digest" ]]; then
-          config_digest=$(sed -En 's/^#[0-9]+ exporting config (sha256:[0-9a-f]{64}) done$/\1/p' "$build_log" | sort -u)
+          config_digest=$(sed -En 's/^#[0-9]+ exporting config (sha256:[0-9a-f]{64})( [0-9]+([.][0-9]+)?s)? done$/\1/p' "$build_log" | sort -u)
         fi
         if [[ -z "$manifest_digest" ]]; then
-          manifest_digest=$(sed -En 's/^#[0-9]+ exporting manifest (sha256:[0-9a-f]{64}) done$/\1/p' "$build_log" | sort -u)
+          manifest_digest=$(sed -En 's/^#[0-9]+ exporting manifest (sha256:[0-9a-f]{64})( [0-9]+([.][0-9]+)?s)? done$/\1/p' "$build_log" | sort -u)
         fi
         [[ "$config_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
         [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
