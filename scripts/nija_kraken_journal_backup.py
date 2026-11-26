@@ -54,11 +54,17 @@ def _verify_account_journal(archive: Path, *, expected_sha256: str, exercise_res
 def capture(source: Path, output_dir: Path) -> dict:
     if not os.getenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", "").strip():
         raise ValueError("required submission journal is not configured")
-    report = snapshot.create_snapshot(source, output_dir)
-    _verify_account_journal(
-        Path(report["archive"]), expected_sha256=report["sha256"], exercise_restore=False,
-    )
-    return {**report, "submission_journal_verified": True, "live_trading_eligible": False}
+    output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise ValueError("unsafe output directory")
+    with TemporaryDirectory(prefix=".nija-capture-", dir=output_dir) as temporary:
+        report = snapshot.create_snapshot(source, Path(temporary))
+        staged = Path(report["archive"])
+        _verify_account_journal(staged, expected_sha256=report["sha256"], exercise_restore=False)
+        archive = output_dir / staged.name
+        # Publish only verified bytes. An existing backup with this name wins.
+        os.link(staged, archive)
+    return {**report, "archive": str(archive), "submission_journal_verified": True, "live_trading_eligible": False}
 
 
 def restore(archive: Path, *, expected_sha256: str) -> dict:
