@@ -21,7 +21,8 @@ from bot.pretrade_attestation_validation_v452 import REQUIRED, SOURCES, PROOF_BY
 
 
 @pytest.fixture
-def fixture(monkeypatch):
+def fixture(monkeypatch, request):
+    account_pin, key_pin = getattr(request, "param", ("c" * 64, "d" * 64))
     now = time.time()
     monkeypatch.setattr(startup, "_factory", None)
     monkeypatch.setattr(startup, "_verify_receipts", None)
@@ -41,7 +42,7 @@ def fixture(monkeypatch):
     keys = {kind: Ed25519PrivateKey.generate() for kind in startup.RECEIPTS}
     trust = StartupReceiptTrust(
         service_id="srv-d98dsr5aeets73fpbaqg", release_id="a" * 40,
-        image_sha256="b" * 64, account_iiban_sha256="c" * 64, api_key_sha256="d" * 64,
+        image_sha256="b" * 64, account_iiban_sha256=account_pin, api_key_sha256=key_pin,
         reviewed_provider_ids=ids,
         public_keys={kind: key.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw,
