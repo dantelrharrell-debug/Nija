@@ -319,6 +319,7 @@ def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch
     expected = "account scope mismatch" if problem == "wrong_scope" else "invalid references"
     with pytest.raises(ValueError, match=expected):
         journal_backup.capture(source, tmp_path / "strict")
+    assert not list((tmp_path / "strict").glob("*.tar.gz"))
     archive = snapshot.create_snapshot(source, tmp_path / "legacy")
     with pytest.raises(ValueError, match=expected):
         journal_backup.restore(Path(archive["archive"]), expected_sha256=archive["sha256"])
