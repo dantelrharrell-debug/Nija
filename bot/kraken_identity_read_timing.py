@@ -18,6 +18,35 @@ from typing import Any, Callable, Iterator
 _LOCAL = threading.local()
 
 
+# Normalize only documented GetApiKeyInfo aliases. Keep the HTTP payload
+# untouched so native proof can compare the exact wire and decoded objects.
+_IDENTITY_ALIASES = {
+    "apiKey": "api_key", "apiKeyName": "api_key_name",
+    "validUntil": "valid_until", "queryFrom": "query_from", "queryTo": "query_to",
+    "nonceWindow": "nonce_window", "ipAllowlist": "ip_allowlist",
+    "createdTime": "created_time", "modifiedTime": "modified_time",
+    "lastUsed": "last_used",
+}
+
+
+def _normalize_identity_reply(reply: Any) -> Any:
+    if type(reply) is not dict or reply.get("error") != [] or type(reply.get("result")) is not dict:
+        return reply  # Leave malformed responses and Kraken errors to existing guards.
+    result = reply["result"]
+    if not any(alias in result for alias in _IDENTITY_ALIASES.values()):
+        return reply
+    normalized = dict(result)
+    for name, alias in _IDENTITY_ALIASES.items():
+        if alias not in result:
+            continue
+        value = result[alias]
+        if name in result and (type(result[name]) is not type(value) or result[name] != value):
+            raise ValueError("identity_response_alias_conflict")
+        normalized[name] = value
+        del normalized[alias]
+    return {**reply, "result": normalized}
+
+
 def _finite(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value)
 
@@ -107,7 +136,9 @@ def _http_field_presence(api: Any, previous: Any) -> dict[str, bool] | None:
         if (type(payload) is not dict or payload.get("error") != []
                 or type(payload.get("result")) is not dict):
             return None
-        return {field: field in payload["result"] for field in ("apiKey", "validUntil")}
+        row = payload["result"]
+        return {field: field in row or _IDENTITY_ALIASES[field] in row
+                for field in ("apiKey", "validUntil")}
     except Exception:
         return None
 
@@ -121,7 +152,7 @@ def query_identity_with_timing(api: Any, params: Any) -> Any:
     """
     capture = getattr(_LOCAL, "capture", None)
     if capture is None:
-        return api.query_private("GetApiKeyInfo", params)
+        return _normalize_identity_reply(api.query_private("GetApiKeyInfo", params))
     capture.attempts += 1
     capture.api_matched = api is capture.api and api is not None
     capture.started = capture.clock()
@@ -136,7 +167,6 @@ def query_identity_with_timing(api: Any, params: Any) -> Any:
     result = api.query_private("GetApiKeyInfo", params)
     capture.elapsed = time.monotonic() - started_monotonic
     capture.finished = capture.clock()
-    capture.response = result
     if capture.inspect_http_fields and capture.api_matched and capture.attempts == 1:
         capture.http_field_presence = _http_field_presence(api, previous)
     if (capture.inspect_native_identity and capture.api_matched and capture.attempts == 1
@@ -145,4 +175,7 @@ def query_identity_with_timing(api: Any, params: Any) -> Any:
         capture.native_key_digest = native_identity_key_digest(
             api, previous, result, key_before, secret_before,
         )
-    return result
+    # The timing receipt must identify the exact object returned to the caller.
+    normalized = _normalize_identity_reply(result)
+    capture.response = normalized
+    return normalized

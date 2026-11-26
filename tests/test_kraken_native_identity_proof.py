@@ -161,7 +161,7 @@ def permission_provider(broker, **kwargs):
         broker, account_scope="platform:kraken", approved_iban_sha256=_fingerprint_iban(ACCOUNT),
         approved_api_key_sha256=hashlib.sha256(PUBLIC.encode()).hexdigest(),
         reviewed_provider_id="offline-native-permission", monitoring_category=object(),
-        identity_method="native_signed_request_v1", **kwargs,
+        identity_method=kwargs.pop("identity_method", "native_signed_request_v1"), **kwargs,
     )
 
 
@@ -204,7 +204,7 @@ def ledger_identity(broker, tmp_path, **kwargs):
         api_key_sha256=hashlib.sha256(PUBLIC.encode()).hexdigest(),
         account_sha256=_fingerprint_iban(ACCOUNT), ledger_path=tmp_path / "absent.sqlite3",
         persistent_root=tmp_path, monitoring_category=object(),
-        identity_method="native_signed_request_v1", **kwargs,
+        identity_method=kwargs.pop("identity_method", "native_signed_request_v1"), **kwargs,
     )
     _identity(_private_reader(binding), binding, time.time())
     assert not binding.ledger_path.exists()
@@ -245,3 +245,85 @@ def test_native_readers_cannot_accept_unproven_or_stale_identity(reader, failure
             permission_provider(broker)()
         else:
             ledger_identity(broker, tmp_path)
+
+
+@pytest.mark.parametrize("case, expected_reason, wire_expected, parsed_expected", [
+    ("intact", None, True, True),
+    ("provider_omission", "authenticated_api_key_identity_missing", False, False),
+    ("parser_drop", "authenticated_api_key_identity_missing", True, False),
+])
+def test_identity_response_diagnostics_localize_missing_fields(
+    case, expected_reason, wire_expected, parsed_expected,
+):
+    parsed_presence, wire_presence = [], []
+
+    def drop_after_decode(_api, _response, parsed):
+        for field in ("apiKey", "validUntil"):
+            del parsed["result"][field]
+
+    row = {"iban": ACCOUNT}
+    if case != "provider_omission":
+        row.update(zip(("apiKey", "validUntil"), (PUBLIC, "0"), strict=True))
+    broker, calls = rig(change=drop_after_decode if case == "parser_drop" else None, row=row)
+    observe = provider(broker, parsed_field_observer=parsed_presence.append,
+                       http_field_observer=wire_presence.append)
+    if expected_reason:
+        with pytest.raises(KrakenIdentityDenied, match=expected_reason):
+            observe()
+    else:
+        assert observe()["verified"] is True
+    assert wire_presence == [dict.fromkeys(("apiKey", "validUntil"), wire_expected)]
+    assert parsed_presence == [dict.fromkeys(("apiKey", "validUntil"), parsed_expected)]
+    assert calls == [("GetApiKeyInfo", {})]
+
+
+def snake_case_response():
+    row = permission_row()
+    row.update(zip(("apiKey", "validUntil"), (PUBLIC, "0"), strict=True))
+    for old, new in zip(("apiKey", "validUntil", "queryFrom", "queryTo"),
+                        ("api_key", "valid_until", "query_from", "query_to"), strict=True):
+        row[new] = row.pop(old)
+    return row
+
+
+@pytest.mark.parametrize("method", ["response_echo", "native_signed_request_v1"])
+def test_documented_snake_case_response_certifies_without_rewriting_wire(method, tmp_path):
+    row = snake_case_response()
+    broker, calls = rig(row=row)
+    parsed, wire = [], []
+    assert provider(broker, identity_method=method, parsed_field_observer=parsed.append,
+                    http_field_observer=wire.append)()["verified"] is True
+    assert parsed == wire == [dict.fromkeys(("apiKey", "validUntil"), True)]
+    assert broker.api.response.json()["result"] == row
+    assert calls == [("GetApiKeyInfo", {})]
+
+    broker, _ = rig(row=row)
+    assert permission_provider(broker, identity_method=method)()["verified"] is True
+    broker, _ = rig(row=row)
+    ledger_identity(broker, tmp_path, identity_method=method)
+
+
+@pytest.mark.parametrize("case", ["conflicting_key", "conflicting_expiry", "missing_expiry",
+                                    "expired", "wrong_key", "restricted_query"])
+def test_snake_case_never_weakens_existing_checks(case):
+    row = snake_case_response()
+    if case == "conflicting_key":
+        row.update(zip(("apiKey",), ("different-offline-identifier",), strict=True))
+    elif case == "conflicting_expiry":
+        row["validUntil"] = "1"
+    elif case == "missing_expiry":
+        del row["valid_until"]
+    elif case == "expired":
+        row["valid_until"] = "1"
+    elif case == "wrong_key":
+        row["api_key"] = "different-offline-identifier"
+    elif case == "restricted_query":
+        row["query_from"] = "1"
+    broker, _ = rig(row=row)
+    if case == "restricted_query":
+        from bot.kraken_authenticated_key_info_v477 import KeyInfoEvidenceDenied
+        with pytest.raises(KeyInfoEvidenceDenied, match="historical_query_window_restricted"):
+            permission_provider(broker)()
+    else:
+        with pytest.raises(KrakenIdentityDenied):
+            provider(broker)()
