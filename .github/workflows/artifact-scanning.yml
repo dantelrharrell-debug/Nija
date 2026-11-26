@@ -78,12 +78,22 @@ jobs:
         if [[ -z "$manifest_digest" ]]; then
           manifest_digest=$(sed -En 's/^#[0-9]+ exporting manifest (sha256:[0-9a-f]{64}) done$/\1/p' "$build_log" | sort -u)
         fi
-        [[ "$config_digest" == "$image_id" ]]
+        [[ "$config_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
         [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+        # Legacy Docker identifies images by config; the containerd store
+        # identifies them by the OCI target exported by Buildx.
+        case "$image_id" in
+          "$config_digest") image_id_kind=config ;;
+          "$manifest_digest") image_id_kind=export_target ;;
+          *)
+            echo "Local image ID does not match either immutable Buildx digest" >&2
+            exit 1
+            ;;
+        esac
         commit=$(git rev-parse HEAD)
         printf 'id=%s\n' "$image_id" >> "$GITHUB_OUTPUT"
-        printf 'commit=%s\ndockerfile=%s\nlocal_image_id=%s\nbuild_manifest_digest=%s\n' \
-          "$commit" "$DOCKERFILE" "$image_id" "$manifest_digest" > container-scan-target.txt
+        printf 'commit=%s\ndockerfile=%s\nlocal_image_id=%s\nlocal_image_id_kind=%s\nbuild_config_digest=%s\nbuild_manifest_digest=%s\n' \
+          "$commit" "$DOCKERFILE" "$image_id" "$image_id_kind" "$config_digest" "$manifest_digest" > container-scan-target.txt
 
     - name: Run Trivy vulnerability scanner
       run: |
