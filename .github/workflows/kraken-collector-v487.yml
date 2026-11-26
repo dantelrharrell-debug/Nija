@@ -7,6 +7,9 @@ on:
       - main
       - release/justcall-handoff-only-20261017
     paths:
+      - '.github/workflows/render-recovery-access.yml'
+      - '.github/workflows/kraken-recovery-gate-diagnostics.yml'
+      - 'bot/kraken_current_inventory.py'
       - 'bot.py'
       - 'cache/redis_client.py'
       - 'tests/test_cache_json_security.py'

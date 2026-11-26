@@ -149,6 +149,30 @@ jobs:
         sarif_file: ${{ steps.grype-scan.outputs.sarif }}
         category: 'grype-${{ matrix.dockerfile }}'
 
+    - name: Verify Kraken inventory source in the scanned trading image
+      if: ${{ !cancelled() && steps.scan-target.outcome == 'success' && matrix.dockerfile == 'Dockerfile' }}
+      env:
+        SCAN_IMAGE_ID: ${{ steps.scan-target.outputs.id }}
+      run: |
+        set -euo pipefail
+        source_path=bot/kraken_current_inventory.py
+        workdir=$(mktemp -d)
+        container_id=
+        cleanup() {
+          if [[ -n "$container_id" ]]; then
+            docker rm "$container_id" >/dev/null
+          fi
+          rm -rf "$workdir"
+        }
+        trap cleanup EXIT
+        git show "HEAD:$source_path" > "$workdir/reviewed.py"
+        container_id=$(docker create --network none --entrypoint /bin/false "$SCAN_IMAGE_ID")
+        docker cp "$container_id:/app/$source_path" "$workdir/image.py"
+        test -f "$workdir/image.py" && test ! -L "$workdir/image.py"
+        cmp "$workdir/reviewed.py" "$workdir/image.py"
+        read -r source_digest _ < <(sha256sum "$workdir/image.py")
+        printf 'kraken_inventory_source_sha256=%s\n' "$source_digest" >> container-scan-target.txt
+
     - name: Retain raw container scan evidence
       uses: actions/upload-artifact@v4
       if: ${{ always() && steps.scan-target.outcome == 'success' }}
