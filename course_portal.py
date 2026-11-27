@@ -23,6 +23,7 @@ from flask import Blueprint, current_app, jsonify, make_response, redirect, requ
 from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, func, insert, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from course_fulfillment import expected_course_link, CourseLedger, reconcile_session
 from course_fulfillment import expected_course_identity, expected_course_link, CourseLedger, reconcile_session
 from course_private_video import configured_catalog, video_response
 
