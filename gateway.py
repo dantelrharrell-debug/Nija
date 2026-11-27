@@ -149,9 +149,23 @@ def require_auth(f):
         if not payload:
             return jsonify({'error': 'Invalid or expired token'}), 401
 
-        # Add user_id to request context
-        request.user_id = payload['user_id']
+        # JWT signatures/expiry do not prove that a deleted or disabled
+        # account is still authorized. Reject stale subjects at this public
+        # gateway, matching the canonical Cloud API enforcement.
+        user_id = payload.get('user_id')
+        if not isinstance(user_id, str) or not user_id.strip():
+            return jsonify({'error': 'Invalid or expired token'}), 401
 
+        try:
+            current_user = user_db.get_user(user_id)
+        except Exception as exc:
+            logger.error('AUTH_SUBJECT_LOOKUP_FAILED error_type=%s', type(exc).__name__)
+            return jsonify({'error': 'Authentication temporarily unavailable'}), 503
+
+        if not current_user or not current_user.get('enabled', True):
+            return jsonify({'error': 'Account is unavailable'}), 401
+
+        request.user_id = user_id
         return f(*args, **kwargs)
 
     return decorated_function

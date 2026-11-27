@@ -329,3 +329,150 @@ def test_auth_account_lookup_failure_fails_closed_without_logging_details(isolat
     assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in logs
     assert USER_A not in logs and "synthetic-database-location-is-private" not in logs
     assert _rows(api.auth_path, "users", USER_A) == 1
+
+
+
+@pytest.mark.parametrize("source_file", ["api_server.py", "gateway.py"])
+def test_both_api_entrypoints_reject_stale_and_disabled_jwts(source_file, monkeypatch, caplog):
+    """Execute the actual decorators without loading production managers.
+
+    Token subjects must still resolve to a current enabled user. Missing or
+    unavailable account records deny even a correctly signed, unexpired JWT.
+    """
+    app = Flask("synthetic-" + source_file)
+    app.config.update(TESTING=True, SECRET_KEY=secrets.token_urlsafe(32))
+    source = ast.parse((ROOT / source_file).read_text(encoding="utf-8"))
+    functions = [
+        node for node in source.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"decode_jwt_token", "require_auth"}
+    ]
+    assert len(functions) == 2
+    database = types.SimpleNamespace(
+        get_user=lambda uid: {"user_id": uid, "enabled": True}
+        if uid == USER_A else None
+    )
+    namespace = dict(
+        app=app, jwt=jwt, request=request, jsonify=jsonify, wraps=wraps,
+        logger=logging.getLogger("synthetic.auth." + source_file),
+        Optional=Optional, Dict=Dict, user_db=database,
+    )
+    exec(compile(ast.Module(body=functions, type_ignores=[]), source_file, "exec"), namespace)
+
+    @app.get("/synthetic/probe")
+    @namespace["require_auth"]
+    def protected_probe():
+        return jsonify({"user_id": request.user_id})
+
+    client = app.test_client()
+
+    def authorization(subject):
+        token = jwt.encode({
+            "user_id": subject,
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=10),
+        }, app.config["SECRET_KEY"], algorithm="HS256")
+        return {"Authorization": "Bearer " + token}
+
+    assert client.get("/synthetic/probe", headers=authorization(USER_A)).status_code == 200
+    for subject in (USER_B, "   ", 17, None):
+        response = client.get("/synthetic/probe", headers=authorization(subject))
+        assert response.status_code == 401
+        assert response.get_json()["error"] in ("Account is unavailable", "Invalid or expired token")
+
+    monkeypatch.setattr(
+        database, "get_user",
+        lambda uid: {"user_id": uid, "enabled": False} if uid == USER_A else None,
+    )
+    disabled = client.get("/synthetic/probe", headers=authorization(USER_A))
+    assert disabled.status_code == 401
+    assert disabled.get_json() == {"error": "Account is unavailable"}
+
+    def unavailable(_):
+        raise sqlite3.OperationalError("private-backend-detail")
+
+    monkeypatch.setattr(database, "get_user", unavailable)
+    with caplog.at_level(logging.ERROR, logger=namespace["logger"].name):
+        error = client.get("/synthetic/probe", headers=authorization(USER_A))
+    assert error.status_code == 503
+    assert error.get_json() == {"error": "Authentication temporarily unavailable"}
+    assert "private-backend-detail" not in error.get_data(as_text=True)
+    logs = " ".join(entry.getMessage() for entry in caplog.records
+                    if entry.name == namespace["logger"].name)
+    assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in logs
+    assert USER_A not in logs and "private-backend-detail" not in logs
+
+
+
+@pytest.mark.parametrize("source_file", ["api_gateway.py", "fastapi_backend.py"])
+def test_fastapi_entrypoints_reject_deleted_jwt_subjects(source_file, caplog):
+    """Run the actual source FastAPI dependencies without a trading service."""
+    import asyncio
+
+    class SyntheticHTTPException(Exception):
+        def __init__(self, status_code, detail, headers=None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+            self.headers = headers
+
+    async def no_rate_limit(_request, _subject):
+        return None
+
+    key = secrets.token_urlsafe(40)
+    account = types.SimpleNamespace(
+        get_user=lambda uid: {"user_id": uid, "enabled": True}
+        if uid == USER_A else None
+    )
+    env = dict(
+        jwt=jwt, JWT_SECRET_KEY_STR=key, JWT_ALGORITHM="HS256",
+        HTTPException=SyntheticHTTPException,
+        status=types.SimpleNamespace(HTTP_401_UNAUTHORIZED=401,
+                                     HTTP_503_SERVICE_UNAVAILABLE=503),
+        Optional=Optional, Dict=Dict, Request=object,
+        HTTPAuthorizationCredentials=object, security=object(),
+        Depends=lambda _: None, user_db=account,
+        check_rate_limit=no_rate_limit,
+        logger=logging.getLogger("synthetic.fastapi." + source_file),
+    )
+    source = ast.parse((ROOT / source_file).read_text(encoding="utf-8"))
+    functions = [node for node in source.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and node.name in {"decode_access_token", "get_current_user"}]
+    assert len(functions) == 2
+    exec(compile(ast.Module(body=functions, type_ignores=[]), source_file, "exec"), env)
+
+    def access(subject):
+        token = jwt.encode(
+            {"user_id": subject, "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
+            key, algorithm="HS256",
+        )
+        credentials = types.SimpleNamespace(credentials=token)
+        caller = env["get_current_user"]
+        if source_file == "fastapi_backend.py":
+            return asyncio.run(caller(request=object(), credentials=credentials))
+        return asyncio.run(caller(credentials=credentials))
+
+    assert access(USER_A) == USER_A
+    for subject in (USER_B, " ", 17, None):
+        with pytest.raises(SyntheticHTTPException) as denied:
+            access(subject)
+        assert denied.value.status_code == 401
+
+    account.get_user = lambda uid: {"user_id": uid, "enabled": False}
+    with pytest.raises(SyntheticHTTPException) as disabled:
+        access(USER_A)
+    assert disabled.value.status_code == 401
+    assert disabled.value.detail == "Account is unavailable"
+
+    def broken(_uid):
+        raise sqlite3.OperationalError("private-user-database-location")
+    account.get_user = broken
+    with caplog.at_level(logging.ERROR, logger=env["logger"].name):
+        with pytest.raises(SyntheticHTTPException) as unavailable:
+            access(USER_A)
+    assert unavailable.value.status_code == 503
+    assert unavailable.value.detail == "Authentication temporarily unavailable"
+    rendered = " ".join(r.getMessage() for r in caplog.records
+                        if r.name == env["logger"].name)
+    assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in rendered
+    assert "private-user-database-location" not in rendered
+    assert USER_A not in rendered
