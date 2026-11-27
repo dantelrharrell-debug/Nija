@@ -90,6 +90,7 @@ def isolated_api(monkeypatch, tmp_path):
     user_db = types.SimpleNamespace(
         db_path=str(auth_path), get_user=lambda user: {"user_id": user} if _rows(auth_path, "users", user) else None
     )
+    auth_module.user_db = user_db
     vault = types.SimpleNamespace(
         db_path=str(vault_path),
         list_user_brokers=lambda user: ["kraken"] if _rows(vault_path, "credentials", user) else [],
@@ -276,7 +277,55 @@ def test_repeat_request_preserves_existing_missing_account_status(isolated_api):
     api = isolated_api
     assert _delete(api).status_code == 200
     response = _delete(api)
-    assert response.status_code == 404
-    assert response.get_json() == {"error": "Account is no longer available"}
+    assert response.status_code == 401
+    assert response.get_json() == {"error": "Account is unavailable"}
     assert _rows(api.auth_path, "users", USER_B) == 1
     assert api.devices.count_devices(USER_B) == 1
+
+
+
+def test_existing_signed_token_is_rejected_after_successful_account_deletion(isolated_api):
+    api = isolated_api
+    signed_headers = api.headers()
+    assert api.client.get("/api/account/deletion", headers=signed_headers).status_code == 200
+    assert _delete(api).status_code == 200
+    # Previously valid signed JWTs must not authenticate against a deleted subject.
+    for method in ("get", "delete"):
+        response = getattr(api.client, method)("/api/account/deletion", headers=signed_headers)
+        assert response.status_code == 401
+        assert response.get_json() == {"error": "Account is unavailable"}
+    assert _rows(api.auth_path, "users", USER_B) == 1
+
+
+def test_disabled_account_denies_unexpired_valid_token(isolated_api, monkeypatch):
+    api = isolated_api
+    database = sys.modules["api_server"].user_db
+    original = database.get_user
+
+    def disabled(user_id):
+        account = original(user_id)
+        return {**account, "enabled": False} if account and user_id == USER_A else account
+
+    monkeypatch.setattr(database, "get_user", disabled)
+    response = api.client.get("/api/account/deletion", headers=api.headers())
+    assert response.status_code == 401
+    assert response.get_json() == {"error": "Account is unavailable"}
+    assert _rows(api.auth_path, "users", USER_A) == 1
+
+
+def test_auth_account_lookup_failure_fails_closed_without_logging_details(isolated_api, monkeypatch, caplog):
+    api = isolated_api
+    database = sys.modules["api_server"].user_db
+
+    def broken_lookup(_user_id):
+        raise sqlite3.OperationalError("synthetic-database-location-is-private")
+
+    monkeypatch.setattr(database, "get_user", broken_lookup)
+    with caplog.at_level(logging.ERROR, logger="test.auth"):
+        response = api.client.get("/api/account/deletion", headers=api.headers())
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "Authentication temporarily unavailable"}
+    logs = " ".join(row.getMessage() for row in caplog.records)
+    assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in logs
+    assert USER_A not in logs and "synthetic-database-location-is-private" not in logs
+    assert _rows(api.auth_path, "users", USER_A) == 1

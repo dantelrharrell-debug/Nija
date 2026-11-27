@@ -5,6 +5,7 @@ on:
     paths:
       - 'PRIVACY_POLICY.md'
       - 'account_deletion_api.py'
+      - 'api_server.py'
       - 'frontend/static/js/capacitor-init.js'
       - 'mobile/ACCOUNT_DELETION.md'
       - 'mobile/PRIVACY_POLICY.md'
@@ -37,7 +38,7 @@ jobs:
           detect-secrets==1.5.0
       - name: Check changed Python and JavaScript syntax
         run: |
-          python -m py_compile account_deletion_api.py tests/test_account_deletion_scope.py
+          python -m py_compile account_deletion_api.py api_server.py tests/test_account_deletion_scope.py
           node --check frontend/static/js/capacitor-init.js
           node --check tests/test_account_deletion_ui.mjs
       - name: Verify synthetic account cleanup and existing mobile controls
@@ -52,7 +53,7 @@ jobs:
       - name: Scan this repair's files without remote secret verification
         run: >-
           detect-secrets-hook --no-verify
-          PRIVACY_POLICY.md account_deletion_api.py
+          PRIVACY_POLICY.md account_deletion_api.py api_server.py
           frontend/static/js/capacitor-init.js
           mobile/ACCOUNT_DELETION.md mobile/PRIVACY_POLICY.md
           docs/PRIVACY_DATA_FLOW_REGISTER.md

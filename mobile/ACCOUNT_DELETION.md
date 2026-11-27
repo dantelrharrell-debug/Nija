@@ -33,11 +33,14 @@ The existing HTTP 400 confirmation failure and HTTP 404 missing-account response
 are unchanged. A repeated request must not delete another account, but a repeated
 successful deletion is not promised to return HTTP 200.
 
-The canonical `require_auth` decorator verifies JWT signature and expiry; it does
-not check whether the account still exists. The mobile gateway adds an account
-existence check, but revocation and re-registration behaviour remain unverified
-for the exact deployed entrypoint. A failed cleanup response does not establish
-that account access is blocked, or that earlier cleanup was rolled back.
+The shared `require_auth` decorator now checks that the JWT subject still
+exists and is enabled in the authoritative authentication database, in
+addition to verifying signature and expiry. The mobile gateway still performs
+its separate check. The exact deployed entrypoints, already-issued token
+rejection and cross-gateway re-registration behaviour remain **unverified**
+until an approved release and synthetic runtime acceptance tests. A failed
+cleanup response does not establish that account access is blocked or that
+earlier cleanup was rolled back.
 
 This handler's completion log contains scope and counts instead of the user ID.
 Its failure log contains the cleanup stage and exception class, without raw
