@@ -228,7 +228,8 @@ jobs:
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_sqlite_readonly_preflight_v488.py -v
           NIJA_DEFER_RUNTIME_SITE_HOOKS=1 python -S -B -m unittest discover -s tests -p test_kraken_authenticated_ledger_gap_audit_v489.py -v
   native-runtime-regression:
-    runs-on: ubuntu-latest
+    # The default 26.04 runner's Microsoft APT feed blocked Redis installation.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
