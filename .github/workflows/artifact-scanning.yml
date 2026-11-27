@@ -149,6 +149,78 @@ jobs:
         sarif_file: ${{ steps.grype-scan.outputs.sarif }}
         category: 'grype-${{ matrix.dockerfile }}'
 
+    - name: Verify Kraken inventory source and record Linux package artifacts from the scanned trading image
+      if: ${{ !cancelled() && steps.scan-target.outcome == 'success' && matrix.dockerfile == 'Dockerfile' }}
+      env:
+        SCAN_IMAGE_ID: ${{ steps.scan-target.outputs.id }}
+      run: |
+        set -euo pipefail
+        source_path=bot/kraken_current_inventory.py
+        workdir=$(mktemp -d)
+        container_id=
+        cleanup() {
+          if [[ -n "$container_id" ]]; then
+            docker rm "$container_id" >/dev/null
+          fi
+          rm -rf "$workdir"
+        }
+        trap cleanup EXIT
+        git show "HEAD:$source_path" > "$workdir/reviewed.py"
+        container_id=$(docker create --network none --entrypoint /bin/false "$SCAN_IMAGE_ID")
+        docker cp "$container_id:/app/$source_path" "$workdir/image.py"
+        test -f "$workdir/image.py" && test ! -L "$workdir/image.py"
+        cmp "$workdir/reviewed.py" "$workdir/image.py"
+        read -r source_digest _ < <(sha256sum "$workdir/image.py")
+        printf 'kraken_inventory_source_sha256=%s\n' "$source_digest" >> container-scan-target.txt
+        docker cp "$container_id:/opt/nija-pip-install.json" "$workdir/pip-install.json"
+        test -f "$workdir/pip-install.json"
+        test ! -L "$workdir/pip-install.json"
+        python3 -I -S - "$workdir/pip-install.json" <<'PYTHON'
+        import json
+        import re
+        import sys
+        from pathlib import Path
+        from urllib.parse import urlsplit
+
+        report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+        if report.get("version") != "1" or not report.get("install"):
+            raise SystemExit("pip artifact evidence is empty or unsupported")
+        records = []
+        seen = set()
+        for item in report["install"]:
+            name = item["metadata"]["name"]
+            version = item["metadata"]["version"]
+            download = item["download_info"]
+            url = urlsplit(download.get("url", ""))
+            archive = download.get("archive_info", {})
+            digest = archive.get("hashes", {}).get("sha256", "")
+            filename = url.path.rsplit("/", 1)[-1]
+            identity = re.sub(r"[-_.]+", "-", name).lower()
+            if (
+                identity in seen or item.get("is_yanked") is not False
+                or url.scheme != "https" or url.netloc != "files.pythonhosted.org"
+                or url.query or url.fragment
+                or not re.fullmatch(r"[A-Za-z0-9._+!-]+", filename)
+                or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            ):
+                raise SystemExit("pip artifact provenance did not pass validation")
+            seen.add(identity)
+            records.append({"name": name, "version": version, "filename": filename, "sha256": digest})
+
+        target = dict(
+            line.split("=", 1)
+            for line in Path("container-scan-target.txt").read_text(encoding="utf-8").splitlines()
+        )
+        result = {
+            "commit": target["commit"],
+            "image_digest": target["build_manifest_digest"],
+            "pip_install_artifacts": sorted(records, key=lambda row: row["name"].lower()),
+        }
+        Path("trading-pip-install-artifacts.json").write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
+        PYTHON
+
     - name: Retain raw container scan evidence
       uses: actions/upload-artifact@v4
       if: ${{ always() && steps.scan-target.outcome == 'success' }}
@@ -156,6 +228,7 @@ jobs:
         name: container-scan-${{ matrix.dockerfile }}
         path: |
           container-scan-target.txt
+          trading-pip-install-artifacts.json
           trivy-results-${{ matrix.dockerfile }}.sarif
           ${{ steps.grype-scan.outputs.sarif }}
 
