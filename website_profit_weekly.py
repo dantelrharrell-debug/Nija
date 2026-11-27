@@ -22,7 +22,10 @@ def _decimal(value: Any) -> Decimal | None:
         result = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
-    return result if result.is_finite() else None
+    if not result.is_finite() or result.copy_abs() >= Decimal("1e18"):
+        return None
+    # Leave room for exact seven-day aggregation and cent rounding.
+    return result if result.as_tuple().exponent >= -6 else None
 
 
 def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -39,7 +42,11 @@ def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: 
     result["net_profit_usd"] = None
     result["net_profit_per_visitor_usd"] = None
     result["target_met"] = None
-    if len(days) != 7 or {item.get("date") for item in days if isinstance(item, dict)} != expected:
+    if len(days) != 7 or not all(
+        isinstance(item, dict) and isinstance(item.get("date"), str) for item in days
+    ):
+        return result
+    if {item["date"] for item in days} != expected:
         return result
     if not all(item.get("certified") is True and item.get("source_reconciled") is True
                and item.get("analytics_consent_verified") is True for item in days):
@@ -55,9 +62,10 @@ def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: 
         result[field] = int(totals[field]) if field in COUNTS else str(totals[field])
     # Daily unique counts are not additive across a week.
     for field in ("unique_visitors", "qualified_leads", "waitlist_signups"):
+        daily_counts_valid = field in totals
         totals.pop(field, None)
         result[field] = None
-        if (isinstance(weekly_unique_counts, dict)
+        if (daily_counts_valid and isinstance(weekly_unique_counts, dict)
                 and weekly_unique_counts.get("period_start") == result["start"]
                 and weekly_unique_counts.get("period_end") == result["end"]
                 and weekly_unique_counts.get("certified") is True
@@ -73,7 +81,7 @@ def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: 
         if totals["unique_visitors"] > 0:
             ratio = profit / totals["unique_visitors"]
             result["net_profit_per_visitor_usd"] = str(ratio.quantize(Decimal("0.01")))
-            result["target_met"] = ratio >= Decimal("1.00")
+            result["target_met"] = profit >= totals["unique_visitors"]
     else:
         result["verification_status"] = "PARTIAL"
     return result
@@ -93,9 +101,8 @@ def compare_weeks(days: list[dict[str, Any]], last_complete_day: date, weekly_un
     previous_end = last_complete_day - timedelta(days=7)
     expected = {(last_complete_day - timedelta(days=i)).isoformat() for i in range(14)}
     actual = [row.get("date") for row in days]
-    valid_dates = (len(actual) == 14 and len(set(actual)) == 14
-                   and set(actual) == expected
-                   and all(isinstance(value, str) for value in actual))
+    valid_dates = (len(actual) == 14 and all(isinstance(value, str) for value in actual)
+                   and set(actual) == expected)
     counts = weekly_unique_counts or []
 
     def period(end: date) -> dict[str, Any]:
