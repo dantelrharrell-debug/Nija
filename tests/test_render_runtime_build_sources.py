@@ -59,13 +59,18 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
 
     def test_reproduce_build_outputs_without_touching_files_or_approval_inputs(self) -> None:
         root = Path(__file__).resolve().parents[1]
+        # Reproduce the historical output with the original startup input.
+        # Other tests exercise the current startup bytes and reject tampering.
+        historical_startup = subprocess.check_output(
+            ["git", "show", "55b1fc11a6715c053036b69f6e71241ec4c5c269:start.sh"], cwd=root,
+        )
         for commit, expected_source, expected_output in _REVIEWED_BROKER_FIXTURES:
             with self.subTest(commit=commit):
                 reviewed = subprocess.check_output(
                     ["git", "show", commit + ":" + _BROKER_SOURCE], cwd=root,
                 )
                 self.assertEqual(hashlib.sha256(reviewed).hexdigest(), expected_source)
-                sources = {**self.sources, _BROKER_SOURCE: reviewed}
+                sources = {**self.sources, _BROKER_SOURCE: reviewed, "start.sh": historical_startup}
                 original = copy.deepcopy(sources)
                 with patch.object(Path, "write_text", side_effect=AssertionError("must not write")):
                     built = derive_runtime_source_sha256(sources, self.recipe)
