@@ -1,6 +1,6 @@
 # NIJA Account Deletion
 
-**Status date:** 2026-11-26
+**Status date:** 2026-11-27
 
 **Status:** Source-level scope clarification. Production deployment, published
 instructions and cross-system deletion remain unverified.
@@ -15,7 +15,7 @@ with existing clients.
 
 | Covered by the current handler | Outside this handler's coverage |
 |---|---|
-| `users`, `sessions`, and `login_history` in the current authentication database | Other auth state, including `email_verification_tokens`, `two_factor_auth` and `two_factor_backup_codes` |
+| `users`, `sessions`, `login_history` and local verification, reset and two-factor records in the current authentication database | Authentication and two-factor stores outside the configured account database |
 | `credentials` and user-linked `audit_log` rows in `vault/__init__.py`, plus the legacy in-memory credential cache | The separate PocketBase member broker vault (`nija_broker_vault`) and credentials held in other stores or runtime copies |
 | Mobile device/push registrations in `mobile_device_store.py` | Other provider identities, device records and copies not managed by that store |
 | Current user/permission caches and the per-user trading-rule file/cache | Trading history, ledgers, recovery journals and other trading state |
@@ -91,8 +91,8 @@ NIJA users can request deletion from inside the NIJA app:
 4. Select **Delete Account**.
 5. Review the deletion notice and confirm the request.
 
-When cleanup succeeds, the service removes your account records, sessions, broker
-credentials, mobile push registrations and trading-rule state from its covered
+When cleanup succeeds, the service removes your account records, sessions, local verification, reset and two-factor
+records, broker credentials, mobile push registrations and trading-rule state from its covered
 active stores. The confirmation lists the scope. This request does not cover
 all NIJA-related records.
 

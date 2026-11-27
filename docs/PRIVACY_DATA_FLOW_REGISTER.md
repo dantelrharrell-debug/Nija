@@ -20,10 +20,10 @@ does not establish which code, configuration, schema or provider features are
 running in production. Proposed action owners below are responsibilities to
 assign, not claims that somebody has accepted or completed an action.
 
-The accompanying account-deletion source correction clarifies scope and partial
-failure and limits sensitive logging. It does not expand the stores deleted or
-change authentication/revocation behavior. Source corrections are distinct from
-verification of the deployed release.
+The original scope correction limits sensitive logging and clarifies partial
+failures. Subsequent source changes add account-existence checks and this
+follow-up expands cleanup inside the configured account database. Production
+verification remains open.
 
 Use these evidence labels when updating a row:
 
@@ -105,8 +105,8 @@ policy or actual mechanism establishes them.
 
 | IDs | Known source behavior | Deletion coverage and proof still needed |
 |---|---|---|
-| **A1** | The coordinator deletes the user's `users`, `sessions` and `login_history` rows. Canonical `api_server.require_auth` validates JWT signature/expiry without checking the account or session store. `mobile_backend_server.mobile_gateway_authentication` separately checks that a protected request's account exists and is enabled. | Row deletion alone does not prove previously issued JWTs are invalid. Using synthetic accounts, verify **each deployed gateway** rejects previously valid tokens after account removal and cannot recreate device registrations or other user-linked records. Confirm protected route coverage and database binding. Actual production bypass is **unverified**; gateway deployment determines the effective protection. Other stores, logs and backups need separate handling. |
-| **A2** | Verification tokens are valid for 24 hours; reset tokens for 2 hours. Used/expired status is checked. The 2FA schema stores user-linked secret and backup-code state. | These validity periods do not prove physical deletion. `email_verification_tokens`, `two_factor_auth` and `two_factor_backup_codes` are outside the coordinator's inspected deletion calls. Define and verify their cleanup separately; confirm appropriate secret protection. |
+| **A1** | The coordinator deletes `users`, `sessions` and `login_history`. The current source Flask and FastAPI guards check the persisted subject, and the mobile request hook checks account existence and enablement. | Synthetic HTTP tests verify a previously issued access token is rejected after deletion and a second account stays authorized. The checked login issues no refresh token. Confirm deployed issuer and store bindings, re-registration and existing WebSocket sessions before broader revocation claims. |
+| **A2** | The review branch deletes local verification/reset rows, TOTP secrets and backup-code hashes in the same account database transaction when the tables exist. | Synthetic SQLite tests verify target-only deletion, older schemas without these tables, rollback and retry. Separate stores, transactional email, external tokens and restored copies remain outside these tests. |
 | **A3** | The coordinator removes local vault credentials/audit rows, legacy broker credential entries, runtime user/permission caches and per-user rule files. | Verify every active credential copy/key-custody path. A successful NIJA deletion response does not delete exchange accounts, revoke exchange keys or remove independent provider records. |
 | **A4** | Member-vault source creates, lists and retrieves encrypted PocketBase records; the mobile coordinator targets a different local vault. | Separate member-vault lifecycle and record removal require an authenticated, owned-scope workflow and evidence. Do not claim coverage from A3 tests. |
 | **A5** | Ledger/state files preserve account-linked financial and safety evidence. This review establishes no approved universal retention duration. | Outside the mobile deletion coordinator. Assess purpose, actual identity linkage and any required retention before a separately reviewed deletion/anonymization design. Never remove recovery evidence or weaken operational gates as a privacy shortcut. |
@@ -208,3 +208,34 @@ retention rule, AI feature, consent flow or deletion handler changes. Review the
 actual published release independently of the repository. Stop only the affected
 data flow when a separately approved control requires it; do not expand this
 documentation change into trading, payment, account or provider mutations.
+
+## Review-branch follow-up
+
+The original privacy suite passed on #4200. Its security and artifact runs
+reported independent gates still open, including the historical source review,
+repository-wide pre-commit, the container vulnerability thresholds, and package
+heuristics. See [original Security Scanning](https://github.com/dantelrharrell-debug/Nija/actions/runs/45949642850)
+and [original Artifact Scanning](https://github.com/dantelrharrell-debug/Nija/actions/runs/45949643291).
+NIJA security engineering owns exact-source review and secret classification.
+Platform and dependency maintainers own image and package remediation. Preserve
+the existing integrity pins and scan thresholds. Current hosted results are
+tracked on [the follow-up PR](https://github.com/dantelrharrell-debug/Nija/pull/4217).
+
+| Stores | Evidence and owner |
+| --- | --- |
+| A1–A3, A6 | NIJA engineering. Isolated tests check the source auth guards and target-only active-store deletion. Production gateway and database bindings, runtime copies, and already-open sessions remain unverified. The same account can retry a partial deletion while its primary auth record still exists. |
+| A4–A5 | NIJA owner and engineering. Member vault, provider keys and broker/ledger records remain outside the deletion coordinator. Map identity and confirm obligations before separate cleanup. |
+| A7–A10 | NIJA owner and vendors. Website/lead, CRM, consent and outreach records remain outside the coordinator. JustCall confirmed one JustCall contact and 25 SalesDialer contacts. The vendor initially offered a backend export, then suggested an API workaround before resuming escalation if needed. No verified export or existing report was located. File readability, actual row counts and usable opt-out evidence remain unverified. |
+| A11–A13 | Billing and education owners. Payment, dispute, entitlement and course-progress stores remain outside the coordinator. Preserve valid entitlements pending owner-approved lifecycle rules. |
+| A14–A17 | NIJA owner, engineering and providers. Support mail, backups, analytics and logs remain outside the coordinator. IONOS acknowledged an investigation-only escalation to its Email Back-Office and requested preservation. Affected intervals, recovered or unrecoverable mail, and successful restore evidence remain outstanding. The Render privacy follow-up appears as sent in the existing private thread. No substantive reply was verified. |
+
+### Retention proposals for owner approval
+
+- Purge spent local verification and reset tokens within 30 days of expiry. Delete covered 2FA material with the account.
+- Review inactive lead records after 12 months. Approve consent-evidence handling and keep only the minimum necessary to enforce suppression.
+- Target 30 days for routine logs and 90 days for restricted incident logs, subject to approved holds and actual provider controls.
+- Evaluate 30-day backup rotation where supported and reapply approved deletions and suppression before access to restored data. Billing, support and broker records require separate owner-approved schedules.
+
+### Release and rollback sequence
+
+After exact-candidate checks and independent review pass, verify that the target API and mobile entrypoints use the approved account store. Deploy the API first and verify the revised behavior using a separately approved synthetic production account. Then publish the approved website and mobile disclosures and verify actual published copies. If checks fail, roll back each surface to its last approved software or publication version. A software rollback cannot restore records already deleted.

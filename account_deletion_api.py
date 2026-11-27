@@ -1,7 +1,7 @@
 """Authenticated NIJA account-deletion API.
 
 Deletion covers the active stores explicitly called below: the current mobile
-authentication database, encrypted broker vault, legacy in-memory broker
+authentication database and its local verification, reset and 2FA records, encrypted broker vault, legacy in-memory broker
 credentials, mobile push registrations, permission state, runtime user cache,
 and per-user trading-rule files. A failure never returns a success response.
 
@@ -35,7 +35,7 @@ account_deletion_api = Blueprint("account_deletion_api", __name__)
 _NOT_COVERED = (
     "website submissions, consent history, lead queues, CRM and marketing records",
     "billing, purchase, course, education-progress and trading-history records",
-    "the separate member broker vault and other authentication-token or two-factor stores",
+    "the separate member broker vault and authentication-token or two-factor stores outside this service's authentication database",
     "support records, application/security logs, exports and uploaded files",
     "backups and records or copies held by connected service providers",
 )
@@ -66,6 +66,16 @@ def _delete_auth_database_records(user_id: str) -> bool:
         cursor.execute("BEGIN IMMEDIATE")
         cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         cursor.execute("DELETE FROM login_history WHERE user_id = ?", (user_id,))
+        # These tables are created lazily in the same configured database.
+        for table, statement in (
+            ("email_verification_tokens", "DELETE FROM email_verification_tokens WHERE user_id = ?"),
+            ("two_factor_backup_codes", "DELETE FROM two_factor_backup_codes WHERE user_id = ?"),
+            ("two_factor_auth", "DELETE FROM two_factor_auth WHERE user_id = ?"),
+        ):
+            if cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone():
+                cursor.execute(statement, (user_id,))
         cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
         deleted = cursor.rowcount > 0
         conn.commit()
@@ -136,7 +146,7 @@ def deletion_requirements():
             "broker credentials in this service's covered vault and legacy credential cache will be removed",
             "registered mobile push tokens in this service's device store will be removed",
             "trading-rule files and permissions in this service's runtime cache will be removed",
-            "login-history records in this service's authentication store will be removed",
+            "login history and local verification, reset and two-factor records in this service's authentication database will be removed",
         ],
         "not_deleted": [
             "accounts held directly with brokerages or exchanges",
@@ -197,8 +207,9 @@ def delete_account():
             "trading_rules_removed": rules_deleted,
             **_scope_disclosures(),
             "message": (
-                "Your account records, sessions, broker credentials, mobile push registrations and trading-rule "
-                "state were removed only from the active stores covered by this deletion service. "
+                "Your account records, sessions, local verification, reset and two-factor records, broker "
+                "credentials, mobile push registrations and trading-rule state were removed only from "
+                "the active stores covered by this deletion service. "
                 "Other NIJA records, the separate member broker vault, provider copies and backups are outside "
                 "this request. Accounts held directly with brokerages, Apple or Google were not deleted."
             ),
