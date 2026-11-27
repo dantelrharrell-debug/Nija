@@ -11,7 +11,8 @@ on:
 
 jobs:
   docker-image-scan:
-    name: Docker Image Security Scan
+    # Preserve required GitHub check names despite the per-image base matrix.
+    name: Docker Image Security Scan (${{ matrix.dockerfile }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
