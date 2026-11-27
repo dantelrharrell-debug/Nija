@@ -118,6 +118,8 @@ def test_workflow_preserves_status_and_requires_coverage():
     job = workflow["jobs"]["python-package-scan"]
     assert job["env"]["NIJA_DEFER_RUNTIME_SITE_HOOKS"] == "1"
     step = next(s for s in job["steps"] if s.get("name") == "Scan for malicious packages with PyPI Guardian")
+    assert job["strategy"]["max-parallel"] == 1
+    assert step["env"]["GUARDDOG_PARALLELISM"] == "1"
     assert "guarddog==3.2.0" in step["run"]
     assert 'else\n  guarddog_status=$?\nfi' in step["run"]
     assert 'guarddog-report.json "$guarddog_status" "${{ matrix.requirements }}"' in step["run"]
