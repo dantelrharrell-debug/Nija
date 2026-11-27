@@ -317,12 +317,9 @@ def register():
     """
     Register a new user.
 
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password",
-            "subscription_tier": "basic"  // optional: basic, pro, enterprise
-        }
+    Request JSON must include an email and a user-provided password.
+    The optional subscription_tier is basic, pro or enterprise.
+    No example credential is embedded in this documentation.
     """
     data = request.get_json()
 
