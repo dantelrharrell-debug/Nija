@@ -215,3 +215,26 @@ def test_retries_activation_after_strategy_publication(monkeypatch, caplog):
     assert details["post_publication_retry_attempts"] == 2
     assert "POST_PUBLICATION_ACTIVATION_RETRY attempt=1/3 active=false" in caplog.text
     assert "POST_PUBLICATION_ACTIVATION_RETRY_SUCCESS attempts=2 state=LIVE_ACTIVE" in caplog.text
+
+
+def test_capital_reporting_does_not_treat_missing_or_placeholder_as_verified_zero():
+    v16 = _module()
+    assert v16._capital_reporting(SimpleNamespace())["real_capital_usd"] is None
+    stamp = "2026-11-27T16:00:00+00:00"
+    snapshot = {
+        "real_capital": 0.0, "broker_count": 1, "expected_brokers": 1,
+        "last_updated": stamp, "is_fresh": True,
+        "snapshot_publication": {"timestamp": stamp, "accepted": False, "stale": False},
+    }
+    authority = SimpleNamespace(get_snapshot=lambda: snapshot)
+    report = v16._capital_reporting(authority)
+    assert report["status"] == "zero_unverified" and report["real_capital_usd"] is None
+
+    snapshot["real_capital"] = 32.4
+    snapshot["snapshot_publication"]["accepted"] = True
+    assert v16._capital_reporting(authority)["real_capital_usd"] == 32.4
+    snapshot["expected_brokers"] = 2
+    assert v16._capital_reporting(authority)["real_capital_usd"] is None
+    snapshot["expected_brokers"] = 1
+    snapshot["snapshot_publication"]["timestamp"] = "different"
+    assert v16._capital_reporting(authority)["real_capital_usd"] is None
