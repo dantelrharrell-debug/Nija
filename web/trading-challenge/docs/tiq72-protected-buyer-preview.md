@@ -23,3 +23,9 @@ A later production review must separately certify the live adapter, ledger, webh
 ## Reviewed SEO source drift
 
 The standalone CI check failed against the old SEO pin before this preview work: all 56 inherited pinned files were checked individually, and only `src/lib/seo.js` differed. The pinned bytes match production commit `b582df3e`. The current source changes exactly one `/affiliate` metadata entry to remove the discontinued ClickBank 30% offer and state that course affiliate enrollment is unavailable. Preserve the corrected text. Update only the active standalone pin for those reviewed bytes; the original export manifest and all other source hashes and assertions remain unchanged. See [the failing check](https://github.com/dantelrharrell-debug/Nija/actions/runs/46069797514/job/140743741467).
+
+## Owner-operated adult eligibility (TEST only)
+
+Dante selected manual owner review rather than a new verification vendor. The proposed adapter requires the exact designated reviewer’s active authenticated owner session and verified CSRF before appending a per-buyer decision. The buyer’s own active session must match the reviewed NIJA account. Decisions can expire or be revoked. No names, email addresses, document images, birth dates, or payment identifiers are accepted by the decision schema. Do not send those materials in chat. Review evidence only through a separately approved private method. For staging, use synthetic accounts and do not certify real buyers.
+
+The separately reviewed TEST migration must not be appended to the existing four-table migration or run in production. Grant its runtime role only SELECT and INSERT. The new owner adapter is not a login service. Before use, bind the canonical private session authority and owner action UI, configure the preview rate limit and route, then run the browser test. Do not assume a checkbox or the owner’s general approval supplies an individual approval record.

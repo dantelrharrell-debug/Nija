@@ -124,3 +124,19 @@ test("database lookup is parameterized, scoped to buyer and exact TEST session",
   assert.match(queries[0].sql,/owner_id=\$1 AND stripe_session=\$2/);
   assert.deepEqual(queries[0].params,[active.ownerId,sid]);
 });
+
+test("checkout report access follows only the designated operator's active TEST review",async()=>{
+  const {createManualAdultReview}=await import("../server/v515-manual-adult-review.mjs");
+  let record;
+  const manual=createManualAdultReview({reviewedTestOnly:true,reviewerId:"operator-fixture",
+    verifyCustomerSession:async()=>active,
+    verifyReviewerMutation:async()=>({ownerId:"operator-fixture",active:true,isOwner:true,csrfVerified:true}),
+    store:{getLatest:async()=>record,record:async value=>{record=value;}}});
+  const f=fixture({verifyBuyer:manual.verifyBuyer});
+  const handler=hand(f);
+  assert.equal((await invoke(handler)).status,401);
+  await manual.recordDecision({},{buyerId:active.ownerId,decision:"approve"});
+  assert.equal((await invoke(handler)).status,200);
+  await manual.recordDecision({},{buyerId:active.ownerId,decision:"revoke"});
+  assert.equal((await invoke(handler)).status,401);
+});
