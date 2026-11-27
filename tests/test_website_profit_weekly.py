@@ -106,13 +106,19 @@ class WeeklyEvidenceTests(unittest.TestCase):
         self.assertEqual(result["previous"]["verification_status"], "VERIFIED")
 
     def test_invalid_financial_values_fail_closed(self):
-        for invalid in ("NaN", "Infinity", "-1", None, True, "oops"):
+        for invalid in ("NaN", "Infinity", "-1", None, True, "oops", "1e1000000", "1e-1000000"):
             with self.subTest(invalid=invalid):
                 rows = fixtures(self.end, 7)
                 rows[0]["attributable_costs_usd"] = invalid
                 result = summarize_week(rows, self.end, weekly_counts(self.end))
                 self.assertEqual(result["verification_status"], "PARTIAL")
                 self.assertIsNone(result["net_profit_usd"])
+
+    def test_malformed_dates_return_unverified(self):
+        rows = fixtures(self.end)
+        rows[2]["date"] = []
+        self.assertEqual(summarize_week(rows[:7], self.end)["verification_status"], "UNVERIFIED")
+        self.assertEqual(compare_weeks(rows, self.end)["current"]["verification_status"], "UNVERIFIED")
 
     def test_invalid_input_types_rejected(self):
         with self.assertRaises(ValueError):
