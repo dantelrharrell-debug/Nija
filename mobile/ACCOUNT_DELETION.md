@@ -29,9 +29,12 @@ review is not automatically submitted by this endpoint.
 
 There is no single transaction across all covered stores. A failed step returns
 HTTP 500 without a success claim; earlier cleanup may already have completed.
-The existing HTTP 400 confirmation failure and HTTP 404 missing-account response
-are unchanged. A repeated request must not delete another account, but a repeated
-successful deletion is not promised to return HTTP 200.
+The HTTP 400 confirmation failure remains unchanged. When a validly signed
+JWT belongs to an account already removed, the shared auth decorator now
+rejects it with HTTP 401 before the handler runs. The handler's HTTP 404
+missing-account response can still occur if the account disappears between
+its authentication check and its lookup. Repeated requests must not delete
+another account or claim success.
 
 The shared `require_auth` decorator now checks that the JWT subject still
 exists and is enabled in the authoritative authentication database, in
