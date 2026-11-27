@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts import nija_kraken_journal_backup as journal_backup
+
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "nija_trade_ledger_snapshot_v436.py"
 spec = importlib.util.spec_from_file_location("nija_trade_ledger_snapshot_v436", SCRIPT)
@@ -236,3 +238,88 @@ def test_verified_restore_uses_pinned_bytes_if_original_archive_is_replaced(tmp_
     assert checked["expected_archive_sha256_matched"] is True
     assert checked["isolated_restore_test_verified"] is True
     assert checked["off_host_backup_verified"] is False
+
+
+def test_configured_submission_journal_roundtrip_preserves_order_fence(tmp_path, monkeypatch):
+    import tarfile
+    from bot.kraken_submission_journal import (
+        KrakenSubmissionJournal, SubmissionDenied, initialize_journal,
+    )
+
+    source = tmp_path / "live.db"
+    _ledger(source)
+    journal_path = tmp_path / "writer.db"
+    initialize_journal(journal_path, "platform:kraken")
+    journal = KrakenSubmissionJournal(journal_path, "platform:kraken")
+    journal.reserve("awaiting-terminal-proof")
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal_path))
+
+    report = journal_backup.capture(source, tmp_path / "exports")
+    assert report["submission_journal_verified"] is True
+    archive = Path(report["archive"])
+    verified = journal_backup.restore(archive, expected_sha256=report["sha256"])
+    assert verified["submission_journal_verified"] is True
+    assert verified["isolated_restore_test_verified"] is True
+    assert verified["live_trading_eligible"] is False
+
+    restored = tmp_path / "restored-journal.db"
+    with tarfile.open(archive) as tar:
+        member = tar.extractfile(snapshot.SUBMISSION_JOURNAL)
+        assert member is not None
+        with member:
+            restored.write_bytes(member.read())
+    reopened = KrakenSubmissionJournal(restored, "platform:kraken")
+    assert reopened.unresolved_count() == 1
+    with pytest.raises(SubmissionDenied, match="already reserved"):
+        reopened.reserve("awaiting-terminal-proof")
+    with pytest.raises(SubmissionDenied, match="unresolved"):
+        reopened.reserve("new-intent")
+
+
+def test_configured_missing_submission_journal_cannot_produce_backup(tmp_path, monkeypatch):
+    source = tmp_path / "live.db"
+    _ledger(source)
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(tmp_path / "missing.db"))
+    with pytest.raises(FileNotFoundError):
+        snapshot.create_snapshot(source, tmp_path / "exports")
+    assert not list((tmp_path / "exports").glob("*.tar.gz"))
+
+
+def test_journal_required_for_strict_capture_and_restore(tmp_path, monkeypatch):
+    source = tmp_path / "live.db"
+    _ledger(source)
+    monkeypatch.delenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", raising=False)
+    exports = tmp_path / "exports"
+    with pytest.raises(ValueError, match="required submission journal is not configured"):
+        journal_backup.capture(source, exports)
+    assert not exports.exists()
+
+    report = snapshot.create_snapshot(source, exports)
+    archive = Path(report["archive"])
+    with pytest.raises(ValueError, match="independently recorded archive SHA-256 is required"):
+        journal_backup.restore(archive, expected_sha256=None)
+    with pytest.raises(ValueError, match="required submission journal is missing from archive"):
+        journal_backup.restore(archive, expected_sha256=report["sha256"])
+
+
+@pytest.mark.parametrize("problem", ["wrong_scope", "orphan_resolution"])
+def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch, problem):
+    from bot.kraken_submission_journal import initialize_journal
+
+    source = tmp_path / "live.db"
+    _ledger(source)
+    journal = tmp_path / "writer.db"
+    scope = "platform:other" if problem == "wrong_scope" else "platform:kraken"
+    initialize_journal(journal, scope)
+    if problem == "orphan_resolution":
+        with sqlite3.connect(journal) as db:
+            db.execute("INSERT INTO submission_resolution VALUES (?, ?, ?, ?, ?)",
+                       ("missing-intent", 1, "closed", "a" * 64, "b" * 64))
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal))
+    expected = "account scope mismatch" if problem == "wrong_scope" else "invalid references"
+    with pytest.raises(ValueError, match=expected):
+        journal_backup.capture(source, tmp_path / "strict")
+    assert not list((tmp_path / "strict").glob("*.tar.gz"))
+    archive = snapshot.create_snapshot(source, tmp_path / "legacy")
+    with pytest.raises(ValueError, match=expected):
+        journal_backup.restore(Path(archive["archive"]), expected_sha256=archive["sha256"])

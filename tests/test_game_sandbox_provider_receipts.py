@@ -11,7 +11,7 @@ import secrets
 
 import pytest
 
-from fixtures.stripe_iq72_sandbox import DISPUTED, LINES, PAID, REFUNDED
+from fixtures.test_stripe_iq72_sandbox import DISPUTED, LINES, PAID, REFUNDED
 from game_sandbox.ionos import PublishedGame, build_published_report
 from game_sandbox.service import Config, Denied, Sandbox
 

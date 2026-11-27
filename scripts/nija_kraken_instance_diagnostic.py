@@ -27,6 +27,7 @@ RELEASE_BRANCH = "release/justcall-handoff-only-20261017"
 SOURCE_PATHS = (
     "bot/kraken_sqlite_readonly_preflight_v488.py",
     "bot/kraken_live_history_recovery.py",
+    "bot/kraken_history_response_journal.py",
     "bot/universal_broker_exit_supervisor_patch.py",
     "bot/kraken_identity_request_recovery_v491.py",
     "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py",
@@ -38,6 +39,12 @@ MAX_BYTES = 4 * 1024 * 1024
 IDENTITY_REQUEST = "85c2521edd9754d6f6f7df677f8d6231"
 RECOVERY_ROOT = Path("/data/kraken-history-recovery")
 APP_ROOT = Path("/app")
+IDENTITY_CONSUMER_PINS = (
+    ("bot/kraken_identity_request_recovery_v491.py",
+     "69e4617711013cad18546edb9ee21832441d88b6b84e26a176bd7cff6bc248ce"),
+    ("bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py",
+     "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4"),
+)
 SIGNALS = {
     "INVALID_API_KEY": (
         "eapi:invalid key",
@@ -408,17 +415,22 @@ def inspect_render_api(*, deployment_only: bool = False) -> dict:
     return result
 
 
-def identity_probe(*, publish: bool = False) -> dict:
+def identity_probe(*, publish: bool = False, request_id: str = IDENTITY_REQUEST) -> dict:
     """Request once or read the existing consumer's sanitized identity receipt.
 
     Never construct a broker, import runtime hooks, acquire writer authority,
     generate a nonce, change bindings, replay a consumed request or enable orders.
+    A separately requested diagnostic may supply a fresh ID explicitly. The
+    historical default is stable; no failure creates or retries another ID.
     """
     result = {
-        "status": "BLOCKED", "request_id": IDENTITY_REQUEST,
+        "status": "BLOCKED", "request_id": None,
         "allow_new_orders": False, "independent_certification_complete": False,
         "request_created": False,
     }
+    if type(request_id) is not str or re.fullmatch(r"[0-9a-f]{32}", request_id) is None:
+        return {**result, "reason": "identity_request_id_invalid"}
+    result["request_id"] = request_id
     if (os.environ.get("RENDER_SERVICE_ID") != SERVICE
             or not re.fullmatch(r"[0-9a-f]{40}", BASELINE)
             or os.environ.get("RENDER_GIT_COMMIT") != BASELINE):
@@ -431,14 +443,14 @@ def identity_probe(*, publish: bool = False) -> dict:
         if (root.is_symlink() or root.resolve() != root or not stat.S_ISDIR(info.st_mode)
                 or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077):
             return {**result, "reason": "private_recovery_directory_required"}
-        output = root / (IDENTITY_REQUEST + ".identity.evidence.json")
+        output = root / (request_id + ".identity.evidence.json")
         if output.exists() or output.is_symlink():
             output_info = output.lstat()
             if (output.is_symlink() or output_info.st_uid != os.geteuid()
                     or stat.S_IMODE(output_info.st_mode) & 0o077 or output_info.st_nlink != 1):
                 return {**result, "reason": "private_identity_receipt_required"}
             row = json.loads(_read_regular(output, 8192))
-            if (not isinstance(row, dict) or row.get("request_id") != IDENTITY_REQUEST
+            if (not isinstance(row, dict) or row.get("request_id") != request_id
                     or row.get("account_scope") != "platform:kraken"
                     or row.get("trading_authorized") is not False or row.get("diagnostic_only") is not True
                     or row.get("independent_certification_complete") is not False
@@ -465,21 +477,29 @@ def identity_probe(*, publish: bool = False) -> dict:
                 "authenticated_account_identifier_invalid", "observation_clock_invalid",
                 "observation_clock_invalid_or_stale", "identity_comparison_failed",
             } else "identity_comparison_unverified"
+            # Display only the consumer's known diagnostic metadata. Missing or
+            # malformed fields are omitted, never coerced or filled with defaults.
+            # These labels do not participate in matching or certification.
+            diagnostics = {}
+            method = row.get("identity_method")
+            if type(method) is str and method in {"response_echo", "native_signed_request_v1"}:
+                diagnostics["identity_method"] = method
+            for field in ("parsed_identity_field_presence", "http_identity_field_presence"):
+                presence = row.get(field)
+                if (type(presence) is dict and set(presence) == {"apiKey", "validUntil"}
+                        and all(type(value) is bool for value in presence.values())):
+                    diagnostics[field] = {key: presence[key] for key in ("apiKey", "validUntil")}
             return {
                 **result, "status": "IDENTITY_RECEIPT", "configured_account_key_match": matched,
                 "fresh": fresh, "reason": "saved_binding_match" if matched else failure,
+                **diagnostics,
             }
-        claim = root / (IDENTITY_REQUEST + ".identity.claimed.json")
+        claim = root / (request_id + ".identity.claimed.json")
         if claim.exists() or claim.is_symlink():
             return {**result, "status": "CLAIMED", "reason": "consumed_request_never_replayed"}
         if not publish:
             return {**result, "status": "PENDING", "reason": "identity_receipt_not_available"}
-        for relative, expected in {
-            "bot/kraken_identity_request_recovery_v491.py":
-                "8cc505852be46d5d9927bd22cd41e8bc1b44649f981727fcf43d2233e85a5bf2",
-            "bot/runtime_kraken_deferred_fill_proof_recovery_v363_patch.py":
-                "8e44f8f570ada43f8fe698d4b2488c0097895d964ff3eb781e6bacd934d922e4",
-        }.items():
+        for relative, expected in IDENTITY_CONSUMER_PINS:
             if hashlib.sha256(_read_regular(APP_ROOT / relative, MAX_BYTES)).hexdigest() != expected:
                 return {**result, "reason": "identity_consumer_source_changed"}
         binding = root / "approved-binding-platform-20261028.json"
@@ -503,7 +523,7 @@ def identity_probe(*, publish: bool = False) -> dict:
                 if (root / name).exists() or (root / name).is_symlink():
                     return {**result, "reason": "existing_recovery_request_preserved"}
             request = {
-                "request_id": IDENTITY_REQUEST, "account_scope": "platform:kraken",
+                "request_id": request_id, "account_scope": "platform:kraken",
                 "created_at": time.time(), "max_pages": 1,
             }
             target = root / "identity_request.json"
@@ -544,6 +564,9 @@ if __name__ == "__main__":
         report = inspect_render_api(deployment_only=True)
     elif sys.argv[1:] in (["--request-identity"], ["--identity-result"]):
         report = identity_probe(publish=sys.argv[1:] == ["--request-identity"])
+    elif (len(sys.argv) == 4 and sys.argv[1] in {"--request-identity", "--identity-result"}
+          and sys.argv[2] == "--request-id"):
+        report = identity_probe(publish=sys.argv[1] == "--request-identity", request_id=sys.argv[3])
     elif not sys.argv[1:]:
         report = inspect_instance()
     else:

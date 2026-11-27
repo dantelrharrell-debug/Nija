@@ -126,10 +126,7 @@ def _ping_once(redis_url: str, timeout_s: float = 5.0) -> str:
     sock_obj: socket.socket = raw_sock
     try:
         if scheme == "rediss":
-            if _tls_auto_insecure(redis_url):
-                context = ssl._create_unverified_context()
-            else:
-                context = ssl.create_default_context()
+            context = ssl.create_default_context()
             sock_obj = context.wrap_socket(raw_sock, server_hostname=host)
 
         if parsed.password:

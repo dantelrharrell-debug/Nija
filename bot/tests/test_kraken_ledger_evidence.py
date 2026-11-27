@@ -11,6 +11,7 @@ import unittest
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 BOT = Path(__file__).resolve().parents[1]
@@ -190,6 +191,64 @@ class KrakenLedgerEvidenceTests(unittest.TestCase):
             self.binding, review_binding=lambda candidate: candidate is self.binding,
             clock=lambda: NOW, **kwargs,
         )
+
+    def test_terminal_verifier_uses_exact_reconciled_closed_order(self):
+        self.update("ledger_evidence_state", "unresolved_submission_count", 1)
+        self.broker.data["ClosedOrders"][BUY]["closetm"] = NOW - 5
+        verify = ledger.make_kraken_terminal_order_verifier(
+            self.binding, review_binding=lambda binding: binding is self.binding,
+            clock=lambda: NOW,
+        )
+        with self.assertRaisesRegex(KrakenLedgerDenied, "scope_mismatch"):
+            verify("platform:kraken", "intent", BUY, NOW - 90)
+        self.assertFalse(self.broker.calls)
+        with self.assertRaisesRegex(KrakenLedgerDenied, "exact_terminal_order_missing"):
+            verify(SCOPE, "intent", STOP, NOW - 90)
+        with self.assertRaisesRegex(KrakenLedgerDenied, "terminal_order_time_invalid"):
+            verify(SCOPE, "intent", BUY, NOW - 1)
+        receipt = verify(SCOPE, "intent", BUY, NOW - 90)
+        self.assertEqual(receipt["broker_order_id"], BUY)
+        self.assertEqual(receipt["terminal_status"], "closed")
+        self.assertEqual(receipt["intent_id"], "intent")
+        self.assertRegex(receipt["ledger_evidence_sha256"], r"^[a-f0-9]{64}$")
+        self.denied("ledger_snapshot_state_unverified")
+        self.update("trade_ledger", "fee", "9")
+        with self.assertRaisesRegex(KrakenLedgerDenied, "ledger_broker_fill_terms_mismatch"):
+            verify(SCOPE, "intent", BUY, NOW - 90)
+
+    def test_terminal_verifier_settles_durable_journal_only_after_ledger_matches(self):
+        journal_module = load_pure_module("_tested_submission_journal", "kraken_submission_journal.py")
+        journal_path = self.root / "submission.db"
+        journal_module.initialize_journal(journal_path, SCOPE)
+        journal = journal_module.KrakenSubmissionJournal(journal_path, SCOPE)
+        self.update("ledger_evidence_state", "unresolved_submission_count", 1)
+        self.broker.data["ClosedOrders"][BUY]["closetm"] = NOW - 5
+        verify = ledger.make_kraken_terminal_order_verifier(
+            self.binding, review_binding=lambda binding: binding is self.binding,
+            clock=lambda: NOW,
+        )
+
+        with patch.object(journal_module, "time", SimpleNamespace(time=lambda: NOW - 10)):
+            client_order_id = journal.reserve("intent")
+        self.broker.data["ClosedOrders"][BUY]["cl_ord_id"] = client_order_id
+
+        with patch.object(journal_module, "time", SimpleNamespace(time=lambda: NOW)):
+            self.update("trade_ledger", "fee", "9")
+            with self.assertRaisesRegex(KrakenLedgerDenied, "ledger_broker_fill_terms_mismatch"):
+                journal.reconcile_submission("intent", verify_terminal_order=verify)
+            self.assertEqual(journal.unresolved_count(), 1)
+
+            self.update("trade_ledger", "fee", "2")
+            self.broker.data["OpenOrders"][STOP]["cl_ord_id"] = client_order_id
+            with self.assertRaisesRegex(KrakenLedgerDenied, "unique_terminal_client_order_missing"):
+                journal.reconcile_submission("intent", verify_terminal_order=verify)
+            self.assertEqual(journal.unresolved_count(), 1)
+            del self.broker.data["OpenOrders"][STOP]["cl_ord_id"]
+            journal.reconcile_submission("intent", verify_terminal_order=verify)
+            restarted = journal_module.KrakenSubmissionJournal(journal_path, SCOPE)
+            self.assertEqual(restarted.unresolved_count(), 0)
+            with self.assertRaisesRegex(journal_module.SubmissionDenied, "already reserved"):
+                restarted.reserve("intent")
 
     def denied(self, reason=None):
         with self.assertRaises(KrakenLedgerDenied) as result:
@@ -509,6 +568,66 @@ class KrakenLedgerEvidenceTests(unittest.TestCase):
         self.broker.hook = hook
         self.assertTrue(self.provider()()["verified"])
 
+    def test_split_fills_keep_individual_ids_across_pages_and_verification_passes(self):
+        """Default taker consolidation cannot replace persisted exchange fills."""
+        second_tid = "TEEEEE-EEEEE-EEEEEE"
+        self.update("trade_ledger", "quantity", "1")
+        self.update("trade_ledger", "size_usd", "100")
+        self.update("trade_ledger", "fee", "1")
+        self.insert("trade_ledger", {
+            "user_id": "alice", "symbol": "BTC-USD", "side": "BUY", "action": "OPEN",
+            "quantity": "1", "size_usd": "100", "fee": "1", "position_id": "internal-lot-1",
+            "exchange_trade_id": second_tid, "exchange_order_id": BUY, "order_id": "internal-order-1",
+        })
+        first_fill = self.broker.data["TradesHistory"][TID]
+        first_fill.update(vol="1", cost="100", fee="1")
+        self.broker.data["TradesHistory"][second_tid] = copy.deepcopy(first_fill)
+        self.broker.data["ClosedOrders"][BUY]["trades"] = [TID, second_tid]
+        for suffix, asset, amount, fee in (("base", "XXBT", "1", "0"),
+                                           ("quote", "ZUSD", "-100", "1")):
+            self.broker.data["Ledgers"]["buy-" + suffix].update(amount=amount, fee=fee)
+            self.broker.data["Ledgers"]["second-buy-" + suffix] = {
+                "asset": asset, "amount": amount, "fee": fee, "type": "trade", "refid": second_tid,
+            }
+        self.partial_close(terminal=True)
+        self.broker.page_size = 1
+
+        for direct in (False, True):
+            for target in ("TradesHistory", "ClosedOrders"):
+                with self.subTest(direct=direct, target=target):
+                    self.broker._gateway_url = "" if direct else "https://offline.invalid"
+                    self.broker.calls.clear()
+
+                    def consolidate_by_default(endpoint, params):
+                        if endpoint != target or params.get("consolidate_taker") in (False, "false"):
+                            return None
+                        if endpoint == "TradesHistory":
+                            consolidated = copy.deepcopy(first_fill)
+                            consolidated.update(vol="2", cost="200", fee="2")
+                            return {"error": [], "result": {
+                                "trades": {TID: consolidated}, "cursor": {"next": None},
+                            }}
+                        consolidated = copy.deepcopy(self.broker.data["ClosedOrders"])
+                        consolidated[BUY]["trades"] = [TID]
+                        return {"error": [], "result": {
+                            "closed": consolidated, "cursor": {"next": None},
+                        }}
+
+                    self.broker.hook = consolidate_by_default
+                    self.assertTrue(self.provider()()["verified"])
+                    for endpoint in ("TradesHistory", "ClosedOrders"):
+                        calls = [params for ep, params, _ in self.broker.calls if ep == endpoint]
+                        self.assertGreaterEqual(sum("cursor" not in params for params in calls), 2)
+                        self.assertTrue(any("cursor" in params for params in calls))
+                        for params in calls:
+                            if direct:
+                                self.assertEqual(params["consolidate_taker"], "false")
+                            else:
+                                self.assertIs(params["consolidate_taker"], False)
+                    for endpoint, params, _ in self.broker.calls:
+                        if endpoint not in {"TradesHistory", "ClosedOrders"}:
+                            self.assertNotIn("consolidate_taker", params)
+
     def test_direct_form_wire_flags_match_existing_kraken_transport(self):
         self.broker._gateway_url = ""
         self.assertTrue(self.provider()()["verified"])
@@ -780,8 +899,8 @@ class KrakenLedgerEvidenceTests(unittest.TestCase):
         self.assertFalse(self.broker.calls)
         self.assertFalse(any(name == "bot" or name.startswith("bot.") for name in set(sys.modules) - before))
         self.assertEqual(module.__all__, [
-            "KrakenLedgerDenied", "ReviewedLedgerBinding", "make_kraken_ledger_evidence_provider",
-            "offline_ledger_schema_sql",
+            "KrakenLedgerDenied", "ReviewedLedgerBinding", "ReviewedOpeningBaseline", "make_kraken_ledger_evidence_provider",
+            "make_kraken_terminal_order_verifier", "offline_ledger_schema_sql",
         ])
 
 

@@ -30,8 +30,10 @@ def test_v122_blocks_only_kraken_when_v121_not_ready(monkeypatch):
     assert module._connected_unsynced_platform_brokers(object()) == [("coinbase", coinbase)]
 
 
-def test_v122_allows_kraken_after_v121_ready(monkeypatch):
+def test_v122_allows_kraken_after_all_read_prerequisites_are_ready(monkeypatch):
     monkeypatch.setenv("NIJA_KRAKEN_READ_TIMEOUT_V121_INSTALLED", "1")
+    monkeypatch.setenv("NIJA_KRAKEN_EARLY_READ_CONVERGENCE_V311_READY", "1")
+    monkeypatch.setenv("NIJA_RUNTIME_KRAKEN_BALANCE_EPOCH_HANDOFF_V312_READY", "1")
     module, kraken, coinbase = _fake_v108_module()
 
     assert v122._patch_v108(module) is True

@@ -309,9 +309,32 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user_id = payload['user_id']
+    user_id = payload.get('user_id')
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    # Check rate limit for authenticated user
+    # Signed JWTs must stop working after a user is deleted or disabled.
+    # Never authorize from token contents without the current user record.
+    try:
+        current_user = user_db.get_user(user_id)
+    except Exception as exc:
+        logger.error("AUTH_SUBJECT_LOOKUP_FAILED error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication temporarily unavailable",
+        ) from None
+    if not current_user or not current_user.get('enabled', True):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is unavailable",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Check rate limit only for a valid, still-enabled authenticated user.
     await check_rate_limit(request, user_id)
 
     return user_id

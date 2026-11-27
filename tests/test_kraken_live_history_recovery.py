@@ -58,6 +58,8 @@ def test_exact_existing_broker_read_only_evidence_and_permanent_claim(root):
     broker = Broker()
     assert run(root, [broker, broker])
     assert len(broker.calls) == 10  # balances, history and two current open-order reads
+    assert all(params.get("ledgers") is True for endpoint, params in broker.calls
+               if endpoint == "TradesHistory")
     assert all(e in {"Balance", "TradesHistory", "ClosedOrders", "Ledgers", "OpenOrders"} for e, _ in broker.calls)
     out = json.loads((root / (ID + ".evidence.json")).read_text())
     assert out["collection_succeeded"] is True and out["trading_authorized"] is False
@@ -250,7 +252,10 @@ def test_explicit_eleven_page_history_request_retains_fail_closed_authority(root
         if endpoint == "Balance":
             assert params == {}
             return {"error": [], "result": {"ZUSD": "100"}}
-        assert set(params) == {"ofs"}
+        assert set(params) == {
+            "TradesHistory": {"ofs", "consolidate_taker", "ledgers"},
+            "ClosedOrders": {"ofs", "trades", "consolidate_taker"}, "Ledgers": {"ofs"},
+        }[endpoint]
         field = {"TradesHistory": "trades", "ClosedOrders": "closed", "Ledgers": "ledger"}[endpoint]
         count = 501 if endpoint == "TradesHistory" else 0
         offset = params["ofs"]
@@ -288,7 +293,7 @@ def test_history_count_exceeding_explicit_budget_stops_on_first_page(root):
             return {"error": [], "result": {"open": {}}}
         if endpoint == "Balance":
             return {"error": [], "result": {"ZUSD": "100"}}
-        assert endpoint == "TradesHistory" and params == {"ofs": 0}
+        assert endpoint == "TradesHistory" and params == {"ofs": 0, "consolidate_taker": False, "ledgers": True}
         return {"error": [], "result": {"count": 551, "trades": {"first": {"vol": "1"}}}}
 
     broker._kraken_private_call = read
@@ -318,7 +323,7 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
         field = {"TradesHistory": "trades", "ClosedOrders": "closed"}[endpoint]
         if endpoint == "TradesHistory":
             return {"error": [], "result": {"count": 0, field: {}}}
-        assert endpoint == "ClosedOrders" and params == {"ofs": 0}
+        assert endpoint == "ClosedOrders" and params == {"ofs": 0, "trades": True, "consolidate_taker": False}
         return {"error": [], "result": {"count": 552, field: {"order-id": {"vol": "1"}}}}
 
     broker._kraken_private_call = read
@@ -335,8 +340,8 @@ def test_closed_orders_page_budget_reported_only_in_private_receipt(root, caplog
     assert "552" not in caplog.text
     assert "order-id" not in caplog.text
     assert calls == [
-        ("Balance", {}), ("TradesHistory", {"ofs": 0}),
-        ("ClosedOrders", {"ofs": 0}),
+        ("Balance", {}), ("TradesHistory", {"ofs": 0, "consolidate_taker": False, "ledgers": True}),
+        ("ClosedOrders", {"ofs": 0, "trades": True, "consolidate_taker": False}),
     ]
     assert (root / (ID + ".claimed.json")).exists()
     assert not run(root, [broker])
@@ -526,3 +531,128 @@ def test_returned_progress_does_not_claim_broker_acceptance(root):
     assert receipt["collection_succeeded"] is False
     assert receipt["trading_authorized"] is False
     assert "private-api-canary" not in progress_path.read_text() + receipt_path.read_text()
+
+
+@pytest.mark.parametrize("reply,success", [
+    ({"open": {}}, True), ({"open": {"example": {"status": "open"}}}, True),
+    ({"open": {}, "cursor": {"next": "more"}}, False), ({"open": {}, "cursor": {}}, False),
+    ({"open": {str(i): {"status": "open"} for i in range(51)}}, False),
+    ({"open": None}, False), ({}, False), ({"open": {}, "count": 3}, False),
+])
+def test_current_inventory_has_separate_private_result_and_no_history_calls(root, reply, success):
+    class InventoryBroker(Broker):
+        api = object()
+        _gateway_url = ""
+        _gateway_only_mode = False
+
+        def _kraken_private_call(self, endpoint, params, *, category):
+            assert category is CATEGORY
+            self.calls.append(endpoint)
+            if endpoint == "BalanceEx":
+                return {"error": [], "result": {"XXBT": {"balance": "0.000001", "hold_trade": "0"}}}
+            if endpoint == "OpenOrders":
+                assert params == {}
+                return {"error": [], "result": reply}
+            assert endpoint == "OpenPositions" and params == {}
+            return {"error": [], "result": {}}
+
+    request(root, mode="current_inventory", max_pages=1)
+    broker = InventoryBroker()
+    assert run(root, [broker])
+    assert broker.calls == (["BalanceEx", "OpenOrders", "OpenPositions"] if success else ["BalanceEx", "OpenOrders"])
+    path = root / (ID + ".inventory.json")
+    result = json.loads(path.read_text())
+    assert result["inventory_read_succeeded"] is success
+    assert result["complete_history"] is False and result["trading_authorized"] is False
+    assert ("observations" in result) is success
+    if success:
+        observation = result["observations"]["OpenOrders"]
+        assert observation["request_mode"] == "all_unfiltered_no_limit"
+        assert observation["result"] == reply
+    assert not (root / (ID + ".evidence.json")).exists()
+    assert path.stat().st_mode & 0o077 == 0
+
+
+def test_inventory_schema_is_exclusive_and_unavailable_to_other_consumers(root):
+    request(root, mode="current_inventory", max_pages=1)
+    with pytest.raises(ValueError, match="schema"):
+        api._request(root, NOW)
+    request(root, mode="current_inventory", use_cursor=True, max_pages=1)
+    with pytest.raises(ValueError, match="schema"):
+        run(root, [Broker()])
+
+
+def test_inventory_owner_change_stops_after_first_read(root):
+    class ChangingOwner(Broker):
+        api = object()
+        _gateway_url = ""
+        _gateway_only_mode = False
+
+        def _kraken_private_call(self, endpoint, params, *, category):
+            self.calls.append(endpoint)
+            self.api = object()
+            return {"error": [], "result": {}}
+
+    request(root, mode="current_inventory", max_pages=1)
+    broker = ChangingOwner()
+    assert run(root, [broker])
+    assert broker.calls == ["BalanceEx"]
+    result = json.loads((root / (ID + ".inventory.json")).read_text())
+    assert result["reason"] == "inventory_owner_changed"
+    assert "observations" not in result
+    request(root, mode="current_inventory", max_pages=1)
+    with pytest.raises(ValueError, match="replay"):
+        run(root, [broker])
+    assert broker.calls == ["BalanceEx"]
+
+
+@pytest.mark.parametrize("event_time,success", [(100, False), (101, True), (200, True), (201, False)])
+def test_window_uses_existing_broker_and_scoped_evidence(root, event_time, success):
+    request(root, history_start=100, history_end=200)
+    broker = Broker()
+    original_read = broker._kraken_private_call
+
+    def read(endpoint, params, *, category):
+        response = original_read(endpoint, params, category=category)
+        if endpoint in {"Balance", "OpenOrders"}:
+            assert "start" not in params and "end" not in params
+        else:
+            assert (params["start"], params["end"]) == (100, 200)
+            assert "ofs" in params and "with_cursor" not in params
+            if endpoint == "ClosedOrders":
+                assert params["closetime"] == "close"
+            field = {"TradesHistory": "trades", "Ledgers": "ledger", "ClosedOrders": "closed"}[endpoint]
+            row = response["result"][field]["id"]
+            row["closetm" if endpoint == "ClosedOrders" else "time"] = event_time
+        return response
+
+    broker._kraken_private_call = read
+    assert run(root, [broker])
+    result = json.loads((root / (ID + ".window") / (ID + ".evidence.json")).read_text())
+    assert result["collection_succeeded"] is success
+    assert result["trading_authorized"] is False
+    if success:
+        assert result["evidence"]["history_window"] == {"start_exclusive": 100, "end_inclusive": 200}
+        assert len(broker.calls) == 6
+    assert not list(root.glob("*.evidence.json"))
+    assert not list(root.glob("*.response.*.json"))
+
+
+@pytest.mark.parametrize("changes", [
+    {"history_start": 1}, {"history_end": 2}, {"history_start": 2, "history_end": 2},
+    {"history_start": True, "history_end": 2}, {"history_start": 1, "history_end": 1001},
+    {"history_start": 1, "history_end": 2, "use_cursor": True},
+])
+def test_invalid_window_never_calls_broker(root, changes):
+    request(root, **changes)
+    broker = Broker()
+    with pytest.raises(ValueError, match="window_invalid"):
+        run(root, [broker])
+    assert not broker.calls
+
+
+@pytest.mark.parametrize("filename", ["exact_request.json", "identity_request.json"])
+def test_other_recovery_modes_reject_window_fields(root, filename):
+    request(root, history_start=100, history_end=200).rename(root / filename)
+    with pytest.raises(ValueError, match="window_invalid"):
+        api._request(root, NOW, filename=filename)

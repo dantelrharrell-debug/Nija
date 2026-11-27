@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from scripts import nija_render_recovery_verification as verification
 from scripts.nija_kraken_instance_diagnostic import SOURCE_PATHS
 from scripts.render_runtime_build_sources import (
     BuildRecipeDenied, RECIPE_PATHS, derive_runtime_source_sha256,
@@ -18,6 +19,19 @@ from scripts.nija_render_recovery_verification import (
 )
 
 
+# Immutable already-reviewed Git inputs and the existing expected output
+# digests. They are test fixtures, never sources of production approval.
+_REVIEWED_BROKER_FIXTURES = (
+    ("68c566204312a9cabe328ad3f3504cadc1d8736c",
+     "5d7bb04fa40579819c421847e0104db6662a9fd904e7a74c532c9030fbca560c",  # pragma: allowlist secret
+     "5206b66b572c9ff4fe198d5781b053fa037ff8a0c5d72542781c8937afe97ccc"),  # pragma: allowlist secret
+    ("63d63c7e2746c3d7f0aabd39bd6b2a3c853f77c8",
+     "2fe509fa53fc0ceafae78467f6121473ce43bd5832e9438705c19aa2c5a97990",  # pragma: allowlist secret
+     "8faa145d08faf258cd327054e4f7b3430efe134bd801858235943d322c5dd508"),  # pragma: allowlist secret
+)
+_BROKER_SOURCE = "bot/broker_manager.py"
+
+
 class RuntimeBuildSourcesTests(unittest.TestCase):
     """Known transformations are reproduced; unknown bytes remain denied."""
 
@@ -25,37 +39,81 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         self.sources = {path: (root / path).read_bytes() for path in SOURCE_PATHS}
         self.recipe = {path: (root / path).read_bytes() for path in RECIPE_PATHS}
+        from scripts.render_runtime_build_sources import DOCKER_SHA256
+        current = self.recipe["Dockerfile"]
+        self.current_unreviewed_dockerfile = current
+        # Load immutable, reviewed historical bytes rather than reversing a
+        # growing sequence of production Dockerfile changes. This fixture is
+        # only used by offline positive tests, never by production recovery.
+        fixture = (root / "tests/fixtures/render_reviewed_dockerfile_6e34c616").read_bytes()
+        self.assertNotEqual(current, fixture)
+        self.assertIn(hashlib.sha256(fixture).hexdigest(), DOCKER_SHA256)
+        self.recipe["Dockerfile"] = fixture
+
+    def test_current_pinned_trixie_build_recipe_stays_denied(self) -> None:
+        with self.assertRaisesRegex(BuildRecipeDenied, "runtime_build_recipe_unreviewed"):
+            derive_runtime_source_sha256(
+                self.sources, {**self.recipe, "Dockerfile": self.current_unreviewed_dockerfile},
+            )
+
 
     def test_reproduce_build_outputs_without_touching_files_or_approval_inputs(self) -> None:
-        original = copy.deepcopy(self.sources)
-        with patch.object(Path, "write_text", side_effect=AssertionError("must not write")):
-            built = derive_runtime_source_sha256(self.sources, self.recipe)
-        self.assertEqual(self.sources, original)
-        self.assertEqual(set(built), set(SOURCE_PATHS))
-        self.assertEqual(
-            built["start.sh"],
-            "40be05c6a4cc21f42bba1a755b3dfad6c33746588800563284013a00f7faf0ca",  # pragma: allowlist secret
-        )
-        # Public Git-input -> reproduced-output digests for release and main.
-        broker_outputs = {
-            "2fe509fa53fc0ceafae78467f6121473ce43bd5832e9438705c19aa2c5a97990":  # pragma: allowlist secret
-                "8faa145d08faf258cd327054e4f7b3430efe134bd801858235943d322c5dd508",  # pragma: allowlist secret
-            "5d7bb04fa40579819c421847e0104db6662a9fd904e7a74c532c9030fbca560c":  # pragma: allowlist secret
-                "5206b66b572c9ff4fe198d5781b053fa037ff8a0c5d72542781c8937afe97ccc",  # pragma: allowlist secret
-        }
-        self.assertEqual(
-            built["bot/broker_manager.py"],
-            broker_outputs[hashlib.sha256(self.sources["bot/broker_manager.py"]).hexdigest()],
-        )
-        for path in set(SOURCE_PATHS) - {
-            "start.sh", "bot/broker_manager.py", "bot/canonical_broker_startup_convergence_v24.py",
-        }:
-            self.assertEqual(built[path], hashlib.sha256(self.sources[path]).hexdigest())
+        root = Path(__file__).resolve().parents[1]
+        for commit, expected_source, expected_output in _REVIEWED_BROKER_FIXTURES:
+            with self.subTest(commit=commit):
+                reviewed = subprocess.check_output(
+                    ["git", "show", commit + ":" + _BROKER_SOURCE], cwd=root,
+                )
+                self.assertEqual(hashlib.sha256(reviewed).hexdigest(), expected_source)
+                sources = {**self.sources, _BROKER_SOURCE: reviewed}
+                original = copy.deepcopy(sources)
+                with patch.object(Path, "write_text", side_effect=AssertionError("must not write")):
+                    built = derive_runtime_source_sha256(sources, self.recipe)
+                self.assertEqual(sources, original)
+                self.assertEqual(set(built), set(SOURCE_PATHS))
+                self.assertEqual(
+                    built["start.sh"],
+                    "be868922a649560144d6e178489e8e955f2b537a3e95c8c74053e2317e8a6866",  # pragma: allowlist secret
+                )
+                self.assertEqual(built[_BROKER_SOURCE], expected_output)
+                for path in set(SOURCE_PATHS) - {
+                    "start.sh", _BROKER_SOURCE, "bot/canonical_broker_startup_convergence_v24.py",
+                }:
+                    self.assertEqual(built[path], hashlib.sha256(sources[path]).hexdigest())
+
+    def test_current_unreviewed_broker_bytes_denied_before_runtime_access(self) -> None:
+        commit, approved_hash, _ = _REVIEWED_BROKER_FIXTURES[0]
+        current = self.sources[_BROKER_SOURCE]
+        self.assertNotEqual(hashlib.sha256(current).hexdigest(), approved_hash)
+        approval = {"commit": commit, "source_sha256": {_BROKER_SOURCE: approved_hash}}
+        ref = "refs/heads/" + verification.RELEASE_BRANCH
+        with patch.dict(os.environ, {"GITHUB_REF": ref}, clear=True), \
+             patch.object(verification, "load_reviewed_approval", return_value=approval), \
+             patch.object(verification, "inspect_render_api", return_value={"failures": []}), \
+             patch.object(verification, "verify_baseline"), \
+             patch.object(verification, "_command", side_effect=[commit.encode(), b"", current]), \
+             patch.object(verification, "_runtime") as runtime:
+            report = verification.run_verification()
+        self.assertEqual(report["failures"], ["reviewed_source_digest_mismatch"])
+        self.assertFalse(report["SOURCE_INTEGRITY_VERIFIED"])
+        self.assertFalse(report["allow_new_orders"])
+        runtime.assert_not_called()
 
     def test_any_unrecognized_recipe_bytes_fail_closed(self) -> None:
         for path in RECIPE_PATHS:
             with self.subTest(path=path), self.assertRaisesRegex(BuildRecipeDenied, "runtime_build_recipe_unreviewed"):
                 derive_runtime_source_sha256(self.sources, {**self.recipe, path: self.recipe[path] + b"\n"})
+
+    def test_security_upgrade_variant_does_not_allow_unreviewed_package_flags(self) -> None:
+        """Recognize exact public bytes, not any recipe containing an upgrade."""
+        recipe = self.recipe["Dockerfile"]
+        self.assertIn(b"apt-get upgrade -y &&", recipe)
+        for flag in (b"--allow-unauthenticated", b"--allow-downgrades"):
+            changed = recipe.replace(b"apt-get upgrade -y &&", b"apt-get upgrade -y " + flag + b" &&", 1)
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                BuildRecipeDenied, "runtime_build_recipe_unreviewed",
+            ):
+                derive_runtime_source_sha256(self.sources, {**self.recipe, "Dockerfile": changed})
 
     def test_derivation_matches_actual_build_script_file_rewrites(self) -> None:
         root = Path(__file__).resolve().parents[1]

@@ -1,0 +1,67 @@
+name: TIQ72 isolated readiness (no payments)
+
+on:
+  pull_request:
+    paths:
+      - 'web/trading-challenge/server/tiq72-isolated-readiness.mjs'
+      - 'web/trading-challenge/server/tiq72-signed-owner-proof.mjs'
+      - 'web/trading-challenge/server/tiq72-v515-auth-adapter.mjs'
+      - 'web/trading-challenge/server/tiq72-stripe-test-readonly-preflight.mjs'
+      - 'web/trading-challenge/server/requirements-tiq72-preflight.txt'
+      - 'web/trading-challenge/server/tiq72-isolated-db-runtime-probe.mjs'
+      - 'web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs'
+      - 'web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs'
+      - 'web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs'
+      - 'web/trading-challenge/tests/tiq72-signed-owner-proof.test.mjs'
+      - 'web/trading-challenge/tests/tiq72-v515-auth-adapter.test.mjs'
+      - 'web/trading-challenge/tests/tiq72-stripe-test-readonly-preflight.test.mjs'
+      - 'web/trading-challenge/tests/tiq72-isolated-db-runtime-probe.test.mjs'
+      - 'web/trading-challenge/tests/tiq72-upgrade6-config-preflight.test.mjs'
+      - '.github/workflows/tiq72-isolated-readiness.yml'
+      - 'scripts/tiq72_isolated_db_readonly_preflight.py'
+      - 'tests/test_tiq72_isolated_db_readonly_preflight.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-readiness:
+    name: Test redacted readiness and payment holds
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check without dependency installation
+        run: |
+          node --check web/trading-challenge/server/tiq72-isolated-readiness.mjs
+          node --check web/trading-challenge/server/tiq72-signed-owner-proof.mjs
+          node --check web/trading-challenge/server/tiq72-v515-auth-adapter.mjs
+          node --check web/trading-challenge/server/tiq72-stripe-test-readonly-preflight.mjs
+          node --check web/trading-challenge/server/tiq72-isolated-db-runtime-probe.mjs
+          node --check web/trading-challenge/server/tiq72-upgrade6-config-preflight.mjs
+          node --check web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
+      - name: Fail-closed readiness and secret redaction tests
+        run: |
+          node --test web/trading-challenge/tests/tiq72-isolated-readiness.test.mjs
+          node --test web/trading-challenge/tests/tiq72-signed-owner-proof.test.mjs
+          node --test web/trading-challenge/tests/tiq72-v515-auth-adapter.test.mjs
+          node --test web/trading-challenge/tests/tiq72-stripe-test-readonly-preflight.test.mjs
+          node --test web/trading-challenge/tests/tiq72-isolated-db-runtime-probe.test.mjs
+          node --test web/trading-challenge/tests/tiq72-upgrade6-config-preflight.test.mjs
+      - name: Offline private PostgreSQL diagnostic tests
+        run: python3 -m unittest discover -s tests -p 'test_tiq72_isolated_db_readonly_preflight.py' -v
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Require Python 3.14 binary driver import before Render rollout
+        run: |
+          python -m pip install --only-binary=:all: -r web/trading-challenge/server/requirements-tiq72-preflight.txt
+          python -c 'import psycopg2; print("isolated psycopg2 driver import ok")'
+      - name: Confirm payment and database routes stay disabled
+        run: |
+          grep -q 'checkout_available:false' web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs
+          grep -q 'res.writeHead(503)' web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs

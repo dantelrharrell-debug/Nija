@@ -25,6 +25,9 @@ from bot.kraken_authenticated_identity_v480 import (
 from bot.kraken_authenticated_open_order_reconciliation_v482 import (
     _ORDER_ID, _canonical_pair,
 )
+from bot.kraken_margin_cash_reconciliation import (
+    MarginCashReconciliationDenied, compare_margin_cash_records,
+)
 from bot.kraken_sqlite_readonly_preflight_v488 import inspect_kraken_ledger
 from scripts.nija_kraken_readonly_history_collector_v441 import (
     collect_from_existing_broker,
@@ -129,17 +132,36 @@ def _summarize_ledger(rows: Any) -> tuple[
     return orders, unlinked
 
 
+def _margin_counts(trades: Mapping) -> dict[str, int]:
+    """Describe explicit margin evidence without inferring spot or position basis."""
+    counts = {"fills_with_nonzero_margin": 0, "fills_with_unknown_margin": 0}
+    for row in trades.values():
+        if not isinstance(row, Mapping) or "margin" not in row:
+            counts["fills_with_unknown_margin"] += 1
+            continue
+        try:
+            margin = _amount(row["margin"])
+        except ValueError:
+            counts["fills_with_unknown_margin"] += 1
+            continue
+        if margin > 0:
+            counts["fills_with_nonzero_margin"] += 1
+    return counts
+
+
 def inspect_authenticated_kraken_ledger_gaps(
     broker: Any, *, ledger_path: Path, persistent_root: Path,
     approved_api_key_sha256: str, approved_iban_sha256: str,
     reviewed_identity_provider_id: str, monitoring_category: Any,
     max_pages: int, independently_reviewed: bool = False,
     monitoring_budget_approved: bool = False,
+    persisted_margin_cash_rows: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Perform ONE authenticated, account-pinned gap audit; never certify trading.
 
-    A complete full-history collection and exact local fill comparison are
-    prerequisites, not sufficient evidence of audited lot attribution, backup,
+    Supply margin cash rows only from the independently persisted account ledger.
+    Only aggregate comparison counts leave this diagnostic. Full history and
+    exact local fill comparison are prerequisites, not sufficient evidence of audited lot attribution, backup,
     current protective orders, or pretrade order admission.
     """
     report: dict[str, Any] = {
@@ -257,6 +279,30 @@ def inspect_authenticated_kraken_ledger_gaps(
                 or not isinstance(observed.get("open_orders"), Mapping)
                 or not isinstance(observed.get("balance"), Mapping)):
             return reject("broker_history_or_scope_unverified")
+        # Amount agreement cannot establish spot eligibility or margin basis.
+        # Preserve these blockers even if later pair/amount validation fails.
+        counts.update(_margin_counts(observed["history"]["trades"]))
+        if counts["fills_with_nonzero_margin"]:
+            reject("margin_history_requires_independent_position_and_financing_reconciliation")
+        if persisted_margin_cash_rows is not None:
+            try:
+                cash = compare_margin_cash_records(
+                    observed["history"]["ledger"], persisted_margin_cash_rows,
+                    account_scope=SCOPE, account_sha256=approved_iban_sha256,
+                    api_key_sha256=approved_api_key_sha256,
+                )
+            except MarginCashReconciliationDenied:
+                reject("independent_margin_cash_comparison_failed")
+            else:
+                counts["matched_margin_cash_entries"] = cash["matched_entry_count"]
+                counts["matched_rollover_references"] = len(cash["rollover_fees_by_refid_and_asset"])
+        elif counts["fills_with_nonzero_margin"] or any(
+            isinstance(entry, Mapping) and entry.get("type") in ("margin", "rollover")
+            for entry in observed["history"]["ledger"].values()
+        ):
+            reject("independently_persisted_margin_cash_rows_missing")
+        if counts["fills_with_unknown_margin"]:
+            reject("broker_fill_margin_classification_unverified")
         broker_orders = _summarize_trades(observed["history"]["trades"])
         counts["authenticated_kraken_fill_orders"] = len(broker_orders)
         counts["kraken_fill_orders_without_ledger"] = len(

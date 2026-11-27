@@ -161,7 +161,7 @@ class TestPipelineCycleIdDriftWarning(unittest.TestCase):
     """execute() should log a WARNING when correlation cycle_id ≠ snapshot cycle_id."""
 
     def _make_pipeline(self, dispatch_fn=None):
-        from bot.execution_pipeline import ExecutionPipeline
+        from bot.execution_pipeline import ExecutionPipeline, PipelineResult
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
         pipeline._execution_observer = None
         pipeline._allocation_clamp = None
@@ -177,7 +177,7 @@ class TestPipelineCycleIdDriftWarning(unittest.TestCase):
         pipeline._enforce_execution_gate = lambda request, t_start: None
         pipeline._emit_execution_rejection_telemetry = lambda **kwargs: None
         if dispatch_fn is None:
-            pipeline._dispatch = lambda request, t_start: SimpleNamespace(
+            pipeline._dispatch = lambda request, t_start: PipelineResult(
                 success=True, symbol=request.symbol, side=request.side,
                 size_usd=request.size_usd, fill_price=0.0, filled_size_usd=0.0,
                 broker="test", error=None, throttled=False, latency_ms=0.0,

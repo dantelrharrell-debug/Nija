@@ -4,6 +4,15 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot/commissioning_gate.py'
+      - 'bot/commissioning_runtime.py'
+      - 'bot/startup_verification_plan.py'
+      - 'bot/kraken_operator_authorization.py'
+      - 'tests/test_commissioning_two_phase_transition_20261105.py'
+      - 'tests/test_pretrade_collector_missing_regression_20261105.py'
+      - 'tests/test_commissioning_single_flight_20261105.py'
+      - 'bot/tests/test_commissioning_gate.py'
+      - 'bot/tests/test_commissioning_runtime.py'
       - 'bot/capital_publication_liveness_v142_patch.py'
       - 'bot/capital_flow_state_machine.py'
       - 'bot/capital_readiness_handoff_v34.py'
@@ -114,7 +123,29 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install offline checks
-        run: python -m pip install pytest==8.2.2 detect-secrets==1.5.0
+        run: python -m pip install pytest==8.2.2 cryptography==46.0.3 detect-secrets==1.5.0
+      - name: Run mandatory commissioning regressions offline
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+          GH_TOKEN: ''
+          SSH_PRIVATE_KEY: ''
+          KRAKEN_API_KEY: ''
+          KRAKEN_API_SECRET: ''
+          COINBASE_API_KEY: ''
+          COINBASE_API_SECRET: ''
+          COINBASE_PEM_CONTENT: ''
+          OKX_API_KEY: ''
+          OKX_API_SECRET: ''
+          OKX_PASSPHRASE: ''
+          REDIS_URL: ''
+        run: |
+          python -m pytest -q \
+            tests/test_commissioning_two_phase_transition_20261105.py \
+            tests/test_pretrade_collector_missing_regression_20261105.py \
+            tests/test_commissioning_single_flight_20261105.py \
+            bot/tests/test_commissioning_gate.py \
+            bot/tests/test_commissioning_runtime.py
+
       - name: Compile the repair without production startup hooks
         run: |
           python -S -m py_compile \

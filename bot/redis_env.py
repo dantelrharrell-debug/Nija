@@ -353,16 +353,10 @@ def get_nija_url_format_error() -> str:
         return ""
     if raw.startswith("redis://") or raw.startswith("rediss://"):
         return ""
-    # Redact potential credentials before including the value in the message.
-    # If the raw value contains '@', show only the portion after it (the host).
-    # Otherwise truncate to avoid accidental secret exposure.
-    if "@" in raw:
-        _display = "<redacted>@" + raw.split("@", 1)[1]
-    else:
-        _display = raw[:80] + ("..." if len(raw) > 80 else "")
+    # Invalid input can itself be a credential, or contain secrets after '@'.
+    # Do not echo any supplied bytes, even a truncated value or URL suffix.
     return (
-        f"NIJA_REDIS_URL is set to {_display!r}, which is not a valid Redis connection URL. "
-        "In Railway, copy the full Connect URL from the Redis service Connect tab "
-        "(format: rediss://default:PASSWORD@<host>.proxy.rlwy.net:PORT) "
-        "and set that exact value as NIJA_REDIS_URL."
+        "NIJA_REDIS_URL is not a valid Redis connection URL. "
+        "Configure a redis:// or rediss:// connection through the existing "
+        "Render service's protected environment settings. The supplied value is withheld."
     )

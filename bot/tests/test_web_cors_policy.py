@@ -21,6 +21,16 @@ CORS_SURFACES = (
 )
 
 
+def _cors_argument(node: ast.AST, bindings: dict):
+    """Read literal configuration and approved names without executing source."""
+    if isinstance(node, ast.Name) and node.id in bindings:
+        return bindings[node.id]
+    if isinstance(node, ast.Dict):
+        return {_cors_argument(key, bindings): _cors_argument(value, bindings)
+                for key, value in zip(node.keys, node.values)}
+    return ast.literal_eval(node)
+
+
 class WebCorsPolicyTests(unittest.TestCase):
     """Keep legitimate browser access without wildcard credential or PNA grants."""
 
@@ -49,16 +59,21 @@ class WebCorsPolicyTests(unittest.TestCase):
             tree = ast.parse((ROOT / filename).read_text())
             call = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
                         and isinstance(node.func, ast.Name) and node.func.id == "CORS")
-            expression = ast.fix_missing_locations(ast.Expression(body=call))
-            eval(compile(expression, filename, "eval"), {
-                "app": app, "CORS": CORS, "_allowed_origins": ["https://trusted.example"],
-            })
+            bindings = {"app": app, "_allowed_origins": ["https://trusted.example"]}
+            self.assertTrue(all(keyword.arg is not None for keyword in call.keywords))
+            CORS(*(_cors_argument(node, bindings) for node in call.args),
+                 **{keyword.arg: _cors_argument(keyword.value, bindings) for keyword in call.keywords})
 
         @app.get("/api/offline")
         def offline():
             return {"offline": True}
 
         return app.test_client()
+
+    def test_source_arguments_cannot_execute_calls_or_read_attributes(self) -> None:
+        for source in ("unexpected()", "app.config", "unknown_name", "{**unexpected()}"):
+            with self.subTest(source=source), self.assertRaises((ValueError, TypeError)):
+                _cors_argument(ast.parse(source, mode="eval").body, {"app": object()})
 
     def test_real_config_preserves_allowed_preflight_and_denies_private_network(self) -> None:
         client = self.make_client()

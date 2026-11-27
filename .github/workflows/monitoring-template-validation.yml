@@ -1,0 +1,73 @@
+name: Monitoring template configuration validation
+on:
+  push:
+    branches: [release/justcall-handoff-only-20261017]
+    paths:
+      - 'config/supervisor/nija-monitoring.conf'
+      - 'deployment/supervisor/nija-monitoring.conf'
+      - 'deployment/systemd/nija-alerts.service'
+      - 'deployment/systemd/nija-status-monitor.service'
+      - '.github/workflows/monitoring-template-validation.yml'
+  pull_request:
+    branches: [main, release/justcall-handoff-only-20261017]
+    paths:
+      - 'config/supervisor/nija-monitoring.conf'
+      - 'deployment/supervisor/nija-monitoring.conf'
+      - 'deployment/systemd/nija-alerts.service'
+      - 'deployment/systemd/nija-status-monitor.service'
+      - '.github/workflows/monitoring-template-validation.yml'
+permissions:
+  contents: read
+jobs:
+  parse-without-starting-services:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated configuration parser
+        run: python -m pip install supervisor==4.3.0
+      - name: Validate systemd unit syntax without starting services
+        run: >-
+          systemd-analyze verify deployment/systemd/nija-alerts.service
+          deployment/systemd/nija-status-monitor.service
+      - name: Check Supervisor environment binding and missing-value denial
+        run: |
+          python -B -S - <<'PY'
+          import json
+          import secrets
+          import sysconfig
+          import sys
+          sys.path.insert(0, sysconfig.get_paths()['purelib'])
+          from supervisor.options import UnhosedConfigParser
+          from supervisor.datatypes import dict_of_key_value_pairs
+          value = 'postgresql://monitor:' + secrets.token_hex(12) + '@example.invalid/database'
+          checked = denied = 0
+          for filename in ('config/supervisor/nija-monitoring.conf',
+                           'deployment/supervisor/nija-monitoring.conf'):
+              parser = UnhosedConfigParser()
+              parser.expansions = {}
+              parser.read(filename)
+              for section in parser.sections():
+                  if not section.startswith('program:'):
+                      continue
+                  configured = parser.saneget(
+                      section, 'environment', expansions={'ENV_DATABASE_URL': value})
+                  assert dict_of_key_value_pairs(configured)['DATABASE_URL'] == value
+                  checked += 1
+                  try:
+                      parser.saneget(section, 'environment', expansions={})
+                  except ValueError:
+                      denied += 1
+                  else:
+                      raise AssertionError('missing protected database value accepted')
+          assert checked == denied == 3
+          print(json.dumps(dict(supervisor_programs_validated=checked,
+                                missing_environment_denials=denied, services_started=False)))
+          PY

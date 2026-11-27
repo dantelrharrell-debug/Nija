@@ -43,7 +43,7 @@ def fake_stripe(*, link=None, price=None, product=None, session_live=False,
         "mode": "payment",
         "status": "complete",
         "payment_status": "paid",
-        "customer_details": {"email": "buyer@example.test"},
+        "customer_details": {"email": "delivered@resend.dev"},
         "amount_subtotal": 9900,
         "amount_total": 9900,
         "total_details": {"amount_tax": 0, "amount_discount": 0},
@@ -169,7 +169,7 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
 
     def send_email(url, *, json, headers, timeout):
         assert url == "https://api.resend.com/emails"
-        assert json["to"] == ["buyer@example.test"]
+        assert json["to"] == ["delivered@resend.dev"]
         assert headers["Idempotency-Key"] == "nija-foundations-delivery-v1-cs_test_foundations_sandbox"
         sent.append(json)
         return SimpleNamespace(status_code=201, json=lambda: {"id": "email_sandbox_fake"})
@@ -222,6 +222,11 @@ def test_sandbox_signed_webhook_entitlement_claim_and_refund(
     refunded = client.post("/api/billing/webhook", data=b"synthetic-verified",
                            headers={"Stripe-Signature": "sandbox-valid"})
     assert refunded.status_code == 200
+    event.update(id="evt_test_sandbox_refund", type="charge.refunded",
+                 data={"object": {"id": "ch_test_foundations", "livemode": False}})
+    reversal = client.post("/api/billing/webhook", data=b"synthetic-verified",
+                           headers={"Stripe-Signature": "sandbox-valid"})
+    assert reversal.status_code == 200
     assert app.config["COURSE_LEDGER"].get("cs_test_foundations_sandbox")["granted"] is False
     assert client.get("/course-portal/file/NIJA_Trading_Foundations_eBook.pdf",
                       base_url="https://localhost").status_code == 403
@@ -261,3 +266,88 @@ def test_verified_charge_dispute_revokes_only_own_course_entitlement(isolated_sa
         {"charge": "ch_test_foundations", "livemode": False}
     )
     assert ledger.get("cs_test_own")["granted"] is True
+
+
+def _course_readiness_fixture(monkeypatch, isolated_sandbox, *, events=None,
+                              price_patch=None, link_patch=None):
+    """Provider-shaped test sandbox; never contacts Stripe or sends email."""
+    monkeypatch.setenv("NIJA_BILLING_PUBLIC_URL", "https://nija-course-sandbox.onrender.com")
+    monkeypatch.setenv("NIJA_BILLING_IDENTITY_SECRET", "test_identity_secret")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_fake_no_network")
+    app = billing.create_app(BillingServiceStore(isolated_sandbox))
+    price = {
+        "id": course.SANDBOX_COURSE_PRICE, "product": course.SANDBOX_COURSE_PRODUCT,
+        "livemode": False, "active": True, "type": "one_time",
+        "unit_amount": 9900, "currency": "usd",
+    }
+    link = {"id": course.SANDBOX_COURSE_LINK, "livemode": False, "active": True}
+    price.update(price_patch or {})
+    link.update(link_patch or {})
+    provider = SimpleNamespace(
+        Price=SimpleNamespace(retrieve=lambda _id, **_opts: price),
+        PaymentLink=SimpleNamespace(retrieve=lambda _id: link),
+        WebhookEndpoint=SimpleNamespace(list=lambda **_opts: {"data": [{
+            "url": "https://nija-course-sandbox.onrender.com/api/billing/webhook",
+            "status": "enabled",
+            "enabled_events": (list(billing._COURSE_SANDBOX_WEBHOOK_EVENTS)
+                               if events is None else events),
+        }]}),
+    )
+    monkeypatch.setattr(billing, "_stripe_module", lambda: provider)
+    return app.test_client()
+
+
+def test_course_sandbox_readyz_requires_only_course_checkout_and_reversal_events(
+        isolated_sandbox, monkeypatch):
+    client = _course_readiness_fixture(monkeypatch, isolated_sandbox)
+    response = client.get("/readyz")
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json() == {"service": "nija-billing", "status": "ready"}
+    assert not (billing._COURSE_SANDBOX_WEBHOOK_EVENTS &
+                {"customer.subscription.created", "invoice.paid"})
+
+
+@pytest.mark.parametrize("event", sorted([
+    "checkout.session.completed", "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed", "checkout.session.expired",
+    "charge.refunded", "charge.dispute.created",
+]))
+def test_course_sandbox_readyz_rejects_missing_required_webhook_event(
+        isolated_sandbox, monkeypatch, event):
+    events = sorted(billing._COURSE_SANDBOX_WEBHOOK_EVENTS - {event})
+    client = _course_readiness_fixture(monkeypatch, isolated_sandbox, events=events)
+    assert client.get("/readyz").status_code == 503
+
+
+@pytest.mark.parametrize("price_patch", [
+    {"livemode": True}, {"active": False}, {"type": "recurring"},
+    {"currency": "eur"}, {"unit_amount": 100},
+    {"product": "prod_wrong"}, {"id": "price_wrong"},
+])
+def test_course_sandbox_readyz_rejects_bad_price_identity(
+        isolated_sandbox, monkeypatch, price_patch):
+    client = _course_readiness_fixture(
+        monkeypatch, isolated_sandbox, price_patch=price_patch)
+    assert client.get("/readyz").status_code == 503
+
+
+@pytest.mark.parametrize("link_patch", [
+    {"livemode": True}, {"active": False}, {"id": "plink_wrong"},
+])
+def test_course_sandbox_readyz_rejects_bad_payment_link_identity(
+        isolated_sandbox, monkeypatch, link_patch):
+    client = _course_readiness_fixture(
+        monkeypatch, isolated_sandbox, link_patch=link_patch)
+    assert client.get("/readyz").status_code == 503
+
+
+@pytest.mark.parametrize("name,value", [
+    ("NIJA_COURSE_SANDBOX_DB_ISOLATED", "false"),
+    ("STRIPE_SECRET_KEY", "sk_live_wrong_mode"),
+    ("NIJA_COURSE_PUBLIC_URL", "https://production.example.test"),
+])
+def test_course_sandbox_readyz_rejects_invalid_isolation(
+        isolated_sandbox, monkeypatch, name, value):
+    client = _course_readiness_fixture(monkeypatch, isolated_sandbox)
+    monkeypatch.setenv(name, value)
+    assert client.get("/readyz").status_code == 503

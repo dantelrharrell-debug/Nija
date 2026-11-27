@@ -256,7 +256,9 @@ function ensureAccountDeletionControls() {
         <h3>Privacy & Account</h3>
         <div class="status-card">
             <p><strong>Delete NIJA Account</strong></p>
-            <p>Permanently remove your NIJA account, active sessions, NIJA-held broker credentials, registered device tokens, permissions, and saved trading rules. This does not delete accounts held directly with your broker, Apple, Google, or other third parties.</p>
+            <p>Permanently remove the account, sessions, broker credentials, device registrations, permissions, and trading rules covered by this account-deletion service.</p>
+            <p>This does not confirm deletion from every NIJA system. Separate authentication records, member broker connections, website and CRM records, billing and course records, trading history, support records, logs, exports, and backups need a separate privacy review. Independent broker, Apple, Google, and other provider accounts are not deleted.</p>
+            <p>For a broader privacy request, contact <a href="mailto:support@nijaaitrading.com">support@nijaaitrading.com</a>. This action does not automatically submit that request or cancel a separately managed subscription.</p>
             <button id="delete-nija-account-btn" class="btn btn-danger" type="button">Delete Account</button>
         </div>
     `;
@@ -300,7 +302,11 @@ async function requestNijaAccountDeletion() {
 
         localStorage.removeItem('nija_token');
         localStorage.removeItem('nija_risk_acknowledged');
-        window.alert('Your NIJA account deletion completed successfully. Third-party brokerage accounts were not deleted.');
+        const completionMessage = data.message ||
+            'Deletion completed for the active stores covered by this service. Other NIJA records and provider accounts require separate review.';
+        const privacyFollowUp = data.privacy_follow_up ||
+            'For a broader privacy request, contact support@nijaaitrading.com. This action does not automatically submit that request or cancel a separately managed subscription.';
+        window.alert(`${completionMessage}\n\n${privacyFollowUp}`);
         if (typeof window.handleLogout === 'function') window.handleLogout();
         else window.location.reload();
     } catch (error) {

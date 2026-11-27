@@ -1,0 +1,125 @@
+name: TIQ72 isolated server Node dependencies (TEST-only)
+
+on:
+  pull_request:
+    paths:
+      - 'web/trading-challenge/server/package.json'
+      - 'web/trading-challenge/server/package-lock.json'
+      - 'web/trading-challenge/server/tiq72-isolated-v515-runtime.mjs'
+      - 'web/trading-challenge/server/tests/tiq72-isolated-v515-runtime.test.mjs'
+      - 'scripts/tiq72-isolated-render-build.sh'
+      - '.github/workflows/tiq72-isolated-node-backend-dependencies.yml'
+      - 'scripts/tiq72_install_isolated_dependencies.sh'
+      - 'web/trading-challenge/server/tiq72-internal-sandbox-http-host.mjs'
+      - 'web/trading-challenge/server/tests/tiq72-internal-sandbox-http-host.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-node:
+    name: Verify pinned Stripe and PostgreSQL client modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web/trading-challenge/server
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check isolated Render install guard without accessing credentials
+        working-directory: .
+        run: |
+          set -euo pipefail
+          sh -n scripts/tiq72_install_isolated_dependencies.sh
+          if RENDER_SERVICE_ID='srv-unrelated' sh scripts/tiq72_install_isolated_dependencies.sh; then
+            echo 'FAIL: isolated build script accepted an unrelated service' >&2
+            exit 1
+          fi
+          echo 'Isolated build script shell syntax and workspace guard passed'
+      - name: Resolve dependency lock without install scripts
+        run: |
+          set -euo pipefail
+          if test -f package-lock.json; then
+            echo 'Using reviewed checked-in dependency lock'
+          else
+            npm install --package-lock-only --ignore-scripts --no-fund --no-audit
+          fi
+      - name: Verify locked runtime packages without scripts
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-fund --no-audit
+          node --input-type=module -e "
+            import Stripe from 'stripe';
+            import pg from 'pg';
+            if (typeof Stripe !== 'function' || typeof pg.Pool !== 'function')
+              process.exit(1);
+            console.log('Isolated Node Stripe SDK and pg Pool imports verified; no network/payment/database requests');
+          "
+      - name: Offline fail-closed runtime composition tests
+        run: node --test tests/tiq72-isolated-v515-runtime.test.mjs
+      - name: Verify internal-only isolated TEST HTTP host denies unsafe activation
+        run: node --test tests/tiq72-internal-sandbox-http-host.test.mjs
+      - name: Enforce high-severity runtime dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Reject wrong isolated Render build role before any install
+        working-directory: .
+        run: |
+          set -euo pipefail
+          bash -n scripts/tiq72-isolated-render-build.sh
+          if bash scripts/tiq72-isolated-render-build.sh; then
+            echo 'Build unexpectedly accepted missing isolated scope' >&2
+            exit 1
+          fi
+          if TIQ72_ISOLATED_BUILD_SCOPE=holding-test-only RENDER_SERVICE_ID='' bash scripts/tiq72-isolated-render-build.sh; then
+            echo 'Build unexpectedly accepted missing service identity' >&2
+            exit 1
+          fi
+          if TIQ72_ISOLATED_BUILD_SCOPE=holding-test-only RENDER_SERVICE_ID=srv-not-allowed bash scripts/tiq72-isolated-render-build.sh; then
+            echo 'Build unexpectedly accepted wrong service identity' >&2
+            exit 1
+          fi
+      - name: Install both pinned runtime stacks in isolated CI
+        working-directory: .
+        env:
+          TIQ72_ISOLATED_BUILD_SCOPE: holding-test-only
+          RENDER_SERVICE_ID: srv-dbqeqgqfngtc73fcphhg
+        run: bash scripts/tiq72-isolated-render-build.sh
+      - name: Reject extra Python packages in guarded Render installer
+        working-directory: .
+        env:
+          RENDER_SERVICE_ID: srv-dbqeqgqfngtc73fcphhg
+        run: |
+          set -euo pipefail
+          req=web/trading-challenge/server/requirements-tiq72-preflight.txt
+          cp "$req" "$RUNNER_TEMP/tiq72-reviewed-req.txt"
+          trap 'cp "$RUNNER_TEMP/tiq72-reviewed-req.txt" "$req"' EXIT
+          printf '\nunreviewed-package==0.0.0\n' >> "$req"
+          if sh scripts/tiq72_install_isolated_dependencies.sh; then
+            echo 'FAIL: unreviewed Python package accepted' >&2
+            exit 1
+          fi
+          echo 'Guarded installer rejected extra Python dependency before install'
+      - name: Execute guarded Render installer in synthetic exact service role
+        working-directory: .
+        env:
+          RENDER_SERVICE_ID: srv-dbqeqgqfngtc73fcphhg
+        run: |
+          set -euo pipefail
+          sh scripts/tiq72_install_isolated_dependencies.sh
+      - name: Publish resolved dependency lock for source review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiq72-isolated-server-dependency-lock
+          path: web/trading-challenge/server/package-lock.json
+          if-no-files-found: error
+          retention-days: 7

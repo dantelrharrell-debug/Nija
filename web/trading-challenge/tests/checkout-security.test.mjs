@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  PRICE_ID, PRODUCT_ID, OFFER, checkoutEnabled, issueProof, hashProof,
+  PRICE_ID, PRODUCT_ID, OFFER, checkoutEnabled, liveKey, issueProof, hashProof,
   matchesProof, cookieName, issueCookie, readProof, verifyPrice, verifyPurchase
 } from '../server/checkout-security.mjs';
 
@@ -25,6 +25,22 @@ test('feature gate is explicitly off unless configured', () => {
   assert.equal(checkoutEnabled('', 'true'), false);
   assert.equal(checkoutEnabled('sk_test_mock', 'true'), true);
 });
+test('restricted and standard Stripe credentials preserve mode and explicit gate', () => {
+  for (const prefix of ['sk_test_', 'rk_test_', 'sk_live_', 'rk_live_']) {
+    const key = prefix + 'mock123';
+    assert.equal(checkoutEnabled(key, 'true'), true);
+    assert.equal(checkoutEnabled(key, 'false'), false);
+    assert.equal(checkoutEnabled(key, undefined), false);
+    assert.equal(liveKey(key), prefix.includes('_live_'));
+  }
+  for (const key of ['', 'pk_live_mock123', 'rk_live_', 'rk_live_bad-value',
+    'sk_test_bad value', 'rk_other_mock', 'sk_live_mock\\n', null, undefined, {}]) {
+    assert.equal(checkoutEnabled(key, 'true'), false);
+    assert.equal(liveKey(key), false);
+  }
+  assert.equal(checkoutEnabled('rk_live_mock123', 'TRUE'), false);
+});
+
 test('receipt proof is secret, random, hashed in Stripe, and cookie-bound', () => {
   const proof = issueProof();
   assert.match(proof, /^[a-f0-9]{64}$/);

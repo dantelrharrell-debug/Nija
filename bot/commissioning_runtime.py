@@ -21,7 +21,7 @@ from typing import Any, Protocol
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from bot.account_order_admission import AdmissionDenied, Collector, Fence
+from bot.account_order_admission import AdmissionDenied, Collector, Fence, Reservation
 from bot.commissioning_gate import CommissioningGate, ExecutionReader, Observations
 from bot.execution_dispatch_contract import INTERNAL_DISPATCH_FAILURE
 from bot.kraken_operator_authorization import (
@@ -218,7 +218,12 @@ class CommissioningDispatchAdapter:
         self.candidate_for_request = candidate_for_request
         self.enabled = enabled
         self._armed = False
+        self._armed_attempt: tuple[CommissioningGate, Reservation, StartupVerificationPlan] | None = None
         self._lock = threading.Lock()
+        # Consumers may wait on admission I/O, but transport validators must
+        # never wait on that work. Only consumers acquire this outer lock;
+        # _lock protects the short in-memory _armed transitions below.
+        self._consumer_lock = threading.Lock()
         self._terminal_broker: Any = None
 
     def __call__(self, method: str, params: Mapping[str, Any]) -> None:
@@ -263,22 +268,33 @@ class CommissioningDispatchAdapter:
             raise _terminal_denial("commissioning_kraken_method_or_request_invalid")
         with self._lock:
             armed = self._armed
+            attempt = self._armed_attempt
             if armed:
                 self._armed = False
+                self._armed_attempt = None
         if not armed:
             # Existing canonical exit routes keep their normal terminal
             # controls when no first-trade permission is awaiting transport.
             if params.get("type") == "sell":
                 return
             raise _terminal_denial("commissioning_transport_attempt_not_armed")
-        expected = self.plan.order_parameters("entry")
+        if attempt is None:
+            raise _terminal_denial("commissioning_consumed_attempt_missing")
+        gate, reservation, plan = attempt
+        if self.gate is not gate or self.plan != plan:
+            raise _terminal_denial("commissioning_consumed_plan_binding_changed")
+        expected = plan.order_parameters("entry")
         expected.update({
             "close[ordertype]": "stop-loss-limit",
-            "close[price]": self.plan.stop_trigger,
-            "close[price2]": self.plan.stop_limit,
+            "close[price]": plan.stop_trigger,
+            "close[price2]": plan.stop_limit,
         })
         if type(params) is not dict or params != expected:
             raise _terminal_denial("commissioning_kraken_order_parameters_mismatch")
+        try:
+            gate.verify_consumed_first_trade(reservation, plan)
+        except Exception:
+            raise _terminal_denial("commissioning_consumed_attempt_recheck_denied") from None
 
     def consume(self, request: Any) -> None:
         """Consume the exact first-trade permission; do not dispatch or retry."""
@@ -286,11 +302,19 @@ class CommissioningDispatchAdapter:
         candidate = self.candidate_for_request(request)
         if type(candidate) is not Candidate:
             raise AdmissionDenied("commissioning_candidate_invalid")
-        self.gate.consume_first_trade(candidate, self.plan)
-        with self._lock:
-            if self._armed:
-                raise AdmissionDenied("commissioning_transport_attempt_already_armed")
-            self._armed = True
+        # Serialize consumers through durable consumption AND transport arming.
+        # Never hold the transport-state lock across admission/database I/O.
+        # The durable gate remains authoritative after transport disarms and
+        # across adapter instances/restarts; a failed gate never arms transport.
+        with self._consumer_lock:
+            with self._lock:
+                if self._armed:
+                    raise AdmissionDenied("commissioning_transport_attempt_already_armed")
+            gate, plan = self.gate, self.plan
+            reservation = gate.consume_first_trade(candidate, plan)
+            with self._lock:
+                self._armed_attempt = (gate, reservation, plan)
+                self._armed = True
 
 
 @dataclass(frozen=True)
@@ -391,10 +415,16 @@ def install_commissioning_dispatch_adapter(
         raise CommissioningCompositionDenied("commissioning_adapter_already_installed")
     admission = getattr(pipeline, "_account_order_admission", None)
     candidate_provider = getattr(pipeline, "_trusted_entry_candidate_provider", None)
+    admission_ledger = getattr(admission, "ledger", None)
+    gate_ledger = getattr(adapter.gate, "ledger", None)
     if (admission is None
             or getattr(admission, "collector", None) is not adapter.gate.collector
             or getattr(admission, "fence", None) is not adapter.gate.fence
-            or Path(getattr(admission, "ledger", "")).resolve() != adapter.gate.ledger.resolve()
+            or not isinstance(admission_ledger, (str, Path))
+            or not admission_ledger
+            or not isinstance(gate_ledger, (str, Path))
+            or not gate_ledger
+            or Path(admission_ledger).resolve() != Path(gate_ledger).resolve()
             or candidate_provider is not adapter.candidate_for_request):
         raise CommissioningCompositionDenied("canonical_entry_admission_binding_mismatch")
     if (not callable(getattr(broker, "_kraken_private_call", None))

@@ -1,0 +1,14 @@
+{
+  "name": "nija-tiq72-upgrade6-isolated-test-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <27"
+  },
+  "description": "Isolated TEST-only v515 report backend dependencies; never imported by Kraken or public game",
+  "dependencies": {
+    "pg": "8.23.1",
+    "stripe": "23.1.0"
+  }
+}

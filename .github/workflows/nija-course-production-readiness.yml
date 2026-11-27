@@ -3,6 +3,7 @@ name: NIJA course production readiness (read only)
 # 2026-10-12 follow-up production probe: checks only; no customer, billing, or trading writes.
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/nija-course-production-readiness.yml'
@@ -19,7 +20,7 @@ permissions:
 jobs:
   production-readiness:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 9
     steps:
       - name: Probe public endpoints only, never mutate customer state
         env:
@@ -30,6 +31,7 @@ jobs:
           import json
           import os
           import sys
+          import time
           from urllib.error import HTTPError
           from urllib.request import Request, urlopen
 
@@ -55,6 +57,25 @@ jobs:
               except (ValueError, UnicodeDecodeError):
                   raise AssertionError(path + ": expected JSON")
               return code, body
+
+          # Wait for Render cold start before evaluating course and access checks.
+          # HTTP 503 during boot is not evidence of an authorization denial.
+          deadline = time.monotonic() + 240
+          attempts = 0
+          while True:
+              attempts += 1
+              try:
+                  warm_code, warm_body = parsed("/healthz")
+              except Exception:
+                  warm_code, warm_body = 0, {}
+              if warm_code == 200 and warm_body.get("status") == "ok":
+                  break
+              if time.monotonic() >= deadline:
+                  print(json.dumps({"startup_gate": "failed", "attempts": attempts,
+                                    "last_health_http_status": warm_code}))
+                  sys.exit(1)
+              time.sleep(8)
+          print(json.dumps({"startup_gate": "passed", "attempts": attempts}))
 
           problems = []
           checks = {}

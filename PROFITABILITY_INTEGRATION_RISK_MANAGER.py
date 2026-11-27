@@ -11,100 +11,100 @@ Date: February 2026
 # ============================================================================
 
 # Add this import block after the existing imports:
-"""
-# Import profitability assertion for configuration validation
-try:
-    from profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
-    PROFITABILITY_ASSERTION_AVAILABLE = True
-    logger.info("✅ Profitability validation loaded in RiskManager")
-except ImportError:
-    try:
-        from bot.profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
-        PROFITABILITY_ASSERTION_AVAILABLE = True
-        logger.info("✅ Profitability validation loaded in RiskManager")
-    except ImportError:
-        PROFITABILITY_ASSERTION_AVAILABLE = False
-        logger.warning("⚠️ Profitability assertion not available in RiskManager")
-"""
+# """
+# # Import profitability assertion for configuration validation
+# try:
+#     from profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
+#     PROFITABILITY_ASSERTION_AVAILABLE = True
+#     logger.info("✅ Profitability validation loaded in RiskManager")
+# except ImportError:
+#     try:
+#         from bot.profitability_assertion import assert_strategy_is_profitable, ProfitabilityAssertionError
+#         PROFITABILITY_ASSERTION_AVAILABLE = True
+#         logger.info("✅ Profitability validation loaded in RiskManager")
+#     except ImportError:
+#         PROFITABILITY_ASSERTION_AVAILABLE = False
+#         logger.warning("⚠️ Profitability assertion not available in RiskManager")
+# """
 
 # ============================================================================
 # STEP 2: Add validation method to AdaptiveRiskManager class
 # ============================================================================
 
 # Add this method to the AdaptiveRiskManager class (after __init__ method):
-"""
-def _validate_risk_reward_configuration(self, exchange='coinbase'):
-    \"\"\"
-    Validate that risk/reward configuration is profitable after fees.
-    
-    This validates that the R-multiples used for profit targets result in
-    profitable trades after accounting for exchange fees.
-    
-    Args:
-        exchange: Exchange name (coinbase, kraken, etc.)
-    
-    Raises:
-        ProfitabilityAssertionError: If configuration is unprofitable
-    \"\"\"
-    if not PROFITABILITY_ASSERTION_AVAILABLE:
-        logger.warning("⚠️ Profitability assertion unavailable - skipping RiskManager validation")
-        return
-    
-    # RiskManager typically uses R-multiples for profit targets
-    # Standard configuration: TP1=2R, TP2=3R, TP3=4R
-    # Need to convert R-multiples to percentage targets
-    
-    # Assume typical stop loss of 1.0% (conservative)
-    # This is the "1R" risk amount
-    risk_amount_pct = 1.0
-    
-    # Calculate profit targets as percentages
-    # TP1 = 2R, TP2 = 3R, TP3 = 4R
-    profit_targets = [
-        risk_amount_pct * 2.0,  # 2R = 2.0%
-        risk_amount_pct * 3.0,  # 3R = 3.0%
-        risk_amount_pct * 4.0,  # 4R = 4.0%
-    ]
-    
-    # Use 4R (highest target) as primary
-    primary_target_pct = profit_targets[-1]
-    
-    try:
-        logger.info("🛡️ Validating RiskManager R-multiple configuration...")
-        logger.info(f"   Exchange: {exchange.upper()}")
-        logger.info(f"   Risk amount (1R): {risk_amount_pct}%")
-        logger.info(f"   Profit targets: {profit_targets} (2R, 3R, 4R)")
-        
-        # Validate configuration
-        assert_strategy_is_profitable(
-            profit_targets=profit_targets,
-            stop_loss_pct=risk_amount_pct,
-            primary_target_pct=primary_target_pct,
-            exchange=exchange
-        )
-        
-        logger.info("✅ RiskManager meets profitability requirements")
-        logger.info("   (under assumed conditions)")
-        
-    except ProfitabilityAssertionError as e:
-        logger.error("❌ RiskManager PROFITABILITY VALIDATION FAILED")
-        logger.error(f"   {str(e)}")
-        logger.error("   R-multiple configuration would lose money after fees!")
-        logger.error("   RECOMMENDATION: Use tighter stops (0.8%) or wider targets (5R, 6R, 7R)")
-        raise
-"""
+# """
+# def _validate_risk_reward_configuration(self, exchange='coinbase'):
+#     \"\"\"
+#     Validate that risk/reward configuration is profitable after fees.
+#
+#     This validates that the R-multiples used for profit targets result in
+#     profitable trades after accounting for exchange fees.
+#
+#     Args:
+#         exchange: Exchange name (coinbase, kraken, etc.)
+#
+#     Raises:
+#         ProfitabilityAssertionError: If configuration is unprofitable
+#     \"\"\"
+#     if not PROFITABILITY_ASSERTION_AVAILABLE:
+#         logger.warning("⚠️ Profitability assertion unavailable - skipping RiskManager validation")
+#         return
+#
+#     # RiskManager typically uses R-multiples for profit targets
+#     # Standard configuration: TP1=2R, TP2=3R, TP3=4R
+#     # Need to convert R-multiples to percentage targets
+#
+#     # Assume typical stop loss of 1.0% (conservative)
+#     # This is the "1R" risk amount
+#     risk_amount_pct = 1.0
+#
+#     # Calculate profit targets as percentages
+#     # TP1 = 2R, TP2 = 3R, TP3 = 4R
+#     profit_targets = [
+#         risk_amount_pct * 2.0,  # 2R = 2.0%
+#         risk_amount_pct * 3.0,  # 3R = 3.0%
+#         risk_amount_pct * 4.0,  # 4R = 4.0%
+#     ]
+#
+#     # Use 4R (highest target) as primary
+#     primary_target_pct = profit_targets[-1]
+#
+#     try:
+#         logger.info("🛡️ Validating RiskManager R-multiple configuration...")
+#         logger.info(f"   Exchange: {exchange.upper()}")
+#         logger.info(f"   Risk amount (1R): {risk_amount_pct}%")
+#         logger.info(f"   Profit targets: {profit_targets} (2R, 3R, 4R)")
+#
+#         # Validate configuration
+#         assert_strategy_is_profitable(
+#             profit_targets=profit_targets,
+#             stop_loss_pct=risk_amount_pct,
+#             primary_target_pct=primary_target_pct,
+#             exchange=exchange
+#         )
+#
+#         logger.info("✅ RiskManager meets profitability requirements")
+#         logger.info("   (under assumed conditions)")
+#
+#     except ProfitabilityAssertionError as e:
+#         logger.error("❌ RiskManager PROFITABILITY VALIDATION FAILED")
+#         logger.error(f"   {str(e)}")
+#         logger.error("   R-multiple configuration would lose money after fees!")
+#         logger.error("   RECOMMENDATION: Use tighter stops (0.8%) or wider targets (5R, 6R, 7R)")
+#         raise
+# """
 
 # ============================================================================
 # STEP 3: Call validation in AdaptiveRiskManager.__init__
 # ============================================================================
 
 # Add this call at the end of AdaptiveRiskManager.__init__ method:
-"""
-        # PROFITABILITY ASSERTION: Validate R-multiple configuration
-        # This ensures profit targets result in net gains after fees
-        # Use Coinbase as default (most conservative fee structure)
-        self._validate_risk_reward_configuration(exchange='coinbase')
-"""
+# """
+#         # PROFITABILITY ASSERTION: Validate R-multiple configuration
+#         # This ensures profit targets result in net gains after fees
+#         # Use Coinbase as default (most conservative fee structure)
+#         self._validate_risk_reward_configuration(exchange='coinbase')
+# """
 
 # ============================================================================
 # COMPLETE INTEGRATION EXAMPLE
