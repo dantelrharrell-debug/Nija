@@ -12,7 +12,8 @@ function allowedOrigin(value) {
   if(url.protocol!=="https:"||url.origin!==value||
      url.username||url.password||url.search||url.hash||
      (url.hostname!=="game.nijaaitrading.com" &&
-      url.hostname!=="nija-trading-challenge.vercel.app"))
+      url.hostname!=="nija-trading-challenge.vercel.app" &&
+      url.origin!=="https://nija-trading-challenge-staging.vercel.app"))
     throw new PaidReportDenied("trusted_return_origin_required");
   return url.origin;
 }
