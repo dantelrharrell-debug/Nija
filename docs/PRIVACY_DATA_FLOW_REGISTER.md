@@ -151,6 +151,22 @@ Primary references:
   The November 26 check-in did not establish a delivered export. Bounded
   connected-file/mail checks did not verify a native JustCall export; a historical
   outreach CSV is not a certified replacement.
+- **JustCall — updated provider confirmation, November 27, 2026 UTC:** a
+  Product Support Engineer reported **1 JustCall contact and 25 SalesDialer
+  contacts**, with no JustCall restricted/DNCA contacts. The provider said
+  SalesDialer has no self-service contact export but offered a one-time backend
+  export; a secured owner-verifiable backend export was requested in the
+  existing support thread on November 27. Consent/opt-out history is not
+  maintained as separate contact fields and may instead be reflected in SMS
+  conversation exports. Exact call, SMS, recording and voicemail record counts
+  could not be confirmed by provider support; do not infer that those records
+  are empty. The provider specified **December 5, 2026** as the last date
+  for customer account access if the invoice remains unpaid and **January 4,
+  2027** as the last date data would be preserved under its stated policy.
+  These are provider statements, **not independently verified retention
+  guarantees**. No export bytes, field inventory, encrypted retrieval proof,
+  cross-system consent reconciliation or backup/restore proof have been
+  received. The offered export must not be treated as completed.
 - **IONOS — provider statement, November 25 Pacific:** three mailboxes were
   described as active, but the reply did not establish an archiving ticket
   identifier, resolution time, interruption intervals, recovery of missed mail or
