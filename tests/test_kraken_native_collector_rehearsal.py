@@ -11,6 +11,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from bot import kraken_authenticated_balance_provider as native_balance
 from bot import kraken_ledger_evidence as native_ledger
 from bot import kraken_native_four_source_binding as four
 from bot import kraken_redis_evidence as redis
@@ -87,6 +88,15 @@ def wire_writer(broker, inventory, monkeypatch):
     broker.api = SimpleNamespace(key=broker.key, _nonce=broker._kraken_private_call_nonce)
 
 
+def balance_rows(broker, compact=False):
+    rows = {asset: {"balance": amount, "hold_trade": "0"}
+            for asset, amount in broker.balance.items()}
+    if not compact:
+        for row in rows.values():
+            row.update(credit="0", credit_used="0")
+    return rows
+
+
 def bind_opening(ledger, journal, now, fault):
     broker = ledger.broker
     cutoff = now - 10
@@ -116,15 +126,19 @@ def bind_opening(ledger, journal, now, fault):
     history = {key: broker.data[endpoint] for key, endpoint in (
         ("trades", "TradesHistory"), ("closed", "ClosedOrders"), ("ledger", "Ledgers"),
     )}
+    inventory = {
+        "balance": broker.balance, "positions": local["open_positions"], "orders": local["ledger_open_orders"],
+    }
+    if fault != "wallet-legacy-pin":
+        inventory["wallet_snapshot_sha256"] = native_balance._snapshot_digest(
+            balance_rows(broker, compact=fault == "wallet-compact"))
     baseline = native_ledger.ReviewedOpeningBaseline(
         account=ledger.account, account_sha256=ledger.account_sha256, api_key_sha256=ledger.api_key_sha256,
         cutoff_epoch=cutoff, expires_at_epoch=now + 45, history_sha256=native_ledger._digest(history),
         historical_rows_sha256=native_ledger._digest({
             key: local[key] for key in ("trade_ledger", "pending_kraken_closes")
         }),
-        opening_inventory_sha256=native_ledger._digest({
-            "balance": broker.balance, "positions": local["open_positions"], "orders": local["ledger_open_orders"],
-        }),
+        opening_inventory_sha256=native_ledger._digest(inventory),
     )
     journal.update("ledger_evidence_state", "history_from_genesis", 0)
     if fault == "missing":
@@ -176,8 +190,11 @@ def rehearsal(protected, native_position_sources, kill_source, monkeypatch, requ
             result = dict(apiKey=broker.key, iban=broker.iban, validUntil="0", queryFrom="0", queryTo="0",
                           permissions=["query-funds", "query-open-trades", "query-closed-trades", "query-ledger"])
         elif endpoint == "BalanceEx":
-            result = {k: {"balance": v, "hold_trade": "0", "credit": "0", "credit_used": "0"}
-                      for k, v in broker.balance.items()}
+            result = balance_rows(broker, compact=fault == "wallet-compact")
+            if fault == "wallet-unreviewed-hold":
+                result["XXBT"]["hold_trade"] = "1"
+            elif fault == "wallet-credit":
+                result["XXBT"]["credit"] = "1"
         elif endpoint == "OpenPositions":
             result = {"position": {"margin": "1"}} if fault == "margin" else {}
         else:
@@ -271,7 +288,7 @@ def assert_complete(r):
     r.broker._kraken_private_call_nonce.assert_not_called()
 
 
-@pytest.mark.parametrize("rehearsal", [None, "opening"], indirect=True)
+@pytest.mark.parametrize("rehearsal", [None, "opening", "wallet-compact"], indirect=True)
 def test_native_install_and_restart(rehearsal):
     # Each child inherits the unregistered parent and reopens the same protected files and database.
     assert diagnostic._COLLECTOR is None
@@ -308,6 +325,7 @@ def test_reject_incomplete_install(rehearsal, fault):
 
 @pytest.mark.parametrize("rehearsal", [
     "missing", "stale", "wrong-account", "holding", "margin", "order", "intent", "exit", "replay", "legacy-change",
+    "wallet-unreviewed-hold", "wallet-credit", "wallet-legacy-pin",
 ], indirect=True)
 def test_opening_denials_through_protected_startup(rehearsal):
     assert boot(rehearsal) == "collector_registration_failed"

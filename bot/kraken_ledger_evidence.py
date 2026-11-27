@@ -63,6 +63,8 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any
 
+from bot.kraken_authenticated_balance_provider import KrakenBalanceDenied, _snapshot_digest
+
 MAX_ROWS = 10000
 MAX_PAGES = 10
 MAX_AGE = 60.0
@@ -160,6 +162,8 @@ class ReviewedOpeningBaseline:
     evidence, lot allocations, exit coverage, and why each pinned historical
     exception cannot affect current exposure, orders, or outstanding intents.
     The reader compares the reviewed pins to fresh authenticated and local data.
+    The inventory pin includes the authenticated balance provider's wallet
+    digest as ``wallet_snapshot_sha256`` to bind held amounts and credit fields.
     """
 
     account: str
@@ -416,15 +420,20 @@ def _collect(read: Callable, max_pages: int, *, check_opening: bool = False) -> 
     orders = pages("OpenOrders", "open")
     _require(orders == pages("OpenOrders", "open"), "authenticated_open_orders_changed")
     _require(balance == read("Balance", {}), "authenticated_balances_changed")
+    observed = {"history": first, "open_orders": orders, "balance": balance}
     if check_opening:
         _require(wallet == read("BalanceEx", {}) and read("OpenPositions", {}) == {},
                  "opening_wallet_or_margin_changed")
+        try:
+            observed["wallet_snapshot_sha256"] = _snapshot_digest(wallet)
+        except KrakenBalanceDenied:
+            raise KrakenLedgerDenied("opening_wallet_snapshot_invalid") from None
         _require(set(wallet) == set(balance) and all(
             _number(row["balance"]) == _number(balance[asset])
-            and _number(row["credit"]) == _number(row["credit_used"]) == 0
+            and _number(row.get("credit", 0)) == _number(row.get("credit_used", 0)) == 0
             for asset, row in wallet.items()
         ), "opening_margin_or_wallet_unverified")
-    return {"history": first, "open_orders": orders, "balance": balance}
+    return observed
 
 
 def _file_identity(path: Path) -> tuple[int, int, int, int]:
@@ -708,6 +717,7 @@ def _reconcile_opening(
                  "opening_historical_close_terms_mismatch")
     inventory = {
         "balance": observed["balance"],
+        "wallet_snapshot_sha256": observed["wallet_snapshot_sha256"],
         "positions": local["open_positions"],
         "orders": local["ledger_open_orders"],
     }
