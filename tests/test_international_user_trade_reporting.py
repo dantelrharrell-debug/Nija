@@ -145,6 +145,27 @@ class InternationalHistoryTests(unittest.TestCase):
                     client = app.test_client()
                     self.assertEqual(client.get('/api/trading/history').status_code, 401)
                     headers = {'Authorization': 'Bearer ' + token}
+                    # Run the actual source-loaded decorator in both API
+                    # entrypoints: a JWT for a deleted/disabled user must
+                    # never expose another account's history.
+                    deadline = datetime.now(timezone.utc) + timedelta(minutes=1)
+                    for subject in ('deleted-user', 123, '   '):
+                        stale = jwt.encode(
+                            {'user_id': subject, 'exp': deadline},
+                            app.config['SECRET_KEY'], algorithm='HS256')
+                        denied = client.get('/api/trading/history', headers={
+                            'Authorization': 'Bearer ' + stale})
+                        self.assertEqual(denied.status_code, 401)
+                    with patch.object(env['user_db'], 'get_user',
+                                      return_value={'user_id': 'british-user', 'enabled': False}):
+                        disabled = client.get('/api/trading/history', headers=headers)
+                        self.assertEqual(disabled.status_code, 401)
+                    with patch.object(env['user_db'], 'get_user',
+                                      side_effect=RuntimeError('synthetic-private-store-error')):
+                        unavailable = client.get('/api/trading/history', headers=headers)
+                        self.assertEqual(unavailable.status_code, 503)
+                        self.assertNotIn('synthetic-private-store-error',
+                                         unavailable.get_data(as_text=True))
                     other = client.get('/api/trading/history?user_id=japanese-user', headers=headers)
                     self.assertEqual(other.status_code, 403)
                     response = client.get('/api/trading/history?timezone=Asia/Tokyo', headers=headers)
