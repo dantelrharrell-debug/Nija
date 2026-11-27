@@ -20,10 +20,10 @@ does not establish which code, configuration, schema or provider features are
 running in production. Proposed action owners below are responsibilities to
 assign, not claims that somebody has accepted or completed an action.
 
-The accompanying account-deletion source correction clarifies scope and partial
-failure and limits sensitive logging. It does not expand the stores deleted or
-change authentication/revocation behavior. Source corrections are distinct from
-verification of the deployed release.
+The original scope correction limits sensitive logging and clarifies partial
+failures. Subsequent source changes add account-existence checks and this
+follow-up expands cleanup inside the configured account database. Production
+verification remains open.
 
 Use these evidence labels when updating a row:
 
@@ -211,13 +211,23 @@ documentation change into trading, payment, account or provider mutations.
 
 ## Review-branch follow-up
 
+The original privacy suite passed on #4200. Its security and artifact runs
+reported independent gates still open, including the historical source review,
+repository-wide pre-commit, the container vulnerability thresholds, and package
+heuristics. See [original Security Scanning](https://github.com/dantelrharrell-debug/Nija/actions/runs/45949642850)
+and [original Artifact Scanning](https://github.com/dantelrharrell-debug/Nija/actions/runs/45949643291).
+NIJA security engineering owns exact-source review and secret classification.
+Platform and dependency maintainers own image and package remediation. Preserve
+the existing integrity pins and scan thresholds. Current hosted results are
+tracked on [the follow-up PR](https://github.com/dantelrharrell-debug/Nija/pull/4217).
+
 | Stores | Evidence and owner |
 | --- | --- |
 | A1–A3, A6 | NIJA engineering. Isolated tests check the source auth guards and target-only active-store deletion. Production gateway and database bindings, runtime copies, and already-open sessions remain unverified. The same account can retry a partial deletion while its primary auth record still exists. |
 | A4–A5 | NIJA owner and engineering. Member vault, provider keys and broker/ledger records remain outside the deletion coordinator. Map identity and confirm obligations before separate cleanup. |
-| A7–A10 | NIJA owner and vendors. Website/lead, CRM, consent and outreach records remain outside the coordinator. JustCall confirmed one JustCall contact and 25 SalesDialer contacts. The existing export escalation is active. File readability, actual row counts and usable opt-out evidence remain unverified. |
+| A7–A10 | NIJA owner and vendors. Website/lead, CRM, consent and outreach records remain outside the coordinator. JustCall confirmed one JustCall contact and 25 SalesDialer contacts. The vendor initially offered a backend export, then suggested an API workaround before resuming escalation if needed. No verified export or existing report was located. File readability, actual row counts and usable opt-out evidence remain unverified. |
 | A11–A13 | Billing and education owners. Payment, dispute, entitlement and course-progress stores remain outside the coordinator. Preserve valid entitlements pending owner-approved lifecycle rules. |
-| A14–A17 | NIJA owner, engineering and providers. Support mail, backups, analytics and logs remain outside the coordinator. IONOS would require mailbox-specific archive and restore evidence. The Render privacy follow-up remains in private correspondence for approval. |
+| A14–A17 | NIJA owner, engineering and providers. Support mail, backups, analytics and logs remain outside the coordinator. IONOS acknowledged an investigation-only escalation to its Email Back-Office and requested preservation. Affected intervals, recovered or unrecoverable mail, and successful restore evidence remain outstanding. The Render privacy follow-up appears as sent in the existing private thread. No substantive reply was verified. |
 
 ### Retention proposals for owner approval
 
