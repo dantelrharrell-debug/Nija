@@ -126,6 +126,13 @@ class InternationalHistoryTests(unittest.TestCase):
                            TradeHistoryQueryError=TradeHistoryQueryError,
                            logger=logging.getLogger('test'), Optional=__import__('typing').Optional,
                            Dict=__import__('typing').Dict, require_tos_accepted=lambda f: f)
+                # api_server.require_auth now verifies the current account on
+                # every signed JWT; supply only a synthetic enabled account,
+                # never bypass the real decorator or instantiate production DBs.
+                env['user_db'] = types.SimpleNamespace(
+                    get_user=lambda uid: {'user_id': uid, 'enabled': True}
+                    if uid == 'british-user' else None
+                )
                 exec(compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec'), env)
                 ledger_module = types.ModuleType('bot.trade_ledger_db')
                 ledger_module.get_trade_ledger_db = lambda: self.ledger
