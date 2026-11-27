@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN set -eu; \
     attempt=1; \
     while [ "$attempt" -le 4 ]; do \
-        if pip install --disable-pip-version-check --no-cache-dir --retries 10 --timeout 30 -r requirements.txt; then \
+        if pip install --disable-pip-version-check --no-cache-dir --retries 10 --timeout 30 --report /opt/nija-pip-install.json -r requirements.txt; then \
             break; \
         fi; \
         if [ "$attempt" -eq 4 ]; then \
