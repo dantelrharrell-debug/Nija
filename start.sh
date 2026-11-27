@@ -499,7 +499,7 @@ db = db_raw if db_raw.isdigit() else "0"
 is_proxy = host.lower().endswith((".proxy.rlwy.net", ".up.railway.app"))
 use_tls = scheme == "rediss" or is_proxy
 
-cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", db]
+cmd = ["redis-cli", "-e", "-h", host, "-p", str(port), "-n", db]
 env = dict(os.environ)
 env.pop("REDISCLI_AUTH", None)
 if user:
