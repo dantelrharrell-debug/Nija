@@ -93,8 +93,10 @@ def isolated_api(monkeypatch, tmp_path):
         db_path=str(auth_path), get_user=lambda user: {"user_id": user} if _rows(auth_path, "users", user) else None
     )
     user_db.get_user_by_email = lambda email: user_db.get_user(email.removesuffix("@example.test"))
-    user_db.verify_password = lambda user, password, ip_address: password == "synthetic credential"
+    fixture_value = secrets.token_urlsafe(24)
+    user_db.verify_password = lambda user, password, ip_address: password == fixture_value
     auth_module.user_db = user_db
+    auth_module.fixture_value = fixture_value
     app.add_url_rule("/api/auth/login", view_func=auth_module.login, methods=["POST"])
     vault = types.SimpleNamespace(
         db_path=str(vault_path),
@@ -293,7 +295,7 @@ def test_existing_signed_token_is_rejected_after_successful_account_deletion(iso
     api = isolated_api
     def login(user):
         response = api.client.post(
-            "/api/auth/login", json={"email": f"{user}@example.test", "password": "synthetic credential"},
+            "/api/auth/login", json={"email": f"{user}@example.test", "password": sys.modules["api_server"].fixture_value},
         )
         assert response.status_code == 200
         body = response.get_json()
