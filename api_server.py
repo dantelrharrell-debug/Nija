@@ -162,9 +162,24 @@ def require_auth(f):
         if not payload:
             return jsonify({'error': 'Invalid or expired token'}), 401
 
-        # Add user_id to request context
-        request.user_id = payload['user_id']
+        # Signature and expiry alone do not revoke a token when the account
+        # is deleted or disabled. Check the authoritative current account on
+        # every protected request, including non-mobile API entrypoints.
+        user_id = payload.get('user_id')
+        if not isinstance(user_id, str) or not user_id.strip():
+            return jsonify({'error': 'Invalid or expired token'}), 401
 
+        try:
+            current_user = user_db.get_user(user_id)
+        except Exception as exc:
+            # No user ID or raw exception is emitted to runtime logs.
+            logger.error('AUTH_SUBJECT_LOOKUP_FAILED error_type=%s', type(exc).__name__)
+            return jsonify({'error': 'Authentication temporarily unavailable'}), 503
+
+        if not current_user or not current_user.get('enabled', True):
+            return jsonify({'error': 'Account is unavailable'}), 401
+
+        request.user_id = user_id
         return f(*args, **kwargs)
 
     return decorated_function
@@ -302,12 +317,9 @@ def register():
     """
     Register a new user.
 
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password",
-            "subscription_tier": "basic"  // optional: basic, pro, enterprise
-        }
+    Request JSON must include an email and a user-provided password.
+    The optional subscription_tier is basic, pro or enterprise.
+    No example credential is embedded in this documentation.
     """
     data = request.get_json()
 
@@ -393,11 +405,8 @@ def login():
     """
     Login user and return JWT token.
 
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password"
-        }
+    Request JSON must include an email and a user-provided password.
+    Never log or embed that password in URLs, examples, or diagnostics.
     """
     data = request.get_json()
 
