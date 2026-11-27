@@ -472,58 +472,57 @@ _redis_cli_run() {
     if [ -z "${_redis_url}" ]; then
         return 1
     fi
-    python3 - <<'PY' "${_redis_url}" "$@"
-import re
+    NIJA_REDIS_CLI_URL="${_redis_url}" python3 - "$@" <<'PY'
+import os
 import subprocess
 import sys
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 REDIS_CLI_TIMEOUT_S = 5
-raw = sys.argv[1]
-extra_args = sys.argv[2:]
+raw = os.environ.pop("NIJA_REDIS_CLI_URL", "")
 try:
     parsed = urlparse(raw)
-except Exception as exc:
-    safe = re.sub(r"(://)[^@]*@", r"\1***@", raw)
-    sys.stderr.write(f"redis-cli parse error: invalid Redis URL ({safe})\n")
-    sys.stderr.write(f"redis-cli parse error detail: {exc}\n")
+    host, port = parsed.hostname, parsed.port
+except ValueError:
+    sys.stderr.write("redis-cli parse error: invalid Redis URL\n")
+    raise SystemExit(1) from None
+
+scheme = parsed.scheme.lower()
+if not host or port is None or scheme not in {"redis", "rediss"}:
+    sys.stderr.write("redis-cli parse error: invalid Redis endpoint\n")
     raise SystemExit(1)
 
-host = parsed.hostname or ""
-port = parsed.port or ""
-scheme = (parsed.scheme or "").lower()
-user = parsed.username or ""
-password = parsed.password or ""
+user = unquote(parsed.username or "")
+password = unquote(parsed.password or "")
 db_raw = (parsed.path or "").lstrip("/")
 db = db_raw if db_raw.isdigit() else "0"
-if not host or not port:
-    safe = re.sub(r"(://)[^@]*@", r"\1***@", raw)
-    sys.stderr.write(f"redis-cli parse error: missing host/port ({safe})\n")
-    raise SystemExit(1)
-
-is_proxy = host.lower().endswith(".proxy.rlwy.net") or host.lower().endswith(".up.railway.app")
+is_proxy = host.lower().endswith((".proxy.rlwy.net", ".up.railway.app"))
 use_tls = scheme == "rediss" or is_proxy
 
-cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", str(db)]
+cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", db]
+env = dict(os.environ)
+env.pop("REDISCLI_AUTH", None)
 if user:
     cmd.extend(["--user", user])
 if password:
-    cmd.extend(["-a", password])
+    env["REDISCLI_AUTH"] = password
 if use_tls:
-    cmd.extend(["--tls", "--insecure"])
-cmd.extend(extra_args)
+    cmd.extend(["--tls", "--sni", host])
+cmd.extend(sys.argv[1:])
 
 try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S, env=env)
 except subprocess.TimeoutExpired:
     sys.stderr.write(f"redis-cli timed out after {REDIS_CLI_TIMEOUT_S}s\n")
-    raise SystemExit(124)
+    raise SystemExit(124) from None
 except FileNotFoundError:
     sys.stderr.write("redis-cli not found\n")
-    raise SystemExit(127)
+    raise SystemExit(127) from None
 
-sys.stdout.write(result.stdout or "")
-sys.stderr.write(result.stderr or "")
+if result.returncode:
+    sys.stderr.write("redis-cli command failed\n")
+else:
+    sys.stdout.write(result.stdout or "")
 raise SystemExit(result.returncode)
 PY
 }
