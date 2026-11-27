@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 USER_A = "synthetic-account-a"
 USER_B = "synthetic-account-b"
 AUTH_TABLES = ("users", "sessions", "login_history")
-UNSUPPORTED_AUTH = ("email_verification_tokens", "two_factor_auth", "two_factor_backup_codes")
+OPTIONAL_AUTH = ("email_verification_tokens", "two_factor_auth", "two_factor_backup_codes")
 
 
 def _rows(path: Path, table: str, user_id: str) -> int:
@@ -61,23 +61,25 @@ def isolated_api(monkeypatch, tmp_path):
     monkeypatch.setenv("PUSH_TOKEN_ENCRYPTION_KEY", secrets.token_urlsafe(32))
 
     app = Flask(__name__)
-    app.config.update(TESTING=True, SECRET_KEY=secrets.token_urlsafe(32))
+    app.config.update(TESTING=True, SECRET_KEY=secrets.token_urlsafe(32), JWT_EXPIRATION_HOURS=1)
     auth_module = _module(
         monkeypatch, "api_server", app=app, jwt=jwt, request=request, jsonify=jsonify,
         wraps=wraps, Optional=Optional, Dict=Dict, logger=logging.getLogger("test.auth"),
+        datetime=datetime, timedelta=timedelta,
     )
     auth_source = ast.parse((ROOT / "api_server.py").read_text(encoding="utf-8"))
     selected = [
         node for node in auth_source.body
-        if isinstance(node, ast.FunctionDef) and node.name in {"decode_jwt_token", "require_auth"}
+        if isinstance(node, ast.FunctionDef) and node.name in {"decode_jwt_token", "require_auth", "generate_jwt_token", "login"}
     ]
-    assert len(selected) == 2
+    assert len(selected) == 4
+    next(node for node in selected if node.name == "login").decorator_list = []
     exec(compile(ast.Module(body=selected, type_ignores=[]), "api_server.py", "exec"), auth_module.__dict__)
 
     auth_path = tmp_path / "auth.sqlite3"
     vault_path = tmp_path / "vault.sqlite3"
     for path, tables in (
-        (auth_path, AUTH_TABLES + UNSUPPORTED_AUTH),
+        (auth_path, AUTH_TABLES + OPTIONAL_AUTH),
         (vault_path, ("credentials", "audit_log")),
     ):
         with sqlite3.connect(path) as connection:
@@ -90,7 +92,10 @@ def isolated_api(monkeypatch, tmp_path):
     user_db = types.SimpleNamespace(
         db_path=str(auth_path), get_user=lambda user: {"user_id": user} if _rows(auth_path, "users", user) else None
     )
+    user_db.get_user_by_email = lambda email: user_db.get_user(email.removesuffix("@example.test"))
+    user_db.verify_password = lambda user, password, ip_address: password == "synthetic credential"
     auth_module.user_db = user_db
+    app.add_url_rule("/api/auth/login", view_func=auth_module.login, methods=["POST"])
     vault = types.SimpleNamespace(
         db_path=str(vault_path),
         list_user_brokers=lambda user: ["kraken"] if _rows(vault_path, "credentials", user) else [],
@@ -218,8 +223,8 @@ def test_success_cleans_only_covered_authenticated_user_stores(isolated_api, cap
     for table in ("credentials", "audit_log"):
         assert _rows(api.vault_path, table, USER_A) == 0
         assert _rows(api.vault_path, table, USER_B) == 1
-    for table in UNSUPPORTED_AUTH:
-        assert _rows(api.auth_path, table, USER_A) == 1
+    for table in OPTIONAL_AUTH:
+        assert _rows(api.auth_path, table, USER_A) == 0
         assert _rows(api.auth_path, table, USER_B) == 1
     for mapping in (api.legacy.user_keys, api.users.users, api.permissions.user_permissions, api.rules._rules_cache):
         assert USER_A not in mapping
@@ -286,9 +291,22 @@ def test_repeat_request_denies_deleted_jwt_subject(isolated_api):
 
 def test_existing_signed_token_is_rejected_after_successful_account_deletion(isolated_api):
     api = isolated_api
-    signed_headers = api.headers()
+    def login(user):
+        response = api.client.post(
+            "/api/auth/login", json={"email": f"{user}@example.test", "password": "synthetic credential"},
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert "refresh_token" not in body
+        return {"Authorization": f"Bearer {body['token']}"}
+
+    signed_headers = login(USER_A)
+    other_headers = login(USER_B)
     assert api.client.get("/api/account/deletion", headers=signed_headers).status_code == 200
-    assert _delete(api).status_code == 200
+    assert api.client.delete(
+        "/api/account/deletion", headers=signed_headers, json={"confirmation": "DELETE MY NIJA ACCOUNT"},
+    ).status_code == 200
+    assert api.client.get("/api/account/deletion", headers=other_headers).status_code == 200
     # Previously valid signed JWTs must not authenticate against a deleted subject.
     for method in ("get", "delete"):
         response = getattr(api.client, method)("/api/account/deletion", headers=signed_headers)
@@ -476,3 +494,32 @@ def test_fastapi_entrypoints_reject_deleted_jwt_subjects(source_file, caplog):
     assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in rendered
     assert "private-user-database-location" not in rendered
     assert USER_A not in rendered
+
+
+def test_missing_optional_auth_tables_are_compatible(isolated_api):
+    api = isolated_api
+    with sqlite3.connect(api.auth_path) as connection:
+        connection.execute("DROP TABLE email_verification_tokens")
+        connection.execute("DROP TABLE two_factor_backup_codes")
+        connection.execute("DROP TABLE two_factor_auth")
+    assert _delete(api).status_code == 200
+    assert _rows(api.auth_path, "users", USER_B) == 1
+
+
+def test_auth_cleanup_is_atomic_when_an_optional_store_fails(isolated_api):
+    api = isolated_api
+    with sqlite3.connect(api.auth_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER deny_backup_code_cleanup BEFORE DELETE ON two_factor_backup_codes "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"
+        )
+    assert _delete(api).status_code == 500
+    for table in AUTH_TABLES + OPTIONAL_AUTH:
+        assert _rows(api.auth_path, table, USER_A) == 1
+        assert _rows(api.auth_path, table, USER_B) == 1
+    with sqlite3.connect(api.auth_path) as connection:
+        connection.execute("DROP TRIGGER deny_backup_code_cleanup")
+    assert _delete(api).status_code == 200
+    for table in AUTH_TABLES + OPTIONAL_AUTH:
+        assert _rows(api.auth_path, table, USER_A) == 0
+        assert _rows(api.auth_path, table, USER_B) == 1
