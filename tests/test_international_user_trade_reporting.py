@@ -247,6 +247,12 @@ class InternationalHistoryTests(unittest.TestCase):
                    jwt=jwt, JWT_SECRET_KEY_STR=signing, JWT_ALGORITHM='HS256', time=time,
                    rate_limit_storage=defaultdict(list), RATE_LIMIT_WINDOW=60, RATE_LIMIT_REQUESTS=100,
                    logger=logging.getLogger('test'), Optional=Optional, Dict=Dict, Any=Any)
+        # The real FastAPI auth dependency now checks the current durable account.
+        # Supply a synthetic record without touching production customer stores.
+        env['user_db'] = types.SimpleNamespace(
+            get_user=lambda uid: {'user_id': uid, 'enabled': True}
+            if uid == 'british-user' else None
+        )
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), env)
         ledger_module = types.ModuleType('bot.trade_ledger_db')
         ledger_module.get_trade_ledger_db = lambda: self.ledger
