@@ -405,11 +405,8 @@ def login():
     """
     Login user and return JWT token.
 
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password"
-        }
+    Request JSON must include an email and a user-provided password.
+    Never log or embed that password in URLs, examples, or diagnostics.
     """
     data = request.get_json()
 
