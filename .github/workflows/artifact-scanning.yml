@@ -20,7 +20,17 @@ jobs:
       # Keep scanning other images if one fails; never hide failing checks.
       fail-fast: false
       matrix:
-        dockerfile: [Dockerfile, Dockerfile.api, Dockerfile.dashboard, Dockerfile.gateway]
+        include:
+          # Explicit immutable base per Dockerfile: test the proposed gateway
+          # candidate without silently changing the existing other services.
+          - dockerfile: Dockerfile
+            python_base: python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+          - dockerfile: Dockerfile.api
+            python_base: python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+          - dockerfile: Dockerfile.dashboard
+            python_base: python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+          - dockerfile: Dockerfile.gateway
+            python_base: python:3.11-slim-bookworm@sha256:ef56ae98435cc40d8a27020b0b32a9941515acd5840f0fba34858bb34dd362d1
 
     steps:
     - name: Checkout repository
@@ -52,7 +62,7 @@ jobs:
         # A failed pull still fails this job; scanners remain mandatory.
         docker buildx build --load --no-cache --progress=plain \
           --metadata-file "$RUNNER_TEMP/nija-container-build.json" \
-          --build-arg PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535 \
+          --build-arg PYTHON_BASE=${{ matrix.python_base }} \
           -f ${{ matrix.dockerfile }} \
           -t ${{ steps.image-name.outputs.image }} \
           . 2>&1 | tee "$RUNNER_TEMP/nija-container-build.log"

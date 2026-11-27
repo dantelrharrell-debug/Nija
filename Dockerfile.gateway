@@ -1,6 +1,7 @@
 # Dockerfile for NIJA API Gateway (not the trading bot)
-# Security review candidate: OCI base digest resolved by all four 2026-11-15 CI builds; NOT release approved.
-ARG PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+# REVIEW CANDIDATE ONLY (2026-11-27): Bookworm Python 3.11, immutable Docker Hub index digest.
+# Not release approved: requires full image scan, functional validation and independent approval.
+ARG PYTHON_BASE=python:3.11-slim-bookworm@sha256:ef56ae98435cc40d8a27020b0b32a9941515acd5840f0fba34858bb34dd362d1
 FROM ${PYTHON_BASE} AS deps-builder
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
@@ -24,10 +25,7 @@ RUN /usr/local/bin/python -m pip install --no-cache-dir --disable-pip-version-ch
     && /usr/local/bin/python -c "import importlib.metadata as m; assert m.version('setuptools') == '84.1.0'" \
     && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/METADATA \
     && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA
-# Gateway calls the Redis client library, not redis-cli. Omit redis-tools to
-# remove an unused command-line utility and its independent OS vulnerability.
-# Gateway calls the Redis client library, not redis-cli. Omit redis-tools to
-# remove an unused command-line utility and its independent OS vulnerability.
+# Gateway uses the Redis client library, not redis-cli. Omit redis-tools.
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY --from=deps-builder /opt/venv /opt/venv
 
