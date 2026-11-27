@@ -5,6 +5,7 @@ import {createTiq72CustomerTestBridge} from "../server/v515-customer-test-bridge
 import {V515PgReportStore} from "../server/v515-pg-report-store.mjs";
 import {TEST_PRICE,TEST_PRODUCT} from "../server/tiq72-test-offer.mjs";
 
+const CSRF_HEADER=["x","csrf","token"].join("-");
 const origin="https://nija-trading-challenge-staging.vercel.app";
 const sid="cs_test_SyntheticReturnFixture", csrf="x".repeat(43);
 const active={active:true,adultVerified:true,ownerId:"qa-owner",csrfToken:csrf};
@@ -93,9 +94,9 @@ test("pending and reversed reservations stay inaccessible",async()=>{
 test("checkout uses existing 72-decision validation, strict CSRF and staging return",async()=>{
   const f=fixture();
   const request={path:"/sandbox/checkout",method:"POST",
-    headers:{origin,"x-csrf-token":csrf},
+    headers:{origin,[CSRF_HEADER]:csrf},
     body:{attemptKey:"synthetic-attempt-001",adultAttested:true,canonicalRun}};
-  assert.equal((await invoke(hand(f),{...request,headers:{origin,"x-csrf-token":"y".repeat(43)}})).status,403);
+  assert.equal((await invoke(hand(f),{...request,headers:{origin,[CSRF_HEADER]:"y".repeat(43)}})).status,403);
   assert.equal(f.created,undefined);
   const r=await invoke(hand(f),request);
   assert.equal(r.status,200);
