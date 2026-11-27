@@ -22,6 +22,11 @@ on:
       - 'bot/kraken_native_four_source_binding.py'
       - 'tests/test_kraken_native_four_source_binding.py'
       - 'bot/kraken_ledger_evidence.py'
+      - 'bot/kraken_shadow_outcomes.py'
+      - 'bot/kraken_offline_strategy_review.py'
+      - 'bot/regime_performance_calibrator.py'
+      - 'tests/test_kraken_shadow_outcomes.py'
+      - 'bot/tests/test_preactivation_readiness_convergence_v16_patch.py'
       - 'bot/kraken_redis_evidence.py'
       - 'bot/kraken_operator_authorization.py'
       - 'bot/kraken_risk_evidence.py'
@@ -149,6 +154,10 @@ jobs:
         run: >-
           python -m pytest -q tests/test_kraken_native_collector_rehearsal.py
           bot/tests/test_kraken_recovery_strict_integration_v451.py
+      - name: Verify offline learning evidence and capital diagnostics
+        run: >-
+          python -m pytest -q tests/test_kraken_shadow_outcomes.py
+          bot/tests/test_preactivation_readiness_convergence_v16_patch.py
       - name: Verify four-source contract in the protected release interpreter path
         run: python -m unittest tests.test_kraken_source_startup_contract_review -v
       - name: Verify canonical source factory and authenticated registration without broker access
