@@ -1,11 +1,11 @@
 # NIJA Mobile Privacy Policy — Counsel Review Draft
 
-**Last updated:** August 27, 2026  
+**Last updated:** November 26, 2026
 **Status:** Pre-release draft. Must be reviewed by qualified counsel and reconciled against the exact production release before publication.
 
 NIJA AI Trading ("NIJA," "we," "our," or "us") provides software for trading education, simulation, broker-account monitoring, risk controls, and, where enabled, broker-connected trading functionality. This Privacy Policy describes the categories of information NIJA may process through the mobile application and related services, why that information is used, how it may be shared, and the choices available to users.
 
-This draft intentionally avoids claiming regulatory status, certifications, or retention periods that have not been legally verified.
+This draft intentionally avoids claiming regulatory status, certifications, or retention periods that have not been legally verified. It must be reconciled with the corrected [NIJA privacy draft](../PRIVACY_POLICY.md) and the [data-flow register](../docs/PRIVACY_DATA_FLOW_REGISTER.md). Source updates do not establish publication or production verification.
 
 ## 1. Information NIJA May Process
 
@@ -117,7 +117,9 @@ Specific retention periods have not been stated in this draft because they must 
 
 Users can initiate deletion of their NIJA account from the app through **Settings → Privacy & Account → Delete Account**.
 
-When a deletion request is accepted, NIJA will remove or de-identify personal data associated with the account where legally permitted. NIJA-held broker connection credentials and registered device/push tokens are intended to be removed as part of the active-account deletion process.
+The implemented deletion service removes only its covered active stores: primary account/session/login records, covered broker credentials, registered mobile devices, selected runtime permissions and caches, and saved user trading rules. A successful response confirms this limited operation; it does not certify deletion from every NIJA system.
+
+Separate authentication records, the separate member broker vault, website/CRM records, billing/course and trading-history records, support data, logs, exports, backups, and provider copies require separate coverage checks. The in-app action does not automatically submit a broader privacy request or cancel a separately managed subscription. Use NIJA's privacy/support contact for a cross-system request and the applicable provider's controls for subscriptions. See [account-deletion instructions](ACCOUNT_DELETION.md) for the current scope.
 
 NIJA may retain limited records where reasonably necessary to comply with legal, tax, accounting, security, fraud-prevention, dispute-resolution, or regulatory obligations. Retained information should be restricted from ordinary product use and deleted or de-identified when the applicable retention obligation expires.
 
@@ -140,7 +142,7 @@ The final published policy must include any legally required jurisdiction-specif
 
 ## 9. Children
 
-NIJA is not intended for children. The minimum permitted age and any financial-account eligibility requirements must be aligned with applicable law, connected broker requirements, and the final app-store age-rating answers before release.
+Eligibility depends on the product. Broker-connected mobile features must satisfy the applicable account and age requirements. Separate educational or youth-facing routes need their own verified collection, permission, retention, and disclosure rules. The mobile release must align its eligibility and app-store age-rating answers before publication; this draft does not authorize new collection or marketing involving minors.
 
 ## 10. International Processing
 
@@ -156,9 +158,9 @@ NIJA may update this Privacy Policy as the service, legal requirements, or data 
 
 ## 13. Contact
 
-NIJA's verified legal entity is **NIJA AI Trading LLC**.  
-**Business phone:** 425-765-0283  
-For privacy or support requests, use the official contact/support channel published on `https://nijaaitrading.com`. Any legally required mailing address and jurisdiction-specific contact details remain subject to counsel review before publication.
+NIJA's verified legal entity is **NIJA AI Trading LLC**.
+**Business phone:** 425-756-0283
+For privacy or support requests, contact **support@nijaaitrading.com** through the official `https://nijaaitrading.com` service. Verify mailbox delivery and the published contact path before release. Any legally required mailing address and jurisdiction-specific contact details remain subject to counsel review before publication.
 
 ## Pre-Publication Sign-Off
 

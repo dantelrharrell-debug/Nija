@@ -1,235 +1,120 @@
-# PRIVACY POLICY
-
-**Last Updated: February 3, 2026**
+# NIJA Privacy Policy — Review Draft
 
-## Introduction
+**Source revision:** November 26, 2026
+**Status:** Corrected source draft. Publication and production-data-flow verification remain open. This revision does not establish a new public effective date.
 
-NIJA ("we," "our," or "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use the NIJA autonomous trading application.
+NIJA AI Trading LLC ("NIJA," "we," "our," or "us") provides trading education, assessments, simulation, account services, and, where enabled and authorized, broker-connected functionality. This notice describes information used for the features a person actually uses. Different products and enabled integrations can have different data flows.
 
-**Important:** NIJA is a user-directed, independent trading tool. You maintain full control over all trading decisions and API credentials.
+## 1. Information NIJA processes
 
-## Information We Collect
+### Accounts, authentication, and preferences
 
-### Information You Provide
+NIJA's account systems can process names, email addresses, user identifiers, password hashes, authentication and verification records, session information, settings, and records of terms or risk acknowledgments. Security records can include IP addresses, user agents, timestamps, and authentication outcomes.
 
-**API Credentials (Stored Locally Only)**
-- Exchange API keys and secrets (Coinbase, Kraken, etc.)
-- These credentials are **NEVER transmitted to our servers**
-- Stored locally on your device in encrypted format
-- Used only to connect directly to your chosen exchange
+### Website forms and communications
 
-**Configuration Settings**
-- Trading strategy parameters
-- Risk management preferences
-- Position sizing rules
-- All stored locally on your device
+Website and assessment forms can collect contact information, answers, submission identifiers, original submission times, and the choices a person makes about email, SMS, AI-voice, or program communications. NIJA can retain the submitted form content and delivery records to respond to the request and investigate failures. Contact information can also be held in customer-management systems used for the relevant service.
 
-**Account Information (Optional)**
-- Email address (only if you opt-in to notifications)
-- Display name or username (optional)
+Submitting a form does not by itself authorize every communication channel. A request for service, a marketing choice, and permission for SMS or AI calling must remain distinguishable. Privacy requests and withdrawals must be checked across the systems that actually received the information.
 
-### Information Automatically Collected
+### Broker connections and account activity
 
-**Trading Activity Logs (Local Only)**
-- Trade execution records
-- Strategy performance metrics
-- Error logs and debugging information
-- **Stored locally on your device**
-- **NOT transmitted to our servers**
+When a user authorizes a supported connection, NIJA's backend can receive and handle broker credentials, broker-account identifiers, balances, positions, orders, fills, and execution or reconciliation information. The backend includes encrypted broker-credential storage. Sensitive information is therefore not limited to the user's device, and broker-connected processing can occur on NIJA's servers.
 
-**Device Information**
-- Operating system version
-- App version number
-- Device type (for compatibility)
-- Crash reports (anonymous, opt-in only)
+Users should grant only the broker permissions needed for the selected feature and disable withdrawal permissions where supported. Disconnecting or deleting a NIJA connection does not close an independently held exchange account. Users can revoke a connection's credentials directly with the exchange.
 
-**Analytics (Optional & Anonymous)**
-- App usage statistics (e.g., feature usage, session duration)
-- **Anonymous and aggregated only**
-- **You can opt-out completely**
-- **No personally identifiable information included**
+### Education, simulation, purchases, and access
 
-## What We DO NOT Collect
+NIJA can process assessment answers, simulation activity, course or report access, transaction references, payment/subscription status, and entitlement records. Payment information handled by a payment provider must be distinguished from the transaction and access information returned to NIJA. This draft does not claim that NIJA receives complete payment-card details.
 
-We explicitly **DO NOT** collect, store, or transmit:
+### Devices, diagnostics, and support
 
-❌ Your exchange API credentials to our servers  
-❌ Your trading positions or portfolio value  
-❌ Your account balances or financial information  
-❌ Your trade history or transaction details  
-❌ Your personal financial data  
-❌ Your location data  
-❌ Your contact list or device contacts  
-❌ Biometric data  
-❌ Health information  
-❌ Government-issued identification  
+Enabled mobile features can process device details and push-notification registrations. Diagnostics and security logs can contain identifiers and operational information. Support records can contain a sender's email address, messages, and attachments. A record is not automatically anonymous because it is called a log or diagnostic.
 
-## How We Use Your Information
+## 2. Why information is used
 
-**All Exchange API Calls Are Direct:**
-- NIJA connects directly from your device to your exchange
-- We do not proxy, intercept, or store these communications
-- Your API credentials remain on your device
+NIJA uses information for the relevant service: account authentication, requested education and assessments, authorized broker connectivity, risk and reconciliation controls, purchase verification and access, customer support, operational communications, abuse prevention, and service reliability. Marketing and optional processing require their own applicable choices and disclosures.
 
-**Local Processing Only:**
-- All trading calculations happen on your device
-- Strategy execution is local
-- Performance tracking is local
+NIJA's education, simulation, and trading tools do not guarantee profits or future results.
 
-**Optional Cloud Features (If Enabled):**
-- Backup of configuration settings (encrypted)
-- Multi-device sync (encrypted end-to-end)
-- You can disable cloud features and use NIJA 100% locally
+## 3. Recipients and service providers
 
-## Data Storage and Security
+Recipients depend on the product and enabled route. They can include:
 
-### Local Storage
-- All sensitive data is encrypted using industry-standard AES-256 encryption
-- API credentials are stored in your device's secure keychain/keystore
-- Trading logs are stored locally with restricted file permissions
+- the broker or exchange selected by the user;
+- website, hosting, database, and infrastructure providers, including IONOS and Render where used;
+- payment providers, including Stripe where used, for payment verification and associated access records;
+- customer-management, automation, and email providers, including Apollo, Zapier, and Resend where an applicable route is enabled;
+- communication or support providers, including JustCall where used;
+- Apple or Google for enabled app-distribution, billing, or push services;
+- backup or storage providers holding NIJA-controlled exports;
+- advisers or authorities where disclosure is necessary and permitted or required by applicable law.
 
-### Cloud Storage (Optional)
-- If you enable cloud backup, settings are encrypted before upload
-- We use end-to-end encryption; we cannot read your data
-- You can delete cloud backups at any time
+A provider being listed here or on another provider's subprocessor list does not establish that every NIJA customer or dataset is sent to it. NIJA must verify the actual recipients, purposes, and settings for each deployed product.
 
-### Security Measures
-- Encryption at rest and in transit
-- Secure credential storage using platform best practices
-- Regular security audits
-- No third-party access to your credentials
+## 4. Optional analytics, advertising, and AI
 
-## Data Sharing and Disclosure
+Optional features require accurate disclosures and appropriate choices for their actual behavior. Consent must not be inferred from the presence of a contact record or a generic form submission.
 
-**We DO NOT sell, rent, or share your personal information with third parties.**
+Before making a statement about personal-data sale, advertising sharing, cross-app tracking, AI training, or complete anonymity, NIJA must verify the enabled integrations and their applicable terms. This draft makes no unsupported blanket promise about those matters. New AI processing must have documented data categories, recipients, activation conditions, retention, and deletion treatment before release.
 
-We may only disclose information in these limited circumstances:
+## 5. Security
 
-**With Your Consent:**
-- When you explicitly authorize data sharing
+NIJA's architecture includes authentication, access controls, password hashing, and encrypted storage in supported credential and device-token components. Each deployed service still requires verification of configuration, permissions, transport protections, storage controls, logging, and recovery. Encryption in one component does not establish encryption or access protection everywhere.
 
-**Exchange APIs:**
-- Your API credentials are used to authenticate with your chosen exchange
-- This is a direct connection; we are not involved
+Do not send passwords, API secrets, two-factor recovery codes, payment-card details, or unnecessary account information with a support or privacy request.
 
-**Legal Requirements:**
-- If required by law, court order, or government regulation
-- To protect our rights, safety, or property
-- To investigate fraud or security issues
+## 6. Retention
 
-**Service Providers:**
-- Anonymous crash reports (if you opt-in) may be sent to monitoring services
-- No personally identifiable information is included
+Retention depends on the record's purpose, the system holding it, applicable obligations, and its deletion or expiry process. Account data, consent records, financial transaction records, support messages, logs, exports, and backups can have different retention requirements.
 
-## Your Rights and Choices
+Exact periods and exceptions remain to be reconciled with NIJA's production systems before this draft is published. Expiry of a token or a delivery queue item does not prove that the original data, other copies, or provider records have been deleted. Necessary retained records must have a documented purpose, restricted use, and an expiry or review rule.
 
-### Access and Control
-- **View your data:** All data is stored locally and accessible to you
-- **Export your data:** Export trading logs and configuration at any time
-- **Delete your data:** Remove all local data through app settings
+## 7. Account deletion and broader privacy requests
 
-### Opt-Out Options
-- **Disable analytics:** Turn off usage statistics in Settings
-- **Disable crash reports:** Opt-out of crash reporting
-- **Disable cloud backup:** Use NIJA 100% locally
+The implemented in-app account-deletion service removes the active account records it explicitly covers: its primary account/session/login records, covered broker-credential stores, registered mobile devices, selected runtime permissions and caches, and saved user trading rules.
 
-### Data Retention
-- Local data persists until you delete it
-- Cloud backups (if enabled) are retained until you delete them
-- You can delete all data at any time through Settings
+Completion of that operation does not establish deletion from every NIJA system. Separate authentication records, a separate member broker vault, website/CRM data, billing/course and trading-history records, support systems, logs, exports, backups, and provider copies require separate coverage checks. The deletion notice and response must identify this limited scope and the follow-up route.
 
-## Third-Party Services
+A successful in-app deletion does not automatically submit a separate cross-system privacy request or cancel a separately managed subscription. Contact NIJA for broader requests and use the relevant provider's subscription controls when applicable. Deleting a NIJA account does not delete accounts independently held with a broker, payment provider, Apple, Google, or another third party.
 
-NIJA may interact with third-party services:
+Any records retained for legal, accounting, security, or dispute purposes must have a documented justification and retention rule. An unsupported deletion path must not be presented as a legal retention exception.
 
-**Exchange APIs (Coinbase, Kraken, etc.):**
-- You connect directly to these services
-- Their privacy policies apply to their services
-- We recommend reviewing their privacy policies
+## 8. Choices and privacy requests
 
-**Optional Integrations:**
-- TradingView webhooks (if you enable them)
-- Your data is transmitted directly; we do not store webhook data
+Depending on location and applicable rules, a person may be able to request access, correction, export, deletion, or restriction of personal information. NIJA may need proportionate information to verify the request. A request must be assessed against the actual stores and recipients involved; it should identify what was completed, what remains pending, and any applicable retention exception.
 
-## Children's Privacy
+Users can manage available account and notification settings, withdraw applicable communication choices, and contact NIJA about broader requests. A withdrawal or deletion must not be undone by a later queue replay or backup restoration.
 
-NIJA is not intended for users under 18 years of age. We do not knowingly collect information from children under 18. Trading involves financial risk and requires legal capacity to trade.
+**Privacy and support requests:** support@nijaaitrading.com
+**Official website:** https://nijaaitrading.com
+**Business phone:** 425-756-0283
 
-## California Privacy Rights (CCPA)
+## 9. Age eligibility
 
-If you are a California resident, you have these rights:
+Eligibility depends on the product. Broker-connected features must follow the relevant account and age requirements. Education offerings and any youth-facing routes require their own verified collection, permission, and disclosure rules. This draft does not authorize a new collection or marketing use involving minors.
 
-- **Right to Know:** Request information about data we collect
-- **Right to Delete:** Request deletion of your data
-- **Right to Opt-Out:** Opt-out of data sales (we don't sell data)
-- **Right to Non-Discrimination:** Equal service regardless of privacy choices
+## 10. Processing locations and third-party services
 
-To exercise these rights, contact us at: privacy@nija.trading
+NIJA's providers can operate in different jurisdictions. A provider's headquarters or entity country does not establish the location of all service data, support access, logs, or backups. NIJA must verify relevant processing locations and any required transfer arrangements for the products and customers served.
 
-## European Privacy Rights (GDPR)
+Independent brokers, payment services, app platforms, and other third parties also have their own terms and privacy practices. NIJA remains responsible for the data and processing it controls.
 
-If you are in the European Economic Area, you have these rights:
+## 11. Changes to this notice
 
-- **Right of Access:** Access your personal data
-- **Right to Rectification:** Correct inaccurate data
-- **Right to Erasure:** Delete your data
-- **Right to Restriction:** Limit processing of your data
-- **Right to Data Portability:** Export your data
-- **Right to Object:** Object to certain processing
+The public effective date must reflect actual publication. Material changes to data use, recipients, or choices require the notices and permissions applicable to that change.
 
-To exercise these rights, contact us at: privacy@nija.trading
+## Publication evidence still required
 
-## International Data Transfers
+This section is an internal release checklist, not a claim of completed certification:
 
-- NIJA primarily operates locally on your device
-- If you enable cloud features, data may be stored on servers in the United States
-- We use encryption and comply with applicable data transfer frameworks
+- [ ] Reconcile each product and enabled integration with the [data-flow register](docs/PRIVACY_DATA_FLOW_REGISTER.md).
+- [ ] Verify privacy-request contact delivery and the public policy/deletion pages.
+- [ ] Verify actual recipients, processing locations, optional features, and consent behavior.
+- [ ] Approve and implement category-specific retention periods and justified exceptions.
+- [ ] Verify the disclosed deletion scope and the separate cross-system request process.
+- [ ] Reconcile mobile declarations with the exact signed release and backend.
+- [ ] Review age eligibility, youth-facing routes, and jurisdiction-specific notices.
+- [ ] Complete appropriate legal review and record the actual publication date.
 
-## Changes to This Privacy Policy
-
-We may update this Privacy Policy from time to time. We will notify you of significant changes by:
-
-- Displaying a notice in the app
-- Updating the "Last Updated" date
-- Requiring re-acceptance for material changes
-
-Your continued use after changes indicates acceptance of the updated policy.
-
-## Contact Us
-
-If you have questions about this Privacy Policy, please contact us:
-
-**Privacy Questions:** privacy@nija-trading.com  
-**General Support:** support@nija-trading.com  
-**Data Requests:** data@nija-trading.com  
-**Business Phone:** 425-765-0283
-
-For comprehensive support options, see our [Customer Support](SUPPORT.md) page.
-
-## App Store Compliance Statement
-
-NIJA is designed with privacy as a core principle:
-
-✅ **No server-side trading execution** - All trading is user-directed from your device  
-✅ **Local data storage** - Your sensitive data stays on your device  
-✅ **Direct API connections** - You connect directly to your exchange  
-✅ **Transparent data practices** - Clear disclosure of all data collection  
-✅ **User control** - You control your data and can delete it anytime  
-
-## Financial Disclaimer
-
-This Privacy Policy does not constitute financial advice. NIJA is a tool for independent trading. You are solely responsible for:
-
-- Your trading decisions
-- Risk management
-- Compliance with applicable laws and regulations
-- Protecting your API credentials
-- Understanding the risks of algorithmic trading
-
-**See our Terms of Service and Risk Disclosure for complete legal information.**
-
----
-
-**Privacy Policy Version 1.0**  
-**Effective Date: February 3, 2026**  
-**NIJA AI Trading LLC**
+The [mobile policy](mobile/PRIVACY_POLICY.md) and [account-deletion instructions](mobile/ACCOUNT_DELETION.md) must remain consistent with this corrected draft and the deployed product.

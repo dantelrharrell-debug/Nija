@@ -1,6 +1,48 @@
 # NIJA Account Deletion
 
-**Status date:** 2026-08-27
+**Status date:** 2026-11-26
+
+**Status:** Source-level scope clarification. Production deployment, published
+instructions and cross-system deletion remain unverified.
+
+## Implemented cleanup boundary
+
+`DELETE /api/account/deletion` operates on the authenticated user only. Its
+`success: true` / `status: deleted` response means that the existing cleanup
+steps completed for the stores below; it does not mean all NIJA-related data
+was erased. These response fields and the confirmation phrase remain compatible
+with existing clients.
+
+| Covered by the current handler | Outside this handler's coverage |
+|---|---|
+| `users`, `sessions`, and `login_history` in the current authentication database | Other auth state, including `email_verification_tokens`, `two_factor_auth` and `two_factor_backup_codes` |
+| `credentials` and user-linked `audit_log` rows in `vault/__init__.py`, plus the legacy in-memory credential cache | The separate PocketBase member broker vault (`nija_broker_vault`) and credentials held in other stores or runtime copies |
+| Mobile device/push registrations in `mobile_device_store.py` | Other provider identities, device records and copies not managed by that store |
+| Current user/permission caches and the per-user trading-rule file/cache | Trading history, ledgers, recovery journals and other trading state |
+| No additional stores are deleted by this scope clarification | Website submissions, consent history, SQLite/Redis lead queues, CRM/marketing and support records, billing/course/progress records, exports/uploads, logs, provider copies and backups |
+
+The API returns `deletion_scope`, `not_covered`, `retention_notice` and
+`privacy_follow_up` before confirmation and after successful cleanup. Clients
+must display the scope before confirmation and use the completion message
+without changing it into a claim of system-wide erasure. The separate privacy
+review is not automatically submitted by this endpoint.
+
+There is no single transaction across all covered stores. A failed step returns
+HTTP 500 without a success claim; earlier cleanup may already have completed.
+The existing HTTP 400 confirmation failure and HTTP 404 missing-account response
+are unchanged. A repeated request must not delete another account, but a repeated
+successful deletion is not promised to return HTTP 200.
+
+The canonical `require_auth` decorator verifies JWT signature and expiry; it does
+not check whether the account still exists. The mobile gateway adds an account
+existence check, but revocation and re-registration behaviour remain unverified
+for the exact deployed entrypoint. A failed cleanup response does not establish
+that account access is blocked, or that earlier cleanup was rolled back.
+
+This handler's completion log contains scope and counts instead of the user ID.
+Its failure log contains the cleanup stage and exception class, without raw
+exception details. Other modules can still log user identifiers; this change
+does not certify complete log redaction or expiry.
 
 ## In-app deletion path
 
@@ -16,15 +58,22 @@ The destructive flow must:
 2. Explain that active trading should be stopped before deletion.
 3. Require an explicit confirmation phrase or equivalent deliberate confirmation.
 4. Send an authenticated deletion request for the current user only.
-5. Revoke the user's active session after acceptance.
-6. Remove NIJA-held broker credentials and push/device tokens promptly.
-7. Delete or de-identify other user-linked data where legally permitted.
-8. Clearly disclose that limited transaction, tax, fraud-prevention, security, dispute, consent, or regulatory records may be retained when required by law or legitimate compliance obligations.
-9. Confirm completion or provide a request/reference status when asynchronous cleanup is necessary.
+5. Remove sessions in the covered authentication store and sign the client out after successful cleanup.
+6. Remove broker credentials and push/device tokens in the covered stores.
+7. Clearly identify other NIJA records, provider copies and backups outside this request.
+8. Explain how to request a separate privacy review. Do not imply it has been queued or completed.
+9. Confirm only the covered cleanup, or report that complete cleanup could not be confirmed.
+
+A future broader deletion process must define identity verification, store and
+provider coverage, retention exceptions, expiry, retry/reconciliation and
+completion evidence before making broader claims. A category being outside
+this endpoint does not itself establish a legal basis or retention period.
 
 ## Public web-page copy
 
-Publish a stable HTTPS page on the NIJA website before Google Play submission. Suggested page title: **Delete Your NIJA Account**.
+The following is proposed copy, not evidence that this route is published or
+operational. Verify the shipped UI and support/privacy contact before publishing
+a stable HTTPS page. Suggested page title: **Delete Your NIJA Account**.
 
 ### Delete Your NIJA Account
 
@@ -36,9 +85,18 @@ NIJA users can request deletion from inside the NIJA app:
 4. Select **Delete Account**.
 5. Review the deletion notice and confirm the request.
 
-When your deletion request is accepted, NIJA will disable access to the account and remove or de-identify personal data associated with the account where legally permitted. NIJA-held broker API credentials and registered device/push tokens are removed as part of the deletion process.
+When cleanup succeeds, the service removes your account records, sessions, broker
+credentials, mobile push registrations and trading-rule state from its covered
+active stores. The confirmation lists the scope. This request does not cover
+all NIJA-related records.
 
-Some records may be retained when reasonably necessary for legal, tax, accounting, security, fraud-prevention, dispute-resolution, or regulatory obligations. Retained records are restricted from normal product use and are kept only for the applicable retention period.
+Other authentication records, the separate member broker vault, website and CRM
+records, billing/course/trading-history records, support records, logs, exports,
+provider copies and backups may remain. This request does not confirm their
+deletion or a retention period. Contact `support@nijaaitrading.com` to request a
+separate review of those records. That review is not automatically submitted by
+deleting this account. This action does not cancel a separately managed
+subscription.
 
 If you cannot access the app, use NIJA's published support or privacy contact method to request assistance. NIJA may need to verify that you control the account before processing an off-app request.
 
@@ -49,14 +107,19 @@ Deleting your NIJA account does not automatically delete an account held directl
 - [ ] unauthenticated request returns 401
 - [ ] user cannot delete another user's account by supplying a different user ID
 - [ ] confirmation is required
-- [ ] repeated deletion requests are safe/idempotent
-- [ ] active sessions are removed/revoked
+- [ ] repeated requests preserve other users and correctly report missing-account state
+- [ ] covered session rows are removed
+- [ ] previously issued JWTs are denied after deletion at every deployed gateway
+- [ ] re-registration cannot restore an old token's authority over the deleted account
 - [ ] user auth record is deleted or moved to a documented deletion state
 - [ ] broker credential store is cleared for the user
-- [ ] broker runtime environment variables are cleared
+- [ ] separate member broker vault, additional auth stores and runtime credential copies are disclosed as outside this endpoint
 - [ ] push/device tokens are cleared
 - [ ] in-memory user cache is cleared/disabled
-- [ ] retained records are documented by category and reason
+- [ ] covered cleanup succeeds for a synthetic user while a second user's records remain unchanged
+- [ ] unsupported stores remain unchanged and are not claimed deleted
+- [ ] partial failure never returns success and logs only the stage and error category from this handler
+- [ ] broader retention periods, reasons and expiry are independently documented and verified
 - [ ] deletion does not claim to delete third-party brokerage accounts
 - [ ] app signs the user out and clears local session data after successful acceptance
 
