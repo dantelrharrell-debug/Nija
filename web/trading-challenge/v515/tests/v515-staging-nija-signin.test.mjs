@@ -4,6 +4,7 @@ import {Readable} from "node:stream";
 import {createTiq72StagingSignIn,createNijaStagingProfileLookup} from "../server/v515-staging-nija-signin.mjs";
 
 const origin="https://nija-trading-challenge-staging.vercel.app";
+const bridgeProof="a".repeat(48);
 const issuer="https://nija-auth-staging.onrender.com";
 const testBearer=["stub","body","signaturefixture"].join(".");
 const csrf="f".repeat(43);
@@ -38,9 +39,10 @@ test("only the server-pinned private TEST issuer is accepted",async()=>{
   for(const issuerOrigin of ["https://nija.onrender.com","https://localhost","https://other.example/path",
       issuer+"/path",issuer+"/","http://nija-auth-staging.onrender.com",issuer+":444"])
     assert.throws(()=>createNijaStagingProfileLookup({issuerOrigin}),/staging_identity_origin_required/);
-  const lookup=createNijaStagingProfileLookup({issuerOrigin:issuer,request:async(url,options)=>{
+  const lookup=createNijaStagingProfileLookup({issuerOrigin:issuer,bridgeProof,request:async(url,options)=>{
     assert.equal(String(url),issuer+"/api/user/profile");
     assert.equal(options.redirect,"error");
+    assert.equal(options.headers["X-NIJA-Staging-Bridge"],bridgeProof);
     assert.equal(options.headers.Authorization,"Bearer "+testBearer);
     return Response.json({enabled:true,user_id:buyer,email:"ignored@example.com",permissions:{owner:true}});
   }});
@@ -49,10 +51,10 @@ test("only the server-pinned private TEST issuer is accepted",async()=>{
 });
 test("disabled, expired and unavailable profiles never authorize a buyer",async()=>{
   for(const [status,data] of [[200,{enabled:false,user_id:buyer}],[401,{error:"expired"}]]){
-    const lookup=createNijaStagingProfileLookup({issuerOrigin:issuer,request:async()=>Response.json(data,{status})});
+    const lookup=createNijaStagingProfileLookup({issuerOrigin:issuer,bridgeProof,request:async()=>Response.json(data,{status})});
     assert.equal(await lookup(testBearer),null);
   }
-  const failed=createNijaStagingProfileLookup({issuerOrigin:issuer,request:async()=>new Response(null,{status:503})});
+  const failed=createNijaStagingProfileLookup({issuerOrigin:issuer,bridgeProof,request:async()=>new Response(null,{status:503})});
   await assert.rejects(()=>failed(testBearer),/staging_identity_unavailable/);
 });
 test("review action is off by default and rejects origin, missing CSRF and profile mismatch",async()=>{

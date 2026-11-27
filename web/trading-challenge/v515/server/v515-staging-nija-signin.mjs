@@ -21,8 +21,9 @@ function equalCsrf(a,b){
 
 // This origin is injected at deploy time only after verifying the actual
 // isolated gateway and account store; never derive it from request metadata.
-export function createNijaStagingProfileLookup({issuerOrigin,request=fetch}={}){
-  if(typeof issuerOrigin!=="string"||typeof request!=="function")
+export function createNijaStagingProfileLookup({issuerOrigin,bridgeProof,request=fetch}={}){
+  if(typeof issuerOrigin!=="string"||typeof bridgeProof!=="string"||
+     !/^[A-Za-z0-9_-]{43,128}$/.test(bridgeProof)||typeof request!=="function")
     throw new TypeError("staging_identity_origin_required");
   const issuer=new URL(issuerOrigin);
   if(issuer.href!==issuerOrigin+"/"||issuer.protocol!=="https:"||issuer.port||
@@ -32,7 +33,8 @@ export function createNijaStagingProfileLookup({issuerOrigin,request=fetch}={}){
   return async accessToken=>{
     if(typeof accessToken!=="string"||!BEARER.test(accessToken)) return null;
     const result=await request(endpoint,{
-      method:"GET",headers:{Authorization:"Bearer "+accessToken,Accept:"application/json"},
+      method:"GET",headers:{Authorization:"Bearer "+accessToken,Accept:"application/json",
+        "X-NIJA-Staging-Bridge":bridgeProof},
       redirect:"error",cache:"no-store",signal:AbortSignal.timeout(3500)
     });
     if(result.status>=400&&result.status<500) return null;
