@@ -239,6 +239,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Keep PyPI traffic from the three manifests from overlapping.
+      max-parallel: 1
       matrix:
         requirements: [requirements.txt, requirements-billing.txt, requirements-member-broker.txt]
 
@@ -278,6 +280,8 @@ jobs:
 
     - name: Scan for malicious packages with PyPI Guardian
       if: ${{ !cancelled() && steps.production-deps.outcome == 'success' }}
+      env:
+        GUARDDOG_PARALLELISM: '1'
       run: |
         set -euo pipefail
         python -m venv "$RUNNER_TEMP/nija-guarddog"
