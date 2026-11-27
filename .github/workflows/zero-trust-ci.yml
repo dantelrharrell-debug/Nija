@@ -208,7 +208,7 @@ jobs:
               bot/tests/test_entrypoint_writer_authority.py
           - test_group: integration
             test_paths: >-
-              tests/imports_smoke_test.py
+              tests/test_imports_smoke.py
               bot/tests/test_source_runtime_guard_bootstrap.py
               bot/tests/test_render_prebot_writer_handoff.py
               bot/tests/test_exit_protection_assurance_patch.py

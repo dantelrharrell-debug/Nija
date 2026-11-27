@@ -1,0 +1,159 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {runTiq72IsolatedDatabaseProbe} from '../server/tiq72-isolated-db-runtime-probe.mjs';
+
+const tables=[
+  'tiq72_v515_runs','tiq72_v515_reservations',
+  'tiq72_v515_reports','tiq72_v515_verified_events'
+];
+function env() {
+  // The private-looking URI is a throwaway, offline-only fixture.
+  const role='nija_tiq72_upgrade6_isolated_test_user';
+  const marker=['synthetic','only'].join('_');
+  const host='dpg-dbqeq90ae00c7386p970-a';
+  const db='nija_tiq72_upgrade6_isolated_test';
+  const url=new URL([
+    'postgresql://',role,':',marker,'@',host,'/',db,'?sslmode=require'
+  ].join('')).href;
+  return {TIQ72_TEST_DATABASE_URL:url};
+}
+const withProbeResult = (value, status=0) => (file,args,opts)=>{
+  assert.ok(file.endsWith('/.venv/bin/python'));
+  assert.ok(args[0].endsWith('scripts/tiq72_isolated_db_readonly_preflight.py'));
+  assert.equal(opts.timeout,12000);
+  assert.deepEqual(opts.stdio,['ignore','pipe','ignore']);
+  return {status,stdout:JSON.stringify(value)};
+};
+
+test('rejected cross-workspace URL never launches Python or logs its value',()=>{
+  const wrong=env();
+  wrong.TIQ72_TEST_DATABASE_URL=wrong.TIQ72_TEST_DATABASE_URL.replace(
+    'dpg-dbqeq90ae00c7386p970-a','dpg-dbsuhuc9v7es73bmteeg-a');
+  let ran=false;
+  const got=runTiq72IsolatedDatabaseProbe(wrong,()=>{ran=true;throw Error('must not run')});
+  assert.equal(ran,false);
+  assert.equal(got.status,'blocked');
+  assert.equal(got.migration_verified,false);
+  assert.ok(!JSON.stringify(got).includes(wrong.TIQ72_TEST_DATABASE_URL));
+});
+
+test('read-only identity with all tables still never certifies migration or payments',()=>{
+  const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'identity_verified_read_only', expected_tables_present:tables,
+    expected_tables_missing:[], public_base_table_count:4,
+    other_schema_table_count:0, schema_contract_verified:true, migration_applied:true
+  }));
+  assert.equal(got.status,'identity_verified_read_only');
+  assert.equal(got.expected_schema_present,true);
+  assert.equal(got.other_schema_table_count,0);
+  assert.equal(got.checkout_available,false);
+  assert.equal(got.migration_verified,false);
+});
+
+test('missing tables are reported without changing database or granting entitlements',()=>{
+  const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'identity_verified_read_only',expected_tables_present:[tables[0]],
+    expected_tables_missing:tables.slice(1),public_base_table_count:1,
+    other_schema_table_count:0,
+    schema_contract_verified:false,migration_applied:false
+  }));
+  assert.deepEqual(got.expected_tables_missing,[...tables.slice(1)].sort());
+  assert.equal(got.expected_schema_present,false);
+  assert.equal(got.migration_verified,false);
+  assert.equal(got.checkout_available,false);
+});
+
+test('inconsistent table inventory and failed child process fail closed',()=>{
+  const bad=[
+    {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
+     expected_tables_missing:tables.slice(1),public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:true},
+    {status:'identity_verified_read_only',expected_tables_present:tables,
+     expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+     schema_contract_verified:true,migration_applied:false},
+    {status:'identity_verified_read_only',expected_tables_present:[tables[0]],
+     expected_tables_missing:[],public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:false},
+    {status:'identity_verified_read_only',expected_tables_present:['nija_users'],
+     expected_tables_missing:tables.slice(1),public_base_table_count:1,other_schema_table_count:0,
+     schema_contract_verified:false,migration_applied:false}
+  ];
+  for(const obj of bad)
+    assert.equal(runTiq72IsolatedDatabaseProbe(env(),withProbeResult(obj)).status,'blocked');
+  assert.equal(runTiq72IsolatedDatabaseProbe(env(),withProbeResult({},2)).status,'blocked');
+  assert.equal(runTiq72IsolatedDatabaseProbe(env(),()=>({status:0,stdout:'not json'})).status,'blocked');
+});
+
+test('four tables without complete reviewed constraints never satisfy the schema contract',()=>{
+  const got=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'identity_verified_read_only',expected_tables_present:tables,
+    expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+    schema_contract_verified:false,migration_applied:false
+  }));
+  assert.equal(got.status,'identity_verified_read_only');
+  assert.equal(got.expected_schema_present,false);
+  assert.equal(got.schema_contract_verified,false);
+  assert.equal(got.checkout_available,false);
+  assert.equal(got.migration_verified,false);
+  const missingContract=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'identity_verified_read_only',expected_tables_present:tables,
+    expected_tables_missing:[],public_base_table_count:4,other_schema_table_count:0,
+    migration_applied:true
+  }));
+  assert.equal(missingContract.status,'blocked');
+});
+
+test('known failure codes may be shown without sensitive Python or driver text',()=>{
+  const classified=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'blocked',reason:'private_db_dns_unavailable'
+  },3));
+  assert.equal(classified.reason,'private_db_dns_unavailable');
+  assert.equal(classified.migration_verified,false);
+  const unexpected=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    status:'blocked',reason:'postgresql://synthetic@wrong-host'
+  },3));
+  assert.equal(unexpected.reason,'private_read_only_preflight_failed');
+  assert.ok(!JSON.stringify(unexpected).includes('synthetic@wrong-host'));
+});
+
+test('catalog table count is fail-closed and never implies a migration',()=>{
+  const valid={status:'identity_verified_read_only',
+    expected_tables_present:tables,expected_tables_missing:[],
+    schema_contract_verified:true,migration_applied:true,other_schema_table_count:0};
+  for(const public_base_table_count of [-1,0,1.5,NaN,1000001,'4',null,undefined]){
+    const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+      ...valid,public_base_table_count
+    }));
+    assert.equal(result.status,'blocked');
+  }
+  const unrelatedTables=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+    ...valid,public_base_table_count:9
+  }));
+  assert.equal(unrelatedTables.status,'identity_verified_read_only');
+  assert.equal(unrelatedTables.public_base_table_count,9);
+  assert.equal(unrelatedTables.migration_verified,false);
+  assert.equal(unrelatedTables.checkout_available,false);
+});
+
+test('non-public table count requires a bounded integer and never certifies migration or payments',()=>{
+  const valid={status:'identity_verified_read_only',
+    expected_tables_present:tables,expected_tables_missing:[],
+    schema_contract_verified:true,migration_applied:true,public_base_table_count:4};
+  for(const other_schema_table_count of [-1,1.5,NaN,1000001,'4',null,undefined]){
+    const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+      ...valid,other_schema_table_count
+    }));
+    assert.equal(result.status,'blocked');
+    assert.equal(result.reason,'invalid_preflight_result');
+    assert.equal(result.migration_verified,false);
+  }
+  for(const other_schema_table_count of [0,2,1000000]){
+    const result=runTiq72IsolatedDatabaseProbe(env(),withProbeResult({
+      ...valid,other_schema_table_count
+    }));
+    assert.equal(result.status,'identity_verified_read_only');
+    assert.equal(result.other_schema_table_count,other_schema_table_count);
+    assert.equal(result.migration_verified,false);
+    assert.equal(result.checkout_available,false);
+  }
+});

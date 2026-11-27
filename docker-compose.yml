@@ -59,7 +59,7 @@ services:
     environment:
       POSTGRES_DB: nija
       POSTGRES_USER: nija_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in private configuration}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -109,12 +109,12 @@ services:
       - seccomp=security/seccomp-profile.json
     environment:
       # Database
-      DATABASE_URL: postgresql://nija_user:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/nija
+      DATABASE_URL: postgresql://nija_user:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in private configuration}@postgres:5432/nija
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: nija
       POSTGRES_USER: nija_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in private configuration}
       # Redis
       REDIS_URL: redis://redis:6379/0
       # JWT
@@ -164,12 +164,7 @@ services:
     networks:
       - nija-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    # Inherit the API image HEALTHCHECK, including its existing timing.
     # Resource limits
     deploy:
       resources:
@@ -236,7 +231,7 @@ services:
     container_name: nija-grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-nija_admin_change_me}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?Set GF_SECURITY_ADMIN_PASSWORD in private configuration}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - grafana_data:/var/lib/grafana

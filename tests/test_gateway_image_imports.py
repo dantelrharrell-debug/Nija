@@ -15,7 +15,12 @@ def test_gateway_image_copy_layout_has_required_imports_and_denies_untrusted_ori
     for line in (ROOT / "Dockerfile.gateway").read_text().splitlines():
         if not line.startswith("COPY "):
             continue
-        *sources, destination = shlex.split(line)[1:]
+        parts = shlex.split(line)[1:]
+        # Build-stage COPY sources are not checkout paths. Continue
+        # checking all final-image application COPY sources below.
+        if parts and parts[0].startswith("--from="):
+            continue
+        *sources, destination = parts
         for source in sources:
             src = ROOT / source
             dest = tmp_path / destination

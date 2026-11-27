@@ -1,0 +1,29 @@
+name: TIQ72 authoritative scoring gate
+on:
+  pull_request:
+    paths:
+      - 'web/trading-challenge/server/tiq72-authoritative-adapter.mjs'
+      - 'web/trading-challenge/server/tiq72-upgrade6-holding-http.mjs'
+      - 'web/trading-challenge/tests/tiq72-authoritative-adapter.test.mjs'
+      - 'web/trading-challenge/v515/offline_tiq_premium/**'
+      - '.github/workflows/tiq72-authoritative-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scoring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Verify authoritative 72-decision replay and tamper rejection
+        run: node --test web/trading-challenge/tests/tiq72-authoritative-adapter.test.mjs
+      - name: Verify approved v515 offline engine
+        run: |
+          cd web/trading-challenge/v515/offline_tiq_premium
+          node --test tiq_engine_test.mjs

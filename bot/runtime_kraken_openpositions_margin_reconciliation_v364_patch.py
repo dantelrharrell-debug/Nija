@@ -62,6 +62,19 @@ def _canonical_symbol(value: Any) -> str:
     return compact
 
 
+def _position_number(value: Any) -> float:
+    """Reject absent or invalid broker amounts instead of replacing them with zero."""
+    if type(value) not in (str, int, float) or len(str(value)) > 128:
+        raise ValueError("invalid_position_number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("invalid_position_number") from None
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("invalid_position_number")
+    return number
+
+
 def _extract_long_margin_truth(response: Any, symbol: str) -> Dict[str, Any]:
     """Return aggregate broker-open long margin truth for one Kraken pair.
 
@@ -70,12 +83,12 @@ def _extract_long_margin_truth(response: Any, symbol: str) -> Dict[str, Any]:
     """
     if not isinstance(response, Mapping):
         return {"ok": False, "reason": "invalid_openpositions_payload"}
-    errors = response.get("error") or []
-    if isinstance(errors, str):
-        errors = [errors]
+    errors = response.get("error")
+    if not isinstance(errors, list) or any(not isinstance(item, str) for item in errors):
+        return {"ok": False, "reason": "invalid_openpositions_error_envelope"}
     if errors:
-        return {"ok": False, "reason": "openpositions_rejected", "errors": list(errors)}
-    rows = response.get("result") or {}
+        return {"ok": False, "reason": "openpositions_rejected"}
+    rows = response.get("result")
     if not isinstance(rows, Mapping):
         return {"ok": False, "reason": "invalid_openpositions_result"}
 
@@ -83,16 +96,25 @@ def _extract_long_margin_truth(response: Any, symbol: str) -> Dict[str, Any]:
     long_rows = []
     opposite_rows = []
     for position_id, raw in rows.items():
-        if not isinstance(raw, Mapping):
-            continue
+        if (not isinstance(position_id, str) or not position_id.strip()
+                or not isinstance(raw, Mapping)
+                or not isinstance(raw.get("pair"), str) or not raw["pair"].strip()):
+            return {"ok": False, "reason": "invalid_openpositions_row"}
         if _canonical_symbol(raw.get("pair")) != target:
             continue
-        vol = max(0.0, _float(raw.get("vol")))
-        closed = max(0.0, _float(raw.get("vol_closed")))
-        remaining = max(0.0, vol - closed)
+        try:
+            vol = _position_number(raw.get("vol"))
+            closed = _position_number(raw.get("vol_closed"))
+        except ValueError:
+            return {"ok": False, "reason": "invalid_openpositions_quantity"}
+        if vol <= 0 or closed > vol:
+            return {"ok": False, "reason": "invalid_openpositions_quantity"}
+        side = raw.get("type")
+        if side not in ("buy", "sell"):
+            return {"ok": False, "reason": "invalid_openpositions_side"}
+        remaining = vol - closed
         if remaining <= _EPS:
             continue
-        side = str(raw.get("type") or "").strip().lower()
         item = (str(position_id), raw, remaining, vol)
         if side == "buy":
             long_rows.append(item)
@@ -111,8 +133,12 @@ def _extract_long_margin_truth(response: Any, symbol: str) -> Dict[str, Any]:
     for position_id, row, remaining, original_vol in long_rows:
         ids.append(position_id)
         total_units += remaining
-        value = max(0.0, _float(row.get("value")))
-        cost = max(0.0, _float(row.get("cost")))
+        try:
+            value = _position_number(row.get("value", 0))
+            cost = _position_number(row.get("cost", 0))
+            margin = _position_number(row.get("margin", 0))
+        except ValueError:
+            return {"ok": False, "reason": "invalid_openpositions_valuation"}
         if value > 0:
             notional = value
         elif cost > 0 and original_vol > _EPS:
@@ -120,13 +146,16 @@ def _extract_long_margin_truth(response: Any, symbol: str) -> Dict[str, Any]:
         else:
             notional = 0.0
         total_notional += notional
-        margin = max(0.0, _float(row.get("margin")))
         if margin > _EPS and cost > _EPS:
-            inferred = int(round(cost / margin))
+            ratio = cost / margin
+            if not math.isfinite(ratio):
+                return {"ok": False, "reason": "invalid_openpositions_valuation"}
+            inferred = int(round(ratio))
             if 2 <= inferred <= 3:
                 leverage_values.append(inferred)
 
-    if total_units <= _EPS or total_notional <= _EPS:
+    if (not math.isfinite(total_units) or not math.isfinite(total_notional)
+            or total_units <= _EPS or total_notional <= _EPS):
         return {
             "ok": False,
             "reason": "openpositions_missing_authoritative_units_or_notional",

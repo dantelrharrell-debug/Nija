@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Review-only TIQ72 isolated test migration. Never migrate billing, course or Kraken."""
+from __future__ import annotations
+import argparse
+import hashlib
+import os
+from pathlib import Path
+from urllib.parse import urlsplit, unquote
+from importlib.util import module_from_spec, spec_from_file_location
+
+# Resolve the adjacent read-only catalog verifier for both direct script
+# execution and importlib-loaded offline migration tests.
+_contract_spec = spec_from_file_location(
+    "tiq72_readonly_contract",
+    Path(__file__).resolve().with_name("tiq72_isolated_db_readonly_preflight.py"),
+)
+_contract_module = module_from_spec(_contract_spec)
+_contract_spec.loader.exec_module(_contract_module)
+schema_contract_verified = _contract_module.schema_contract_verified
+
+DB = "nija_tiq72_upgrade6_isolated_test"
+HOST = "dpg-dbqeq90ae00c7386p970-a"
+USER = "nija_tiq72_upgrade6_isolated_test_user"
+SCHEMA = Path(__file__).resolve().parents[1] / "web/trading-challenge/v515/server/sql/tiq72-v515-report-ledger.sql"
+# Independently reviewed GitHub blob 85a0f7b9d080e9d713e28878f17575ee90229c4e.
+# Only line-ending normalization is allowed; substantive source edits fail closed.
+EXPECTED_SCHEMA_SHA256 = "780bb927929bde65cb19942bcd3c4e1df8461b1e7a1754ee01c83523224ec39f"
+TABLES = frozenset(("tiq72_v515_runs", "tiq72_v515_reservations", "tiq72_v515_reports", "tiq72_v515_verified_events"))
+
+class MigrationDenied(Exception):
+    pass
+
+def verify_private_url(value):
+    if not isinstance(value,str) or not value or len(value)>2048:
+        raise MigrationDenied("private_url_required")
+    try:
+        u=urlsplit(value)
+        port=u.port or 5432
+        username=unquote(u.username or "")
+        database=unquote(u.path.lstrip("/"))
+    except (ValueError,TypeError):
+        raise MigrationDenied("invalid_private_url") from None
+    if (u.scheme not in ("postgres","postgresql") or u.hostname!=HOST or
+        username!=USER or database!=DB or not u.password or port!=5432 or
+        u.query not in ("","sslmode=require") or u.fragment):
+        raise MigrationDenied("database_identity_mismatch")
+
+def migrate(url, apply=False, connect=None):
+    verify_private_url(url)
+    raw_sql = SCHEMA.read_bytes()
+    if hashlib.sha256(raw_sql.replace(b"\r\n", b"\n")).hexdigest() != EXPECTED_SCHEMA_SHA256:
+        raise MigrationDenied("reviewed_schema_digest_mismatch")
+    sql = raw_sql.decode("utf-8")
+    if (not sql.startswith("-- TIQ v515 test-only durable ledger.") or
+        "BEGIN;" not in sql or "COMMIT;" not in sql or
+        any("CREATE TABLE IF NOT EXISTS "+t not in sql for t in TABLES)):
+        raise MigrationDenied("reviewed_migration_required")
+    if connect is None:
+        from psycopg2 import connect
+    try:
+        db=connect(url, connect_timeout=8, sslmode="require")
+        try:
+            with db.cursor() as cursor:
+                cursor.execute("SELECT current_database(), current_user")
+                if tuple(cursor.fetchone())!=(DB,USER):
+                    raise MigrationDenied("connected_identity_mismatch")
+                cursor.execute("SELECT current_schema()")
+                if tuple(cursor.fetchone()) != ("public",):
+                    raise MigrationDenied("public_schema_required")
+                if not apply:
+                    db.rollback()
+                    return "identity_verified_no_changes"
+                if os.getenv("NIJA_TIQ72_ISOLATED_SCHEMA_APPLY")!="APPROVED_TEST_ONLY":
+                    raise MigrationDenied("apply_gate_required")
+                if os.getenv("NIJA_TIQ72_ISOLATED_BACKUP_RESTORE_VERIFIED")!="APPROVED":
+                    raise MigrationDenied("backup_restore_gate_required")
+                # Source schema is BEGIN/COMMIT wrapped for standalone psql.
+                # Strip only those boundary statements so verification and all
+                # table creation remain within the SAME psycopg transaction.
+                commands = sql.replace("\r\n", "\n")
+                begin_marker = "\nBEGIN;\n"
+                end_marker = "\nCOMMIT;"
+                if commands.count(begin_marker) != 1 or commands.count(end_marker) != 1:
+                    raise MigrationDenied("schema_transaction_boundary_invalid")
+                start = commands.index(begin_marker) + len(begin_marker)
+                finish = commands.index(end_marker)
+                if commands[finish + len(end_marker):].strip():
+                    raise MigrationDenied("schema_trailing_statement_forbidden")
+                commands = commands[start:finish]
+                if "BEGIN;" in commands or "COMMIT;" in commands:
+                    raise MigrationDenied("nested_transaction_disallowed")
+                # A database identity match is not enough: refuse to write
+                # when unrelated user tables exist, including in other schemas.
+                # Catalog metadata stays private; never return table names.
+                cursor.execute(
+                    "SELECT schemaname, tablename FROM pg_tables "
+                    "WHERE schemaname NOT IN ('pg_catalog','information_schema') "
+                    "AND schemaname NOT LIKE 'pg_toast%'"
+                )
+                if any(
+                    schema != "public" or name not in TABLES
+                    for schema, name in cursor.fetchall()
+                ):
+                    raise MigrationDenied("isolated_database_inventory_mismatch")
+                cursor.execute(commands)
+                cursor.execute("SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE %s", ("tiq72_v515_%",))
+                if not TABLES.issubset({row[0] for row in cursor.fetchall()}):
+                    raise MigrationDenied("schema_postcondition_failed")
+                # Table names alone cannot certify test-only checks, foreign keys,
+                # types, and required ready indexes. Reuse the read-only
+                # PostgreSQL catalog verifier before committing any DDL.
+                if not schema_contract_verified(cursor):
+                    raise MigrationDenied("schema_contract_postcondition_failed")
+            db.commit()
+            return "isolated_test_schema_installed"
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    except MigrationDenied:
+        raise
+    except Exception:
+        raise MigrationDenied("private_database_operation_failed") from None
+
+def main():
+    p=argparse.ArgumentParser()
+    p.add_argument("--apply", action="store_true")
+    args=p.parse_args()
+    try:
+        result=migrate(os.getenv("TIQ72_TEST_DATABASE_URL",""),apply=args.apply)
+    except (MigrationDenied,OSError):
+        print("TIQ72: test migration denied; no credentials disclosed")
+        return 2
+    print("TIQ72: "+result)
+    return 0
+
+if __name__=="__main__":
+    raise SystemExit(main())

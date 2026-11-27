@@ -73,6 +73,7 @@ def make_kraken_balance_provider(
     broker: Any, *, account_scope: str, approved_iban_sha256: str,
     approved_api_key_sha256: str, reviewed_provider_id: str,
     monitoring_category: Any, clock: Callable[[], float] = time.time,
+    identity_method: str = "response_echo",
 ) -> Callable[[], Mapping[str, Any]]:
     """Build a single-field provider for an independently mapped default wallet.
 
@@ -86,7 +87,7 @@ def make_kraken_balance_provider(
         broker, account_scope=account_scope, approved_iban_sha256=approved_iban_sha256,
         approved_api_key_sha256=approved_api_key_sha256,
         reviewed_provider_id=reviewed_provider_id,
-        monitoring_category=monitoring_category, clock=clock,
+        monitoring_category=monitoring_category, clock=clock, identity_method=identity_method,
     )
     key_pin = _sha256_fingerprint(approved_api_key_sha256)
 

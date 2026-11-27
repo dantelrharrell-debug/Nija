@@ -15,10 +15,10 @@ def test_authenticated_account_mismatch_is_rejected():
 
 def test_freshness_is_exchange_event_based_not_query_time():
     order = {"txid": "ORDER-1", "status": "closed", "vol_exec": "1",
-             "cost": "250", "descr": {"pair": "ETHUSD", "type": "buy"}}
+             "cost": "250", "closetm": 1000, "descr": {"pair": "ETHUSD", "type": "buy"}}
     outcome = validate_kraken_order_evidence(
         "ORDER-1", "platform:kraken", order,
         authenticated_account_id="platform:kraken",
         event_epoch=1000, now_epoch=2801,
     )
-    assert outcome["reason"] == "broker_event_stale_or_future"
+    assert outcome == {"verified": False, "reason": "broker_event_stale_or_future"}

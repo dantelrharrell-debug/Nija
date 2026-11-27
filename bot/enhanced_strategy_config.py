@@ -328,41 +328,41 @@ LOGGING_CONFIG = {
 # USAGE EXAMPLES
 # ===================================================================
 
-"""
-Example 1: Enable multi-indicator consensus with market regime detection
-
-from bot.enhanced_strategy_config import *
-
-config = {
-    'min_entry_score': MIN_ENTRY_SCORE,
-    'features': FEATURES,
-    'risk': RISK_CONFIG,
-    'momentum': MOMENTUM_CONFIG,
-    'mean_reversion': MEAN_REVERSION_CONFIG
-}
-
-Example 2: Conservative settings for small account
-
-config = {
-    'min_entry_score': 7,  # Require very high confidence
-    'risk': {
-        'max_risk_per_trade_pct': 1.0,  # Only 1% risk per trade
-        'max_position_size_pct': 10.0,   # Max 10% per position
-        'max_concurrent_positions': 2    # Only 2 positions at once
-    }
-}
-
-Example 3: Aggressive settings for experienced traders
-
-config = {
-    'min_entry_score': 5,  # Accept medium confidence
-    'risk': {
-        'max_risk_per_trade_pct': 2.0,
-        'max_position_size_pct': 20.0,
-        'max_concurrent_positions': 5
-    },
-    'features': {
-        'scalping_mode': True  # Enable scalping
-    }
-}
-"""
+# """
+# Example 1: Enable multi-indicator consensus with market regime detection
+#
+# from bot.enhanced_strategy_config import *
+#
+# config = {
+#     'min_entry_score': MIN_ENTRY_SCORE,
+#     'features': FEATURES,
+#     'risk': RISK_CONFIG,
+#     'momentum': MOMENTUM_CONFIG,
+#     'mean_reversion': MEAN_REVERSION_CONFIG
+# }
+#
+# Example 2: Conservative settings for small account
+#
+# config = {
+#     'min_entry_score': 7,  # Require very high confidence
+#     'risk': {
+#         'max_risk_per_trade_pct': 1.0,  # Only 1% risk per trade
+#         'max_position_size_pct': 10.0,   # Max 10% per position
+#         'max_concurrent_positions': 2    # Only 2 positions at once
+#     }
+# }
+#
+# Example 3: Aggressive settings for experienced traders
+#
+# config = {
+#     'min_entry_score': 5,  # Accept medium confidence
+#     'risk': {
+#         'max_risk_per_trade_pct': 2.0,
+#         'max_position_size_pct': 20.0,
+#         'max_concurrent_positions': 5
+#     },
+#     'features': {
+#         'scalping_mode': True  # Enable scalping
+#     }
+# }
+# """

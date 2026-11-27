@@ -79,7 +79,39 @@ def test_identical_webhook_replays_send_one_notification(monkeypatch, tmp_path):
         assert conn.execute("SELECT state FROM website_lead_forwarding").fetchone()[0] == "sent"
 
 
-def test_failed_forward_is_retryable_but_never_spammed(monkeypatch, tmp_path):
+def test_forward_preserves_source_provenance_and_separate_submissions(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead) or True)
+    first = dict(_lead(), event_id="offline-source-1")
+    second = dict(first, event_id="offline-source-2")
+
+    assert _request(first)[0] == 201
+    assert _request(first)[1]["duplicate"]
+    assert _request(second)[0] == 201
+    assert len(sent) == 2
+    assert [lead["source_event_id"] for lead in sent] == ["offline-source-1", "offline-source-2"]
+    assert all(lead["source_submitted_at"] == "2026-10-10T00:00:00.000Z" for lead in sent)
+    assert sent[0]["event_id"] != sent[1]["event_id"]
+    # Preserve the original persisted payload, consent and timestamp on replay.
+    with sqlite3.connect(intake._db_path()) as conn:
+        rows = conn.execute("SELECT source_payload_json FROM website_leads").fetchall()
+    assert len(rows) == 2
+    assert {json.loads(row[0])["event_id"] for row in rows} == {"offline-source-1", "offline-source-2"}
+
+
+def test_missing_source_provenance_is_never_fabricated(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    sent = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: sent.append(lead) or True)
+    payload = _lead()
+    payload.pop("submitted_at")
+    assert _request(payload)[0] == 201
+    assert sent[0]["source_event_id"] == ""
+    assert sent[0]["source_submitted_at"] == ""
+
+
+def test_ambiguous_forward_is_held_even_after_backoff(monkeypatch, tmp_path):
     _config(monkeypatch, tmp_path)
     calls = []
 
@@ -93,6 +125,7 @@ def test_failed_forward_is_retryable_but_never_spammed(monkeypatch, tmp_path):
     first_status, first = _request(_lead())
     replay_status, replay = _request(_lead())
     assert first_status == 201 and first["forward_error"]
+    assert first["forward_state"] == "uncertain"
     assert replay_status == 200 and replay["duplicate"]
     assert len(calls) == 1, "Immediate replay must obey retry backoff"
 
@@ -101,13 +134,14 @@ def test_failed_forward_is_retryable_but_never_spammed(monkeypatch, tmp_path):
         conn.execute("UPDATE website_lead_forwarding SET lease_until=0")
         conn.commit()
     retry_status, retry = _request(_lead())
-    assert retry_status == 200 and retry["forwarded"]
-    assert not retry["forward_error"]
+    assert retry_status == 200 and not retry["forwarded"]
+    assert retry["forward_state"] == "uncertain"
+    assert retry["forward_error"]
 
     last_status, last = _request(_lead())
     assert last_status == 200 and last["duplicate"]
     assert not last["forwarded"]
-    assert len(calls) == 2, "Confirmed delivery must never be resent"
+    assert len(calls) == 1, "An uncertain provider outcome must never be automatically resent"
 
 
 def test_concurrent_duplicate_cannot_send_twice(monkeypatch, tmp_path):
@@ -199,7 +233,7 @@ def test_malformed_timestamp_replay_uses_stable_identity(monkeypatch, tmp_path):
     assert first["lead_id"] == replay["lead_id"] and len(sent) == 1
 
 
-def test_expired_lease_owner_cannot_override_current_claim(monkeypatch, tmp_path):
+def test_expired_sender_is_held_instead_of_reclaimed(monkeypatch, tmp_path):
     _config(monkeypatch, tmp_path)
     key = "a" * 64
     stale = intake._claim_forward(key)
@@ -208,17 +242,48 @@ def test_expired_lease_owner_cannot_override_current_claim(monkeypatch, tmp_path
         conn.execute("UPDATE website_lead_forwarding SET lease_until=0 WHERE event_key=?", (key,))
         conn.commit()
     current = intake._claim_forward(key)
-    assert current and current != stale
+    assert current is None
 
     assert not intake._finish_forward(key, claim_token=stale, sent=False)
     with sqlite3.connect(intake._forward_db_path()) as conn:
         state = conn.execute(
             "SELECT state, lease_token FROM website_lead_forwarding WHERE event_key=?", (key,)
         ).fetchone()
-    assert state == ("sending", current)
+    assert state == ("uncertain", stale)
 
-    assert intake._finish_forward(key, claim_token=current, sent=True)
+    assert not intake._finish_forward(key, claim_token=stale, sent=True)
     assert intake._claim_forward(key) is None
+
+
+def test_unconfigured_forward_stays_pending_and_can_be_retried(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    monkeypatch.setattr(intake, "_forward", lambda lead: False)
+    _, first = _request(_lead())
+    assert first["forward_state"] == "pending"
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        conn.execute("UPDATE website_lead_forwarding SET lease_until=0")
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+    _, second = _request(_lead())
+    assert second["forwarded"] and second["forward_state"] == "sent"
+    assert len(calls) == 1
+
+
+def test_provider_acceptance_with_lost_completion_is_not_resent(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: calls.append(lead) or True)
+    real_finish = intake._finish_forward
+    monkeypatch.setattr(intake, "_finish_forward", lambda *args, **kwargs: False)
+    _, first = _request(_lead())
+    assert first["forwarded"] and first["forward_error"]
+    assert first["forward_state"] == "sending"
+    monkeypatch.setattr(intake, "_finish_forward", real_finish)
+    with sqlite3.connect(intake._forward_db_path()) as conn:
+        conn.execute("UPDATE website_lead_forwarding SET lease_until=0")
+    _, replay = _request(_lead())
+    assert not replay["forwarded"] and replay["forward_state"] == "uncertain"
+    assert len(calls) == 1
 
 
 def test_legacy_forwarding_table_migrates_without_losing_sent_rows(monkeypatch, tmp_path):
@@ -318,6 +383,8 @@ def test_forward_includes_stable_event_id_and_consent_provenance(monkeypatch, tm
     assert sent[0]["name"] == "Website Visitor"
     assert sent[0]["event_id"] and len(sent[0]["event_id"]) == 64
     assert sent[0]["communications_consent"] == "true"
+    assert sent[0]["send_acknowledgment"] is False
+    assert sent[0]["source_event_id"] == "hero-submission-001"
     assert sent[0]["consent_source"] == "hero-email-optin"
     assert sent[0]["consent_recorded_at"] == "2026-10-12T14:10:00.000Z"
     replay_status, replay = _request(dict(lead))
@@ -338,6 +405,39 @@ def test_distinct_upstream_ids_same_email_and_timestamp_remain_separate(monkeypa
     assert a["lead_id"] != b["lead_id"]
     assert a["forwarded"] and b["forwarded"]
     assert len(set(sent)) == 2
+
+
+def test_same_upstream_id_changed_consent_fails_closed_without_extra_forward(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    forwarded = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: forwarded.append(dict(lead)) or True)
+    original = dict(_lead(), submission_id="intent-one", consent_marketing_email=False)
+    accepted_status, accepted = _request(original)
+    altered = dict(original, consent_marketing_email=True)
+    changed_status, changed = _request(altered)
+
+    assert accepted_status == 201 and accepted["accepted"]
+    assert changed_status == 422 and "Conflicting data" in changed["error"]
+    assert len(forwarded) == 1
+    with sqlite3.connect(intake._db_path()) as conn:
+        rows = conn.execute("SELECT source_payload_json FROM website_leads").fetchall()
+    assert len(rows) == 1
+    assert json.loads(rows[0][0])["consent_marketing_email"] is False
+
+
+def test_same_upstream_id_changed_contact_fails_closed_without_extra_forward(monkeypatch, tmp_path):
+    _config(monkeypatch, tmp_path)
+    forwarded = []
+    monkeypatch.setattr(intake, "_forward", lambda lead: forwarded.append(dict(lead)) or True)
+    original = dict(_lead(), source_event_id="intent-two")
+    accepted_status, accepted = _request(original)
+    changed_status, changed = _request(dict(original, name="Different Synthetic Name"))
+
+    assert accepted_status == 201 and accepted["accepted"]
+    assert changed_status == 422 and "Conflicting data" in changed["error"]
+    assert len(forwarded) == 1
+    with sqlite3.connect(intake._db_path()) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM website_leads").fetchone()[0] == 1
 
 
 def test_same_upstream_id_with_different_source_timestamps_is_a_replay(monkeypatch, tmp_path):

@@ -146,15 +146,59 @@ def _raw_submission_timestamp(payload: dict[str, Any]) -> object:
 
 
 def _source_event_id(payload: dict[str, Any]) -> str:
-    """Use an immutable upstream submission ID when supplied; never invent one."""
-    for source in _lead_field_sources(payload):
-        for key in ("event_id", "eventId", "submission_id", "submissionId"):
-            value = source.get(key)
-            if isinstance(value, (str, int)) and not isinstance(value, bool):
-                cleaned = _clean_text(value, max_length=160)
-                if cleaned:
-                    return cleaned
-    return ""
+    """Read one real upstream submission ID, not a generated forwarding key.
+
+    NIJA's forwarded canonical payload includes an internal 64-hex event_id
+    *and* source_event_id. They may differ: verify the internal marker against
+    the original source ID rather than mistaking it for conflicting consent.
+    """
+    sources = _lead_field_sources(payload)
+    original_keys = ("submission_id", "submissionId", "source_event_id", "sourceEventId")
+    transport_keys = ("event_id", "eventId")
+    originals: set[str] = set()
+    transport: set[str] = set()
+    source_marker_present = False
+    for source in sources:
+        for key in original_keys + transport_keys:
+            if key not in source:
+                continue
+            if key in ("source_event_id", "sourceEventId"):
+                source_marker_present = True
+            value = source[key]
+            if value is None or value == "":
+                continue
+            if isinstance(value, bool) or not isinstance(value, (str, int)):
+                raise ValueError("Upstream submission ID must be scalar")
+            if len(str(value).strip()) > 160:
+                raise ValueError("Upstream submission ID is too long")
+            cleaned = _clean_text(value, max_length=160)
+            if not cleaned:
+                continue
+            if key in original_keys:
+                originals.add(cleaned)
+            else:
+                transport.add(cleaned)
+    if len(originals) > 1 or len(transport) > 1:
+        raise ValueError("Conflicting upstream submission IDs")
+    original = next(iter(originals), "")
+    downstream_key = next(iter(transport), "")
+    if original:
+        if downstream_key and downstream_key != original:
+            email = normalize_email(_first_form_field(
+                sources, ("email", "email_address", "emailAddress", "Email", "Email Address")
+            ))
+            expected = hashlib.sha256(
+                f"submission-id|{email.casefold()}|{original}".encode("utf-8")
+            ).hexdigest() if email else ""
+            if downstream_key != expected:
+                raise ValueError("Conflicting upstream submission IDs")
+        return original
+    if source_marker_present and payload.get("send_acknowledgment") is False:
+        # An explicit empty source marker in an internal forwarding envelope
+        # means provenance is unknown. Never promote the delivery key to a
+        # fabricated original website submission ID.
+        return ""
+    return downstream_key
 
 
 def _stable_event_fallback(payload: dict[str, Any], serialized: str) -> str:
@@ -235,6 +279,7 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     )
     # Conflicting explicit consent in any recognized wrapper fails closed.
     marketing_keys = (
+        "consent_marketing_email",
         "marketing_consent", "marketingConsent",
         "communications_consent", "communicationsConsent",
     )
@@ -253,11 +298,29 @@ def normalize_lead_payload(payload: dict[str, Any]) -> dict[str, str]:
     # Source timestamps remain distinguishable from server receipt times.
     consent_timestamp = _parse_timestamp(raw_submitted_at) if communications_consent else None
 
+    def channel_consent(keys: tuple[str, ...]) -> str:
+        # A general form checkbox never grants SMS, AI-voice or program consent.
+        # Preserve explicit restrictions; conflicting aliases fail closed.
+        channel_values = [src[key] for src in sources for key in keys if key in src]
+        allowed = bool(channel_values) and all(
+            _clean_text(value, max_length=32).casefold() in affirmative
+            for value in channel_values
+        )
+        return "true" if allowed else "false"
+
     return {
         "form_name": form_name,
         "name": name,
         "email": email,
         "submitted_at": submitted_at,
+        # Keep source provenance separate from receive-time fallbacks and the
+        # legacy downstream event_id (which is a forwarding deduplication key).
+        "source_event_id": _source_event_id(payload),
+        "source_submitted_at": _parse_timestamp(raw_submitted_at) or "",
+        "consent_marketing_email": channel_consent(marketing_keys),
+        "consent_sms": channel_consent(("consent_sms", "sms_consent", "smsConsent")),
+        "consent_ai_voice": channel_consent(("consent_ai_voice", "ai_voice_consent", "aiVoiceConsent")),
+        "program_consent": channel_consent(("program_consent", "programConsent")),
         "phone": phone,
         "communications_consent": "true" if communications_consent else "false",
         "consent_source": form_name if communications_consent else "",
@@ -564,8 +627,29 @@ def record_lead(payload: dict[str, Any]) -> tuple[dict[str, str], str, bool]:
                 raw,
             ),
         )
-        connection.commit()
         duplicate = cursor.rowcount == 0
+        if duplicate and source_id:
+            # A stable submission ID identifies one immutable customer intent.
+            # Ignore a changed transport timestamp, but never silently accept
+            # modified contact/consent data under an already stored identity.
+            prior_row = connection.execute(
+                "SELECT source_payload_json FROM website_leads WHERE event_key=?",
+                (event_key,),
+            ).fetchone()
+            if prior_row is None:
+                raise ValueError("Existing submission identity could not be verified")
+            try:
+                prior = normalize_lead_payload(json.loads(prior_row["source_payload_json"]))
+            except (ValueError, TypeError, KeyError) as exc:
+                raise ValueError("Existing submission requires identity review") from exc
+            immutable_fields = (
+                "email", "name", "phone", "communications_consent",
+                "consent_marketing_email", "consent_sms",
+                "consent_ai_voice", "program_consent",
+            )
+            if any(prior.get(field) != canonical.get(field) for field in immutable_fields):
+                raise ValueError("Conflicting data for existing upstream submission ID")
+        connection.commit()
     return canonical, event_key, duplicate
 
 
@@ -628,8 +712,8 @@ def _forward_connect() -> sqlite3.Connection:
 def _claim_forward(event_key: str, *, legacy_event_key: str | None = None) -> str | None:
     """Claim a uniquely fenced lease; stale senders cannot finish a newer claim.
 
-    A provider can still receive a duplicate after a network-ambiguous failure;
-    the lease protects local state and confirmed outcomes, not exactly-once email.
+    An expired sender may already have reached the provider. Hold its outcome
+    for reconciliation rather than automatically sending again.
     """
     now = time.time()
     token = secrets.token_hex(16)
@@ -661,11 +745,16 @@ def _claim_forward(event_key: str, *, legacy_event_key: str | None = None) -> st
                 "VALUES (?, 'pending', 0)",
                 (event_key,),
             )
+            connection.execute(
+                """UPDATE website_lead_forwarding SET state='uncertain'
+                   WHERE event_key=? AND state='sending' AND lease_until <= ?""",
+                (event_key, now),
+            )
             claimed = connection.execute(
                 """UPDATE website_lead_forwarding
                    SET state='sending', lease_until=?, lease_token=?
                    WHERE event_key=?
-                     AND state IN ('pending', 'sending')
+                     AND state='pending'
                      AND lease_until <= ?""",
                 (now + _FORWARD_LOCK_LEASE_SECONDS, token, event_key, now),
             )
@@ -676,15 +765,16 @@ def _claim_forward(event_key: str, *, legacy_event_key: str | None = None) -> st
             raise
 
 
-def _finish_forward(event_key: str, *, claim_token: str, sent: bool) -> bool:
+def _finish_forward(event_key: str, *, claim_token: str, sent: bool, uncertain: bool = False) -> bool:
     """Only the current lease holder can record completion or retry state."""
-    retry_at = 0 if sent else time.time() + _FORWARD_RETRY_BACKOFF_SECONDS
+    next_state = 'uncertain' if uncertain else ('sent' if sent else 'pending')
+    retry_at = 0 if sent or uncertain else time.time() + _FORWARD_RETRY_BACKOFF_SECONDS
     with _DB_LOCK, _forward_connect() as connection:
         finished = connection.execute(
             """UPDATE website_lead_forwarding
                SET state=?, lease_until=?, lease_token=''
                WHERE event_key=? AND state='sending' AND lease_token=?""",
-            ("sent" if sent else "pending", retry_at, event_key, claim_token),
+            (next_state, retry_at, event_key, claim_token),
         )
         connection.commit()
         return finished.rowcount == 1
@@ -783,13 +873,45 @@ def _send_json(handler: Any, status_code: int, payload_obj: dict[str, Any]) -> N
         return
 
 
+def _validated_forward_url(url: str) -> str:
+    """Allow only NIJA's existing Zapier Catch Hook; never send customer PII elsewhere.
+
+    This destination is an operator-configured server secret, not a browser URL.
+    A malformed value fails closed before any provider request or lead replay.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        valid = (
+            url == url.strip()
+            and not any(ord(char) < 33 or ord(char) == 127 for char in url)
+            and parsed.scheme == "https"
+            and parsed.hostname == "hooks.zapier.com"
+            and parsed.port is None
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+            and re.fullmatch(r"/hooks/catch/[0-9]+/[A-Za-z0-9_-]+/?", parsed.path) is not None
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise OSError("Lead forward destination is not an approved Zapier Catch Hook")
+    return url
+
+
+class _NoLeadForwardRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirected POST can leak applicant data to an unapproved origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _forward(canonical: dict[str, str]) -> bool:
-    url = str(os.getenv("NIJA_LEAD_FORWARD_URL", "") or "").strip()
-    if not url:
+    raw_url = str(os.getenv("NIJA_LEAD_FORWARD_URL", "") or "")
+    if not raw_url.strip():
         return False
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        raise OSError("NIJA_LEAD_FORWARD_URL must be an HTTPS URL")
+    url = _validated_forward_url(raw_url)
 
     headers = {
         "Content-Type": "application/json",
@@ -806,7 +928,10 @@ def _forward(canonical: dict[str, str]) -> bool:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10.0) as response:
+        # urllib's default POST redirect handling can change methods and hosts.
+        # Refuse every redirect: a provider must acknowledge the exact hook URL.
+        opener = urllib.request.build_opener(_NoLeadForwardRedirect())
+        with opener.open(request, timeout=10.0) as response:
             status = int(response.status)
             response.read(4096)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -869,7 +994,9 @@ def handle_lead_intake_post(handler: Any) -> bool:
     except ValueError as exc:
         _send_json(handler, 422, {"error": str(exc)})
         return True
-    except OSError:
+    except (OSError, sqlite3.Error):
+        # SQLite can fail on locks, corruption, or schema operations. Fail closed
+        # without exposing driver details or attempting downstream delivery.
         _send_json(handler, 503, {"error": "Lead store unavailable"})
         return True
 
@@ -902,18 +1029,35 @@ def handle_lead_intake_post(handler: Any) -> bool:
         claim_token = None
         forward_error = True
     if claim_token:
+        uncertain = False
         try:
-            forwarded = _forward({**canonical, "event_id": forward_key})
+            forwarded = _forward({**canonical, "event_id": forward_key, "send_acknowledgment": False})
         except Exception as exc:
             # The canonical lead is already persisted; never expose webhook
             # URL, provider credentials, or payloads in error logs.
             forward_error = True
+            uncertain = True
             print(f"NIJA_LEAD_FORWARD_FAILED reason={type(exc).__name__}", flush=True)
         finally:
             try:
-                _finish_forward(forward_key, claim_token=claim_token, sent=forwarded)
+                if not _finish_forward(forward_key, claim_token=claim_token, sent=forwarded, uncertain=uncertain):
+                    forward_error = True
             except (OSError, sqlite3.Error):
                 forward_error = True
+
+    # Report durable state separately from HTTP/provider acceptance. Missing
+    # visibility is never represented as pending or successful delivery.
+    try:
+        with _DB_LOCK, _forward_connect() as connection:
+            row = connection.execute(
+                "SELECT state FROM website_lead_forwarding WHERE event_key=?", (forward_key,)
+            ).fetchone()
+            forward_state = row['state'] if row else 'not_claimed'
+    except (OSError, sqlite3.Error):
+        forward_state = 'unavailable'
+        forward_error = True
+    if forward_state == 'uncertain':
+        forward_error = True
 
     _send_json(
         handler,
@@ -926,6 +1070,7 @@ def handle_lead_intake_post(handler: Any) -> bool:
             "email_normalized": True,
             "forwarded": forwarded,
             "forward_error": forward_error,
+            "forward_state": forward_state,
             "crm_queued": crm_queued,
             "crm_queue_error": crm_error,
         },

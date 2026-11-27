@@ -1,0 +1,209 @@
+"""Assemble the existing collector against canonical objects; never discover trust.
+
+The protected final Python root supplies actual independently reviewed source
+objects and signed receipts. No broker/client, risk snapshot, inventory, receipt
+or approval is created here. Registration itself never authorizes an order.
+"""
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+import time
+from types import MappingProxyType
+from typing import Any
+
+from bot.kraken_reviewed_collector_bridge import compose_authenticated_kraken_collector_sources
+from bot.kraken_collector_composition_v487 import compose_reviewed_kraken_runtime_sources
+from bot.kraken_kill_switch_evidence import ReviewedKillSwitchBinding
+from bot.kraken_native_four_source_binding import (
+    ReviewedNativeFourSources, compose_reviewed_native_four_sources,
+)
+from bot.kraken_six_source_binding_contract_v490 import EXPECTED_OWNERS, validate_six_source_bindings
+from bot.kraken_startup_evidence_binding import RECEIPTS, ReviewedStartupBinding
+from bot.kraken_startup_receipts import StartupReceiptTrust, register_signed_kraken_startup
+
+
+class CanonicalKrakenStartupDenied(ValueError):
+    """Fixed non-sensitive denial; never expose source objects or exceptions."""
+
+
+@dataclass(frozen=True, eq=False)
+class ReviewedCanonicalKrakenSources:
+    """Exact live owners supplied by the separately reviewed protected root.
+
+    Resolver and review callbacks are trust boundaries. They must authenticate
+    the actual object/source binding, not return synthetic readiness or infer
+    review from these structural fields. Receipts are immutable signed JSON.
+    """
+
+    manager: Any = field(repr=False)
+    strategy: Any = field(repr=False)
+    broker: Any = field(repr=False)
+    independent_open_intents: Callable | None = field(repr=False)
+    independent_positions: Callable | None = field(repr=False)
+    independent_remaining: Mapping[str, Callable] = field(repr=False)
+    reviewed_source_owners: Mapping[str, str] = field(repr=False)
+    monitoring_category: Any = field(repr=False)
+    receipts: Mapping[str, str] = field(repr=False)
+    kill_switch_binding: ReviewedKillSwitchBinding | None = field(default=None, repr=False)
+    review_kill_switch_binding: Callable | None = field(default=None, repr=False)
+    native_four_sources: ReviewedNativeFourSources | None = field(default=None, repr=False)
+    review_native_four_sources: Callable | None = field(default=None, repr=False)
+
+    identity_method: str = "response_echo"
+    use_native_ledger_readers: bool = False
+
+    def __post_init__(self) -> None:
+        if self.identity_method not in {"response_echo", "native_signed_request_v1"}:
+            raise CanonicalKrakenStartupDenied("identity_method_invalid")
+        if type(self.use_native_ledger_readers) is not bool:
+            raise CanonicalKrakenStartupDenied("native_ledger_mode_invalid")
+        if self.use_native_ledger_readers:
+            # Explicitly select the reviewed native reconciliation reader for
+            # both consumers. Never discover a database or mix ledger owners.
+            if (type(self.native_four_sources) is not ReviewedNativeFourSources
+                    or not callable(self.review_native_four_sources)
+                    or self.independent_open_intents is not None
+                    or self.independent_positions is not None):
+                raise CanonicalKrakenStartupDenied("explicit_native_ledger_binding_required")
+        elif (not callable(self.independent_open_intents)
+              or not callable(self.independent_positions)):
+            raise CanonicalKrakenStartupDenied("complete_live_sources_and_receipts_required")
+        for name in ("independent_remaining", "reviewed_source_owners", "receipts"):
+            value = getattr(self, name)
+            if not isinstance(value, Mapping):
+                raise CanonicalKrakenStartupDenied("reviewed_source_maps_required")
+            object.__setattr__(self, name, MappingProxyType(dict(value)))
+        if (set(self.receipts) != RECEIPTS
+                or any(type(value) is not str or not value for value in self.receipts.values())
+                or self.monitoring_category is None):
+            raise CanonicalKrakenStartupDenied("complete_live_sources_and_receipts_required")
+
+
+def _canonical_broker(manager: Any) -> Any:
+    from bot.broker_manager import KrakenBroker
+    from bot.kraken_authenticated_account_identity_v478 import _broker_account_scope
+
+    brokers = getattr(manager, "platform_brokers", None)
+    if callable(brokers):
+        brokers = brokers()
+    if not isinstance(brokers, Mapping):
+        raise CanonicalKrakenStartupDenied("canonical_kraken_broker_required")
+    matches = [broker for key, broker in brokers.items() if getattr(key, "value", key) == "kraken"]
+    if (len(matches) != 1 or type(matches[0]) is not KrakenBroker
+            or getattr(matches[0], "connected", False) is not True
+            or not callable(getattr(matches[0], "_kraken_private_call", None))
+            or _broker_account_scope(matches[0]) != "platform:kraken"):
+        raise CanonicalKrakenStartupDenied("canonical_kraken_broker_required")
+    return matches[0]
+
+
+def make_canonical_kraken_startup_factory(
+    *, trust: StartupReceiptTrust, resolve_sources: Callable, review_sources: Callable,
+) -> Callable[..., ReviewedStartupBinding]:
+    """Build all thirteen providers using the exact manager/strategy broker.
+
+    The resolver receives canonical manager, strategy and broker objects only
+    when the existing bot_main hook invokes the factory. Built-in provider
+    construction performs no broker read. Resolution/review must themselves be
+    separately audited. Original source freshness and provenance checks remain
+    in the existing provider implementations and atomic installer.
+    """
+    if (type(trust) is not StartupReceiptTrust or not callable(resolve_sources)
+            or not callable(review_sources)):
+        raise CanonicalKrakenStartupDenied("reviewed_runtime_resolver_required")
+
+    def factory(*, manager: Any, strategy: Any) -> ReviewedStartupBinding:
+        try:
+            if manager is None or strategy is None:
+                raise CanonicalKrakenStartupDenied("canonical_runtime_objects_required")
+            broker = _canonical_broker(manager)
+            sources = resolve_sources(manager=manager, strategy=strategy, broker=broker)
+            if (type(sources) is not ReviewedCanonicalKrakenSources
+                    or sources.manager is not manager or sources.strategy is not strategy
+                    or sources.broker is not broker or review_sources(sources) is not True):
+                raise CanonicalKrakenStartupDenied("reviewed_runtime_source_binding_required")
+            remaining = sources.independent_remaining
+            open_intents = sources.independent_open_intents
+            positions = sources.independent_positions
+            if sources.native_four_sources is not None or sources.review_native_four_sources is not None:
+                if dict(sources.reviewed_source_owners) != EXPECTED_OWNERS:
+                    raise CanonicalKrakenStartupDenied("complete_reviewed_source_owners_required")
+                native_pair = (sources.kill_switch_binding is not None
+                               or sources.review_kill_switch_binding is not None)
+                residual = set() if native_pair else {"kill_switch_clear", "position_sync"}
+                if (set(remaining) != residual or any(not callable(p) for p in remaining.values())
+                        or len({id(p) for p in remaining.values()}) != len(residual)):
+                    raise CanonicalKrakenStartupDenied("mixed_native_and_external_sources_denied")
+                if sources.native_four_sources.ledger_binding.identity_method != sources.identity_method:
+                    raise CanonicalKrakenStartupDenied("ledger_identity_method_mismatch")
+                native = compose_reviewed_native_four_sources(
+                    sources=sources.native_four_sources, review_binding=sources.review_native_four_sources,
+                    manager=manager, strategy=strategy, broker=broker, trust=trust,
+                    monitoring_category=sources.monitoring_category,
+                )
+                remaining = {**remaining, **native}
+                if sources.use_native_ledger_readers:
+                    # This reader returns both independently persisted orders
+                    # and positions only after full reconciliation. Each call
+                    # rechecks actual owners and reads anew; no cached proof,
+                    # schema initialization or timestamp renewal is introduced.
+                    open_intents = positions = native["position_ledger_reconciliation"]
+            if sources.kill_switch_binding is not None or sources.review_kill_switch_binding is not None:
+                # Review still covers all six actual owners. Construct the
+                # existing native pair only from explicit reviewed bindings.
+                if dict(sources.reviewed_source_owners) != EXPECTED_OWNERS:
+                    raise CanonicalKrakenStartupDenied("complete_reviewed_source_owners_required")
+                remaining = compose_reviewed_kraken_runtime_sources(
+                    broker=broker, approved_api_key_sha256=trust.api_key_sha256,
+                    approved_iban_sha256=trust.account_iiban_sha256,
+                    reviewed_provider_ids=trust.reviewed_provider_ids,
+                    independent_positions=positions,
+                    independent_remaining=remaining,
+                    monitoring_category=sources.monitoring_category,
+                    kill_switch_binding=sources.kill_switch_binding,
+                    review_kill_switch_binding=sources.review_kill_switch_binding,
+                    independently_reviewed=True, identity_method=sources.identity_method,
+                )
+            remaining = validate_six_source_bindings(
+                remaining,
+                reviewed_source_owners=sources.reviewed_source_owners,
+                independently_reviewed=True,
+            )
+            providers = compose_authenticated_kraken_collector_sources(
+                broker=broker, approved_api_key_sha256=trust.api_key_sha256,
+                approved_iban_sha256=trust.account_iiban_sha256,
+                reviewed_provider_ids=trust.reviewed_provider_ids,
+                independent_open_intents=open_intents,
+                independent_positions=positions,
+                independent_remaining=remaining,
+                reviewed_source_owners=sources.reviewed_source_owners,
+                monitoring_category=sources.monitoring_category, independently_reviewed=True,
+                identity_method=sources.identity_method,
+            )
+            if review_sources(sources) is not True or _canonical_broker(manager) is not broker:
+                raise CanonicalKrakenStartupDenied("runtime_source_binding_changed")
+            return ReviewedStartupBinding(
+                manager, strategy, broker, providers, trust.reviewed_provider_ids, sources.receipts,
+            )
+        except Exception:
+            # A resolver/provider constructor can carry secrets in its error.
+            raise CanonicalKrakenStartupDenied("canonical_startup_source_binding_denied") from None
+
+    return factory
+
+
+def register_canonical_kraken_collector_startup(
+    *, trust: StartupReceiptTrust, resolve_sources: Callable, review_sources: Callable,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Explicit final-interpreter registration with the authenticated verifier.
+
+    Does not read sources, install the collector or enable orders. Call from the
+    approved protected composition root in the same interpreter as bot_main;
+    registration before the outer bootstrap's exec handoff cannot survive.
+    """
+    factory = make_canonical_kraken_startup_factory(
+        trust=trust, resolve_sources=resolve_sources, review_sources=review_sources,
+    )
+    register_signed_kraken_startup(factory, trust, clock=clock)

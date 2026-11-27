@@ -243,30 +243,30 @@ __all__ = [
     "ThrottleState",
     "get_capital_growth_throttle",
 ]
-"""
-NIJA Capital Growth Throttle
-
-Limits the velocity of capital deployment growth to prevent overexposure
-during rapid account growth periods.
-
-Key Features:
-1. Growth velocity tracking — measures rate of capital increase over rolling
-   short-term (7-day) and long-term (30-day) windows.
-2. Velocity-based throttling — reduces position-size scaling multiplier
-   automatically when capital grows too fast.
-3. Cooling period enforcement — keeps a mild throttle for a configurable
-   number of days after the immediate growth spike resolves.
-4. Singleton interface — ``get_capital_growth_throttle()`` returns the shared
-   instance so every subsystem sees the same state.
-
-This system ensures that rapid profits do not immediately lead to dramatically
-larger positions, guarding against overexposure right before potential market
-reversals.
-
-Author: NIJA Trading Systems
-Version: 1.0
-Date: March 2026
-"""
+# """
+# NIJA Capital Growth Throttle
+#
+# Limits the velocity of capital deployment growth to prevent overexposure
+# during rapid account growth periods.
+#
+# Key Features:
+# 1. Growth velocity tracking — measures rate of capital increase over rolling
+#    short-term (7-day) and long-term (30-day) windows.
+# 2. Velocity-based throttling — reduces position-size scaling multiplier
+#    automatically when capital grows too fast.
+# 3. Cooling period enforcement — keeps a mild throttle for a configurable
+#    number of days after the immediate growth spike resolves.
+# 4. Singleton interface — ``get_capital_growth_throttle()`` returns the shared
+#    instance so every subsystem sees the same state.
+#
+# This system ensures that rapid profits do not immediately lead to dramatically
+# larger positions, guarding against overexposure right before potential market
+# reversals.
+#
+# Author: NIJA Trading Systems
+# Version: 1.0
+# Date: March 2026
+# """
 
 import logging
 from collections import deque

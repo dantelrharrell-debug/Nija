@@ -1,5 +1,7 @@
 # Redis Connection Setup for NIJA on Railway
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 ## 🔴 CRITICAL: Redis Lock Stability Issue
 
 The distributed writer lock uses Redis to prevent multiple bot instances from trading simultaneously. **Production Railway configs must use a TLS public runtime URL (`rediss://...up.railway.app:6379/0`) for `NIJA_REDIS_URL`, plus explicit private/public fallback variables. Do not use the public Railway endpoint as plain `redis://`.**
@@ -49,13 +51,13 @@ Set these Railway environment variables for the NIJA service:
 REDIS_PASSWORD=your_redis_password_here
 
 # PRIMARY (internal/private)
-REDIS_PRIVATE_URL=redis://default:${REDIS_PASSWORD}@redis.railway.internal:6379/0
+REDIS_PRIVATE_URL=redis://<credentials>@redis.railway.internal:6379/0
 
 # FALLBACK (public TLS proxy)
-REDIS_PUBLIC_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0
+REDIS_PUBLIC_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0
 
 # PRIMARY runtime URL
-NIJA_REDIS_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0
+NIJA_REDIS_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0
 ```
 
 Remove these broken legacy variables if they are present:
@@ -279,18 +281,18 @@ NIJA checks for Redis URLs in this order:
 Recommended Railway production set:
 
 - `REDIS_PASSWORD`
-- `REDIS_PRIVATE_URL=redis://default:${REDIS_PASSWORD}@redis.railway.internal:6379/0`
-- `REDIS_PUBLIC_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
-- `NIJA_REDIS_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
+- `REDIS_PRIVATE_URL=redis://<credentials>@redis.railway.internal:6379/0`
+- `REDIS_PUBLIC_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0`
+- `NIJA_REDIS_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0`
 
 ## 🔧 Advanced: Manual URL Construction
 
 If you must construct the URLs manually, use this Railway production layout:
 
 ```bash
-REDIS_PRIVATE_URL=redis://default:YourPasswordHere@redis.railway.internal:6379/0
-REDIS_PUBLIC_URL=rediss://default:YourPasswordHere@redis-production-e747.up.railway.app:6379/0
-NIJA_REDIS_URL=rediss://default:YourPasswordHere@redis-production-e747.up.railway.app:6379/0
+REDIS_PRIVATE_URL=redis://<credentials>@redis.railway.internal:6379/0
+REDIS_PUBLIC_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0
+NIJA_REDIS_URL=rediss://<credentials>@redis-production-e747.up.railway.app:6379/0
 ```
 
 ## 📚 References

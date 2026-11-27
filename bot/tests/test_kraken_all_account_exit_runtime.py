@@ -377,4 +377,3 @@ def test_legacy_connection_wrapper_does_not_disconnect_connected_unproven_user()
     assert module._connect(broker, "user:daivon_frazier:kraken") is False
     assert calls == []
     assert broker.connected is True
-

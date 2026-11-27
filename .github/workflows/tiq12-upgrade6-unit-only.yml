@@ -1,0 +1,38 @@
+name: TIQ12 Upgrade 6 isolated unit checks (no deployment)
+
+on:
+  pull_request:
+    paths:
+      - "web/trading-challenge/server/tiq12-upgrade6-*.mjs"
+      - "web/trading-challenge/tests/tiq12-upgrade6-*.test.mjs"
+      - ".github/workflows/tiq12-upgrade6-unit-only.yml"
+  push:
+    branches:
+      - "fix/tiq12-upgrade6-*"
+    paths:
+      - "web/trading-challenge/server/tiq12-upgrade6-*.mjs"
+      - "web/trading-challenge/tests/tiq12-upgrade6-*.test.mjs"
+      - ".github/workflows/tiq12-upgrade6-unit-only.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-unit-only:
+    name: Synthetic tests only; NOT source / payment certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run isolated Upgrade 6 regression suite
+        working-directory: web/trading-challenge
+        run: node --test tests/tiq12-upgrade6-*.test.mjs
+      - name: Run existing private TIQ12 validation suite
+        working-directory: web/trading-challenge
+        run: node --test tests/tiq12-contract.test.mjs
+      - name: Run existing SQLite integrity suite
+        run: python3 -m unittest discover -s web/trading-challenge/tests -p test_tiq12_storage.py

@@ -50,6 +50,7 @@ _MAX_AGE_S = 60.0
 FAILURE_REASONS = frozenset({
     "certificate_context_unverified", "observation_missing", "account_scope_mismatch",
     "observation_not_verified", "read_only_unverified", "scope_unverified",
+    "provider_claims_order_authority",
     "source_mismatch", "provider_identity_mismatch", "evidence_identity_missing",
     "provenance_missing", "account_provenance_unverified", "collector_identity_unverified",
     "snapshot_incomplete", "source_proof_unverified", "pagination_incomplete",
@@ -177,6 +178,7 @@ def evaluate_pretrade_certificate(
             (row.get("account") == account, "account_scope_mismatch"),
             (row.get("verified") is True, "observation_not_verified"),
             (row.get("read_only") is True, "read_only_unverified"),
+            (row.get("authorizes_orders", False) is False, "provider_claims_order_authority"),
             (row.get("scope_verified") is True, "scope_unverified"),
             (row.get("source") == source, "source_mismatch"),
             (row.get("provider_id") == trusted_provider_ids[field], "provider_identity_mismatch"),

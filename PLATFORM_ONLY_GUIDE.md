@@ -38,9 +38,7 @@ Edit `.env` and add your exchange API credentials:
 **For Coinbase:**
 ```bash
 COINBASE_API_KEY=organizations/your-org-id/apiKeys/your-api-key-id
-COINBASE_API_SECRET="-----BEGIN EC PRIVATE KEY-----
-YOUR_PRIVATE_KEY_HERE
------END EC PRIVATE KEY-----"
+# Set COINBASE_API_SECRET privately to the complete downloaded PEM value.
 ```
 
 **For Kraken:**

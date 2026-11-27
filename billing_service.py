@@ -7,6 +7,7 @@ record.
 """
 from __future__ import annotations
 
+import click
 import logging
 import os
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from course_fulfillment import expected_course_identity, handle_course_event, re
 from course_portal import on_course_payment, register_course_portal
 from founding_onboarding_api import register_onboarding_routes
 from member_broker_availability import member_broker_setup_available
+from verified_payment_receipts import ReceiptOutbox, process_batch_from_env, verified_invoice_from_stripe
 from pricing_policy import (
     BETA_TRIAL_DAYS,
     FOUNDING_BETA_OFFER,
@@ -53,6 +55,16 @@ _STRIPE_WEBHOOK_EVENTS = frozenset({
     "invoice.paid",
     "invoice.payment_succeeded",
     "invoice.payment_failed",
+    "charge.refunded",
+    "charge.dispute.created",
+})
+
+
+_COURSE_SANDBOX_WEBHOOK_EVENTS = frozenset({
+    "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed",
+    "checkout.session.expired",
     "charge.refunded",
     "charge.dispute.created",
 })
@@ -114,11 +126,22 @@ def _normalized_email(value: Any) -> str:
 
 
 def _stripe_module():
-    import stripe
-
     secret = os.getenv("STRIPE_SECRET_KEY", "").strip()
     if not secret:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured")
+    service_id = os.getenv("RENDER_SERVICE_ID", "").strip()
+    course_sandbox = os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+    staging_service = service_id == "srv-dasmtjfpn0mc73948r10"
+    course_sandbox_service = service_id == "srv-dbc4oe5g1s2s73925fb0"
+    if (staging_service or course_sandbox_service or course_sandbox) and not secret.startswith(
+            ("rk_test_", "sk_test_")):
+        # Never send live, publishable, or unknown keys to Stripe from an
+        # isolated billing or course test environment. Fail before import.
+        reason = ("course_sandbox_requires_stripe_test_key" if course_sandbox_service or course_sandbox
+                  else "billing_staging_requires_stripe_test_key")
+        raise RuntimeError(reason)
+    import stripe
+
     stripe.api_key = secret
     return stripe
 
@@ -433,8 +456,27 @@ def _process_checkout_event(stripe: Any, event_type: str, event_obj: Any) -> Non
     )
 
 
+def _invoice_subscription_id(invoice: Any) -> Optional[str]:
+    """Resolve verified Stripe invoice subscription ID across API generations.
+
+    Legacy invoices have a top-level subscription; current Stripe invoices
+    carry it under parent.subscription_details.subscription. Only accept the
+    explicitly subscription-typed parent, not arbitrary invoice metadata.
+    """
+    direct = _id_value(_obj_value(invoice, "subscription"))
+    if direct:
+        return direct if direct.startswith("sub_") else None
+
+    parent = _obj_value(invoice, "parent")
+    if _obj_value(parent, "type") != "subscription_details":
+        return None
+    details = _obj_value(parent, "subscription_details")
+    nested = _id_value(_obj_value(details, "subscription"))
+    return nested if nested and nested.startswith("sub_") else None
+
+
 def _process_invoice_failure(event_obj: Any, event_created: int) -> None:
-    subscription_id = _id_value(_obj_value(event_obj, "subscription"))
+    subscription_id = _invoice_subscription_id(event_obj)
     customer_id = _id_value(_obj_value(event_obj, "customer"))
     user_id = (
         _store().find_user_by_subscription(subscription_id or "")
@@ -459,7 +501,7 @@ def _process_invoice_failure(event_obj: Any, event_created: int) -> None:
 
 
 def _process_invoice_paid(stripe: Any, event_obj: Any, event_created: int) -> None:
-    subscription_id = _id_value(_obj_value(event_obj, "subscription"))
+    subscription_id = _invoice_subscription_id(event_obj)
     if not subscription_id:
         return
     subscription = stripe.Subscription.retrieve(
@@ -535,6 +577,12 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     app.config["BILLING_STORE"] = store or BillingServiceStore(
         os.getenv("BILLING_DATABASE_URL", "").strip()
     )
+    # Opt-in only: installer creates no new production tables by default.
+    if os.getenv("NIJA_VERIFIED_PAYMENT_OUTBOX_ENABLED", "false") == "true":
+        app.config["VERIFIED_PAYMENT_OUTBOX"] = ReceiptOutbox(app.config["BILLING_STORE"].engine)
+
+    from resend_delivery import register_delivery_routes
+    register_delivery_routes(app, app.config["BILLING_STORE"].engine)
 
     allowed_origins = [
         origin.strip()
@@ -581,17 +629,44 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
             if not public_url.startswith("https://"):
                 raise RuntimeError("NIJA_BILLING_PUBLIC_URL is not a production HTTPS origin")
 
-            stripe = _stripe_module()
-            offer = _offer_config(FOUNDING_BETA_OFFER)
-            price = stripe.Price.retrieve(offer.price_id, expand=["product"])
-            if _id_value(price) != offer.price_id:
-                raise RuntimeError("Stripe founding Price identity mismatch")
-            if not bool(_obj_value(price, "active", False)):
-                raise RuntimeError("Stripe founding Price is inactive")
-            if str(_obj_value(price, "type", "")).lower() != "recurring":
-                raise RuntimeError("Stripe founding Price is not recurring")
-            if _id_value(_obj_value(price, "product")) != offer.product_id:
-                raise RuntimeError("Stripe founding Price/Product mismatch")
+            sandbox = os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+            if sandbox:
+                # The separate course sandbox deliberately ignores subscription events.
+                # Do not make its readiness depend on Founding 100 membership settings.
+                expected = expected_course_identity()
+                course_url = os.getenv("NIJA_COURSE_PUBLIC_URL", "").strip().rstrip("/")
+                if expected is None or expected[3] is not False or public_url != course_url:
+                    raise RuntimeError("Course sandbox identity and storage isolation not verified")
+                link_id, price_id, product_id, _expected_live = expected
+                stripe = _stripe_module()
+                price = stripe.Price.retrieve(price_id, expand=["product"])
+                if (not _id_value(price) == price_id
+                        or _obj_value(price, "livemode") is not False
+                        or not bool(_obj_value(price, "active", False))
+                        or str(_obj_value(price, "type", "")).lower() != "one_time"
+                        or _id_value(_obj_value(price, "product")) != product_id
+                        or _obj_value(price, "unit_amount") != 9900
+                        or str(_obj_value(price, "currency", "")).lower() != "usd"):
+                    raise RuntimeError("Course sandbox Stripe Price identity mismatch")
+                link = stripe.PaymentLink.retrieve(link_id)
+                if (_id_value(link) != link_id or _obj_value(link, "livemode") is not False
+                        or not bool(_obj_value(link, "active", False))):
+                    raise RuntimeError("Course sandbox Stripe Payment Link identity mismatch")
+                required_webhook_events = _COURSE_SANDBOX_WEBHOOK_EVENTS
+            else:
+                # Production subscription readiness remains unchanged.
+                stripe = _stripe_module()
+                offer = _offer_config(FOUNDING_BETA_OFFER)
+                price = stripe.Price.retrieve(offer.price_id, expand=["product"])
+                if _id_value(price) != offer.price_id:
+                    raise RuntimeError("Stripe founding Price identity mismatch")
+                if not bool(_obj_value(price, "active", False)):
+                    raise RuntimeError("Stripe founding Price is inactive")
+                if str(_obj_value(price, "type", "")).lower() != "recurring":
+                    raise RuntimeError("Stripe founding Price is not recurring")
+                if _id_value(_obj_value(price, "product")) != offer.product_id:
+                    raise RuntimeError("Stripe founding Price/Product mismatch")
+                required_webhook_events = _STRIPE_WEBHOOK_EVENTS
 
             expected_webhook_url = f"{public_url}/api/billing/webhook"
             endpoints = stripe.WebhookEndpoint.list(limit=100)
@@ -607,7 +682,7 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
                 raise RuntimeError("Authoritative Stripe webhook endpoint is missing or disabled")
 
             enabled_events = set(_obj_value(matching_endpoint, "enabled_events", []) or [])
-            if not _STRIPE_WEBHOOK_EVENTS.issubset(enabled_events):
+            if not required_webhook_events.issubset(enabled_events):
                 raise RuntimeError("Authoritative Stripe webhook event set is incomplete")
         except Exception:
             logger.exception("Billing readiness check failed")
@@ -914,6 +989,13 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
 
         try:
             _process_event(stripe, event_type, event_obj, event_created)
+            # This is invoked ONLY after Stripe-Signature verification and
+            # membership reconciliation; never trigger from browser input.
+            receipt_outbox = current_app.config.get("VERIFIED_PAYMENT_OUTBOX")
+            if receipt_outbox is not None and event_type in {"invoice.paid", "invoice.payment_succeeded"}:
+                verified_receipt = verified_invoice_from_stripe(stripe, _store(), event_obj)
+                if verified_receipt is not None:
+                    receipt_outbox.enqueue(verified_receipt)
             handle_course_event(stripe, current_app.config["COURSE_LEDGER"], event_type, event_obj)
             if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
                 # Only the verified course ledger can queue this customer-facing delivery.
@@ -935,6 +1017,18 @@ def create_app(store: Optional[BillingServiceStore] = None) -> Flask:
     from nija_game_billing import register_game_routes
     register_game_routes(app)
     register_onboarding_routes(app, app.config["BILLING_STORE"])
+
+    @app.cli.command("verified-payment-receipt-worker")
+    def verified_payment_receipt_worker():
+        """Send an approved bounded batch; never re-drive uncertain sends."""
+        receipt_outbox = app.config.get("VERIFIED_PAYMENT_OUTBOX")
+        if receipt_outbox is None:
+            raise click.ClickException("verified_payment_outbox_disabled")
+        try:
+            outcome = process_batch_from_env(receipt_outbox)
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"accepted={outcome['accepted']} uncertain={outcome['uncertain']}")
 
     # Restricted, GET-only revenue reporting; no changes to Checkout or Stripe webhooks.
     # Unprovisioned report keys/evidence fail closed with HTTP 503.

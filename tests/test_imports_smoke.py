@@ -3,7 +3,7 @@ Import Smoke Test
 =================
 
 Verifies that all new NIJA modules can be imported without errors.
-Run with: pytest tests/imports_smoke_test.py
+Run with: pytest tests/test_imports_smoke.py
 
 These tests are intentionally lightweight — they only check that Python
 can parse and load each module without raising ImportError or SyntaxError.

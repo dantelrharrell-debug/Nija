@@ -25,7 +25,11 @@ def _broker_read(endpoint, params):
         "closed": {"CLOSE-1": {"status": "closed", "vol_exec": "0.01", "fee": "0.05"}},
         "ledger": {"ledger-1": {"refid": "trade-1", "type": "trade"}},
     }
-    assert params == {"ofs": 0}
+    assert params == {
+        "TradesHistory": {"ofs": 0, "consolidate_taker": False},
+        "ClosedOrders": {"ofs": 0, "trades": True, "consolidate_taker": False},
+        "Ledgers": {"ofs": 0},
+    }[endpoint]
     return {"error": [], "result": {"count": 1, field: rows[field]}}
 
 

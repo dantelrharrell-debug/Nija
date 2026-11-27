@@ -15,7 +15,6 @@ Date: January 27, 2026
 import logging
 import os
 import json
-import pickle
 from typing import Optional, Any, Dict, List, Tuple
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -284,7 +283,7 @@ def cache_set(key: str, value: Any, ttl: Optional[int] = None,
 
     Args:
         key: Cache key
-        value: Value to cache (will be JSON-encoded)
+        value: JSON-compatible value to cache; arbitrary Python objects are rejected
         ttl: Time to live in seconds (None = no expiration)
         namespace: Key namespace prefix
 
@@ -295,14 +294,11 @@ def cache_set(key: str, value: Any, ttl: Optional[int] = None,
         client = get_redis_client()
         full_key = f"{namespace}{key}"
 
-        # Serialize value
-        if isinstance(value, (dict, list)):
-            serialized = json.dumps(value)
-        elif isinstance(value, (int, float, str, bool)):
-            serialized = str(value)
-        else:
-            # Use pickle for complex objects
-            serialized = pickle.dumps(value)
+        # Redis data is not trusted executable state. Cache only JSON values;
+        # never serialize Python objects that require code to reconstruct them.
+        if value is not None and not isinstance(value, (dict, list, int, float, str, bool)):
+            raise TypeError("Cache values must be JSON-compatible")
+        serialized = json.dumps(value, allow_nan=False)
 
         if ttl:
             client.setex(full_key, ttl, serialized)
@@ -337,16 +333,16 @@ def cache_get(key: str, namespace: str = "", default: Any = None) -> Any:
         if value is None:
             return default
 
-        # Try to deserialize
+        # Legacy scalar entries were stored as plain UTF-8 strings. Retain
+        # that read compatibility, but never interpret binary Python objects.
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        if not isinstance(value, str):
+            return default
         try:
             return json.loads(value)
-        except (json.JSONDecodeError, TypeError):
-            # Try pickle
-            try:
-                return pickle.loads(value)
-            except (pickle.UnpicklingError, TypeError, ValueError):
-                # Return as string
-                return value.decode('utf-8') if isinstance(value, bytes) else value
+        except json.JSONDecodeError:
+            return value
 
     except Exception as e:
         logger.error(f"Cache get failed for key {key}: {e}")
@@ -529,10 +525,11 @@ def get_cached_market_data(pair: str, timeframe: str) -> Optional[Dict[str, Any]
         timeframe: Timeframe
 
     Returns:
-        Market data dictionary or None
+        Market data dictionary or None for a miss or invalid cached shape
     """
     key = f"{pair}:{timeframe}"
-    return cache_get(key, namespace=CacheNamespace.MARKET_DATA)
+    value = cache_get(key, namespace=CacheNamespace.MARKET_DATA)
+    return value if isinstance(value, dict) else None
 
 
 # User session caching
@@ -562,9 +559,10 @@ def get_cached_user_session(user_id: str) -> Optional[Dict[str, Any]]:
         user_id: User identifier
 
     Returns:
-        Session data or None
+        Session data dictionary or None for a miss or invalid cached shape
     """
-    return cache_get(user_id, namespace=CacheNamespace.USER_SESSION)
+    value = cache_get(user_id, namespace=CacheNamespace.USER_SESSION)
+    return value if isinstance(value, dict) else None
 
 
 def invalidate_user_session(user_id: str) -> bool:
@@ -607,9 +605,10 @@ def get_cached_user_permissions(user_id: str) -> Optional[Dict[str, Any]]:
         user_id: User identifier
 
     Returns:
-        Permissions dictionary or None
+        Permissions dictionary or None for a miss or invalid cached shape
     """
-    return cache_get(user_id, namespace=CacheNamespace.USER_PERMISSIONS)
+    value = cache_get(user_id, namespace=CacheNamespace.USER_PERMISSIONS)
+    return value if isinstance(value, dict) else None
 
 
 def invalidate_user_permissions(user_id: str) -> bool:

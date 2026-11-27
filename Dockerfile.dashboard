@@ -1,23 +1,38 @@
 # Dockerfile for NIJA Founder Dashboard
-# CI may override this registry without changing the production base image.
-ARG PYTHON_BASE=python:3.11-slim
+# Security review candidate: OCI base digest resolved by all four 2026-11-15 CI builds; NOT release approved.
+ARG PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+FROM ${PYTHON_BASE} AS deps-builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+
 FROM ${PYTHON_BASE}
 
+# Patch the base Python environment as well as the application virtualenv.
+# Fail the build if either vulnerable vendored distribution is still present.
+RUN /usr/local/bin/python -m pip install --no-cache-dir --disable-pip-version-check "setuptools==84.1.0" \
+    && /usr/local/bin/python -c "import importlib.metadata as m; assert m.version('setuptools') == '84.1.0'" \
+    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/METADATA \
+    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA
+ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    --no-install-recommends \
-    gcc \
-    postgresql-client \
-  redis-tools \
+# The Python base includes an older global setuptools vendoring
+# jaraco.context 5.3.0 (CVE-2026-23949). The app virtualenv does not
+# replace base-global metadata. Upgrade only the runtime packaging library
+# to the same audited setuptools pin already in requirements.txt.
+RUN /usr/local/bin/python -m pip install --no-cache-dir --disable-pip-version-check "setuptools==84.1.0" \
+    && /usr/local/bin/python -c "import importlib.metadata as m; assert m.version('setuptools') == '84.1.0'" \
+    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/METADATA \
+    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA
+# Dashboard uses the Python PostgreSQL driver, not psql/pg_dump.
+# Keep libpq while excluding the optional client wrapper and its full Perl stack.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends libpq5 \
+    && ! dpkg-query -W -f='${binary:Package} ${db:Status-Status}\n' perl libperl5.40 2>/dev/null \
+       | grep -Eq '^(perl|libperl5[.]40)(:[a-z0-9-]+)? installed$' \
     && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=deps-builder /opt/venv /opt/venv
+RUN /opt/venv/bin/python -I -c "import psycopg2"
 
 # Copy application code
 COPY . .
@@ -39,7 +54,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:5001/api/health', timeout=3)" || exit 1
+  CMD ["python", "-I", "-S", "-c", "import http.client; c = http.client.HTTPConnection('localhost', 5001, timeout=3); c.request('GET', '/api/health'); r = c.getresponse(); c.close(); raise SystemExit(r.status != 200)"]
 
 # Run dashboard
 USER dashboard

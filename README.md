@@ -1,5 +1,153 @@
 # NIJA AI Trading LLC — Trading Platform Architecture & Recovery Guide
 
+## Kraken recovery follow-up — November 22, 2026 (repository documentation)
+
+**New review references:** [PR #4094](https://github.com/dantelrharrell-debug/Nija/pull/4094) addresses history-recovery source pins; [PR #4096](https://github.com/dantelrharrell-debug/Nija/pull/4096) addresses durable submission intent; [PR #4099](https://github.com/dantelrharrell-debug/Nija/pull/4099) and [PR #4100](https://github.com/dantelrharrell-debug/Nija/pull/4100) address deployed snapshot-tool verification and atomic journal installation. [PR #4101](https://github.com/dantelrharrell-debug/Nija/pull/4101) is a release synchronization reference. **Verify each PR's merge status, exact SHA, and CI results before treating its changes as integrated.** These references do not prove that the recovery tool or journals are installed in production.
+
+**Operator verification sequence:** (1) compare exact protected-release and deployed-image SHAs; (2) check the history-recovery source pins and exact-file digests; (3) verify deployed snapshot-tool provenance and atomic, durable journal installation without overwriting valid records; (4) reconcile Kraken balances, history, fills, open orders, exits, positions, fees, nonce ownership and submission-intent deduplication; (5) authenticate protected startup registration in the final interpreter and 13/13 fresh pretrade observations; (6) confirm exact-image security/artifact gates, alerting and rollback. Record evidence in [issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890), with timestamps and redacted account-scoped identifiers.
+
+**Current certification:** not established by this documentation. Preserve `allow_new_orders=false`, kill-switch and fail-closed behavior. No second Kraken client or nonce writer; no fabricated receipts or approvals. A separate explicit bounded go-live authorization is required after production evidence passes.
+
+---
+
+## Kraken operational checkpoint — November 22, 2026 (documentation only)
+
+**Certification status: UNVERIFIED; do not infer live-order authorization.** Recent reported GitHub work includes [PR #4090](https://github.com/dantelrharrell-debug/Nija/pull/4090) (bounded historical Kraken reads), [PR #4092](https://github.com/dantelrharrell-debug/Nija/pull/4092) (release-to-main integration), and the durable-intent review commit `1f11160eb06623a4388ccaba523dc1a509900d91`. These references describe source-level progress, **not** authenticated proof of the current Render runtime or successful live-trading certification. Check current PR/merge status, deployed SHA and immutable image before marking any item complete.
+
+**Next required evidence:** follow [production issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890) for exact-release source-integrity assertions and any changed recovery-file hashes; verify all mandatory security and artifact checks on the deployment artifact; inspect Render service `srv-d98dsr5aeets73fpbaqg` and protected startup files; demonstrate final-interpreter collector installation and 13/13 fresh account-scoped pretrade observations; independently reconcile Kraken history, positions, orders, fills, protective exits and durable intent/nonce/Redis fences; verify operator authority, kill switch, risk publisher, monitoring and rollback.
+
+**Order-admission rule:** retain `allow_new_orders=false` and fail-closed controls until all required gates have independently verifiable production evidence and a distinct, bounded owner authorization is recorded. A README update, merged PR, successful offline test or reported deployment cannot activate trading.
+
+---
+
+## Operational readiness checkpoint — November 20, 2026 (documentation review)
+
+**Verdict: NOT CERTIFIED FOR LIVE TRADING.** This checkpoint documents repository and issue evidence, **not a fresh authenticated Render inspection**. The most recent production observations verified in [issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890) are dated November 15, 2026: deployed startup reported `protected_startup_artifacts_missing`, `collector_installed=false`, `producer_status=collector_missing`, and **13/13 required pretrade observations missing**. A later successful build, merge, or service health check does not by itself supersede those runtime findings.
+
+### Kraken activation procedure
+
+1. **Inspect current production read-only:** capture service `srv-d98dsr5aeets73fpbaqg` deployed commit/image digest, final Python interpreter, Secret Files inventory, startup logs and order-admission status.
+2. **Certify authentic source owners:** reconcile real Kraken history, balances, open orders, fills, pending closes, fees, positions and protective exits; verify the full durable Redis duplicate-order inventory, operator authority, kill switch, risk publication, writer/nonce ownership and position sync. Never create a second Kraken client or nonce writer.
+3. **Review private protected startup artifacts:** follow [issue #3890](https://github.com/dantelrharrell-debug/Nija/issues/3890) and its [provisioning runbook](docs/kraken-3890-production-provisioning-handoff.md). Independently verify source bindings and role-signed receipts before approval and private provisioning of `/etc/secrets/.render-kraken-startup-root.py` and `/etc/secrets/.render-kraken-startup-binding.json`. Preserve startup command `python -S /etc/secrets/.render-ledger-bootstrap.py`. Never commit private bindings, signed receipts, or keys.
+4. **Clear mandatory exact-release security gates:** investigate failed Security Scanning, Artifact Scanning, pre-commit, dependency and image checks without weakening protections. [PR #4062](https://github.com/dantelrharrell-debug/Nija/pull/4062) and [PR #4063](https://github.com/dantelrharrell-debug/Nija/pull/4063) are proposed corrections, not proof of deployed fixes.
+5. **Require exact-artifact and deployment authorization:** independently approve source/manifest hashes, release/image, and the Render provisioning/deployment operation. [Draft PR #4066](https://github.com/dantelrharrell-debug/Nija/pull/4066) is a read-only verifier, **not an installation**.
+6. **Verify production after authorized deployment:** require `protected_startup_factory_registered` **and** `collector_installed=true` in the final interpreter and **13/13 current authenticated account-scoped observations**, plus ledger/exits/risk/nonce controls, monitoring and rollback. Registration alone is insufficient. Any live order requires separate, explicit, bounded go-live authorization.
+
+### Independent product acceptance
+
+- **Trading IQ $1 TEST:** [PR #4061](https://github.com/dantelrharrell-debug/Nija/pull/4061) merged a TEST-offer selection correction, but source changes alone do not certify the isolated Render deployment, attached TEST credentials, webhook, entitlement, fulfillment, or live-payment readiness.
+- **Course commerce:** verify actual checkout, idempotent webhook, paid entitlement, delivery, failure and refund paths before claiming production certification.
+- **IONOS and Zapier leads:** distinguish server-persisted submissions, consent, downstream dispatch acknowledgment and real inbox receipt. A spreadsheet plan is not proof of connected live workflows.
+
+**Fail-closed invariant:** keep `allow_new_orders=false`, kill-switch and existing safeguards enabled until independently verified certification and a separate live-trading decision. Record timestamps, environment and evidence for every gate; unknown is **unverified**, not passed. README documentation does not deploy services, install the collector, provision secrets, turn on payments, or place trades.
+
+---
+
+## Production recovery checkpoint — November 13, 2026 (repository-verified)
+
+**Status: live trading is not independently certified by this documentation update.** GitHub merge evidence shows recovery code has advanced since the November 12 authenticated inspection below. A merged pull request, completed deployment, or successful unit test is **not** sufficient to establish a collector installed in the final production interpreter, all account-scoped observations passing, or authorization to place real-money orders. The November 12 runtime observations below remain a historical baseline, not a claim about the current runtime.
+
+### Changes confirmed in GitHub
+
+- [PR #3859](https://github.com/dantelrharrell-debug/Nija/pull/3859), **merged November 13**: explicit Kraken identity-method wiring across the account, permission and ledger evidence-reader chain. Production readback of the correct account and credential, including identity/scope validation, still requires fresh authenticated evidence.
+- [PR #3860](https://github.com/dantelrharrell-debug/Nija/pull/3860), **merged November 13**: preserve private Kraken history responses across interrupted recovery. This improves recovery tooling; it does **not** prove all historical opening trades, financing, transfers, fees, holdings or protective orders have been collected and reconciled.
+- [PR #3861](https://github.com/dantelrharrell-debug/Nija/pull/3861), **merged November 13**: release-branch integration was recorded in the repository. Do not infer production-image alignment from the merge alone.
+
+### Production acceptance gates still needing fresh evidence
+
+1. **Identity and collector:** Verify current Render deployment commit and immutable image digest; confirm the reviewed identity method against Kraken's real account/permission responses; prove collector factory registration in the final Python interpreter and all **13/13 fresh, correctly scoped observations**.
+2. **Ledger and protective exits:** Privately recover source-backed opening trades, all 13 orders and 18 fills as applicable to the recovery case, financing, transfers, balances, positions, fees, and protective orders. Verify every linkage and independently restore-test a backup **before** any audited ledger correction. The order/fill counts are investigation scope, not reconciliation certification.
+3. **Live risk publisher:** Demonstrate genuine, account-scoped current capital, spot/margin exposure, pending obligations and approved limits; prove freshness, atomicity, and fail-closed behavior when any field is missing.
+4. **Release security:** Resolve remaining secret/pre-commit, dependency/package, and container/artifact findings; require passing mandatory checks on the **exact deployment commit and image**, without bypasses.
+5. **Protected startup:** Independently review and sign genuine receipts, privately provision both fixed-path protected startup files, verify trust roots and immutable-image binding, then authenticate fresh producer and admission evidence after an explicitly approved release deployment.
+6. **Trading authorization:** Keep `allow_new_orders=false`, kill-switch and nonce/writer/duplicate protections in force until complete certification and a distinct affirmative owner go-live decision. Never use synthetic fills, fabricated signatures or stale health signals as proof.
+
+**Operational references:** [recovery issue #3800](https://github.com/dantelrharrell-debug/Nija/issues/3800) · [Render service](https://dashboard.render.com/web/srv-d98dsr5aeets73fpbaqg) · [protected release](https://github.com/dantelrharrell-debug/Nija/tree/release/justcall-handoff-only-20261017). Keep credentials, customer records, signed receipts, and sensitive account data in approved private storage, not this public README.
+
+**Scope:** Documentation only. This change does not deploy software, provision protected files, change risk controls, repair a ledger, submit an order, or authorize trading.
+
+---
+
+
+## Kraken production activation — November 12, 2026 (authenticated read-only inspection)
+
+**Live trading: BLOCKED — NOT AUTHORIZED.** The November 12 authenticated production inspection (21:08–21:16 UTC) established that the **current Render runtime does not have the Kraken evidence collector installed**. This is a dated baseline, not a continuously monitored current-state assertion. Keep `allow_new_orders=false`, fail-closed admission, strict Redis writer/nonce ownership, kill-switch safeguards, and auto-deploy disabled. This README update is documentation only: no merge, deployment, credential change, protected-file change, order submission or trading authorization.
+
+**Execution home:** Render [service `srv-d98dsr5aeets73fpbaqg`](https://dashboard.render.com/web/srv-d98dsr5aeets73fpbaqg), workspace `tea-d37fhe8gjchc73c8eo0g`; protected release `release/justcall-handoff-only-20261017`. At inspection the live deployment was `dep-dbqth6jbc2fs73fcd2vg`, production commit `632405228ff2dabb053eecf7dacc35db9325a454`, versus reviewed release head `e429d609f61d77512025b8bc9b1b829572120eb1`. Immutable image digest and exact release-to-image alignment **not verified**. The final Python interpreter was PID 255, Python 3.11, launched via `scripts/canonical_runtime_launcher_v26.py`. Registration in an outer protected bootstrap before `os.execvpe` would be discarded; bind the protected startup in the actual final interpreter.
+
+| Production requirement | Authenticated November 12 finding | Required certification |
+| --- | --- | --- |
+| Collector | `collector_installed=false`, `producer_status=collector_missing`, `ready=false` | Confirm final-interpreter factory registration, actual installed collector, fresh signed/scoped observations |
+| Thirteen pretrade observations | **0/13 valid**, each `collector_missing` | 13/13 independently verified current evidence fields: account permissions/identity, balances, ledger, protective exits, open orders, duplicate fence, writer lease, nonce, operator status, kill switch, risk, position sync |
+| Four authoritative readers | **0/4 production-verified** | Complete provenance-preserving ledger; durable Redis submission inventory/cutover; genuine signed operator/status roots; atomic account-scoped risk publication |
+| Protected startup files | `/etc/secrets/.render-kraken-startup-root.py` and `/etc/secrets/.render-kraken-startup-binding.json` absent; protected modules absent from live image | Independent review and private provisioning of genuine fixed-path artifacts bound to the exact image and trust roots, with separate owner approval |
+| Kraken credentials / permissions | Canonical account, key fingerprint/scope and nonce authority unverified | Authenticated read-only account/permission readbacks, redacted fingerprints, exclusive writer proof |
+| Execution and protective exits | `PREACTIVATION_EXECUTION_PROOF_V16 ready=false`, stale proof; ETH-USD exit-price unavailable, exit not submitted safely | Fresh genuine execution proof, reconciled positions/orders/exits, authentic price/protective-exit checks; do not manufacture a fill |
+| Hosted checks | CI, CodeQL, collector, Render recovery and image build passed on referenced release head; security and artifact scans failed | Remediate scanner findings and pass mandatory exact-release/image checks; no waivers, baseline inflation or removed guards |
+| Live-order controls | Read-only recovery logged `allow_new_orders=false`, fail-closed; force activation/heartbeat live orders disabled | Preserve until independent production certification **and separate explicit live-trading authorization** |
+
+**Code is not deployment:** [PR #3820](https://github.com/dantelrharrell-debug/Nija/pull/3820) and [PR #3832](https://github.com/dantelrharrell-debug/Nija/pull/3832) are documented as merged to the protected release; [#3827](https://github.com/dantelrharrell-debug/Nija/pull/3827) and [#3830](https://github.com/dantelrharrell-debug/Nija/pull/3830) landed on main. [PR #3836](https://github.com/dantelrharrell-debug/Nija/pull/3836) was an unmerged, undeployed release-test repair candidate in the source report, with [targeted collector workflow passing](https://github.com/dantelrharrell-debug/Nija/actions/runs/43308922731). Check its current status before claiming otherwise. A green regression or merged PR does not certify production integration.
+
+**Immediate repair order:** (1) authenticate current production commit/digest, Kraken account/key scope and safety state read-only; (2) repair independent ledger provenance, Redis complete-inventory cutover, operator/status trust and account-scoped risk publication; (3) resolve [security scan](https://github.com/dantelrharrell-debug/Nija/actions/runs/43305919345) and [artifact scan](https://github.com/dantelrharrell-debug/Nija/actions/runs/43305919011) failures; (4) obtain independently signed source, backup/restore and broker/ledger/exits certifications; (5) approve exact protected files and immutable build separately; (6) deploy only after explicit exact-image owner approval; (7) inspect authentic final-interpreter collector startup, all 13 observations, proof, protection, alerts and rollback under **read-only recovery**; (8) require a **new, separate owner go-live decision** before any change allowing orders. If any evidence becomes stale, missing or inconsistent, remain fail-closed.
+
+**Detailed operator roadmap:** [NIJA Kraken Production Activation Page](https://chatgpt.com/space/page_0a441a96f7648191af7d55848de010e0) (blocker owners, evidence, checklists, approval gates, monitoring and rollback). Supporting evidence: [tracking issue #3800](https://github.com/dantelrharrell-debug/Nija/issues/3800), [Render logs](https://dashboard.render.com/web/srv-d98dsr5aeets73fpbaqg/logs), [collector workflow](https://github.com/dantelrharrell-debug/Nija/actions/runs/43305918882), and the November 12 library report `NIJA_Kraken_Production_Connection_Report_20261112.html`. **Last verified production observations:** November 12, 2026, 21:08–21:16 UTC; any later actual production status must be established through a new authenticated inspection.
+
+---
+
+## Project status — November 10, 2026 (documentation update)
+
+**Certification:** Live trading, complete course commerce, paid Trading IQ results, and automated outreach remain **not independently certified**. These are evidence and approval gates, not claims of live activation.
+
+### Trading IQ Challenge and advanced simulator
+- The canonical twelve-round IONOS game remains the design/source baseline pending authenticated export and visual reconciliation ([issue #3703](https://github.com/dantelrharrell-debug/Nija/issues/3703)).
+- The Vercel custom domain `game.nijaaitrading.com` has been reported as valid in Vercel, but public TLS, routing, exact deployed game build, mobile presentation, and anonymous full-run completion require fresh independent checks. A working deployment URL does not prove the custom domain or design is certified.
+- [Draft PR #3723](https://github.com/dantelrharrell-debug/Nija/pull/3723) contains an isolated deterministic advanced-simulator engine and tests; it is not the canonical game, a deployed product, or live brokerage execution. Review CI/security and artifact-scan failures before merge.
+- The optional $1 personalized-results flow requires separate Stripe test-mode verification, authenticated fulfillment, refund/error handling, and explicit live-payment approval. No checkout activation is implied.
+
+### Course commerce and protected endpoints
+- The November 10 read-only course-commerce verification reportedly passed 11 of 12 production checks; the protected `/api/admin/website-profit` endpoint returned HTTP 503 instead of the expected HTTP 401. This is a readiness failure, **not** evidence of anonymous financial-data access.
+- Invalid course claims and anonymous paid-file access reportedly returned HTTP 403. Mocked checkout success does not establish a completed real purchase or entitlement delivery.
+- Correct and test the protected endpoint on an isolated draft branch; preserve authorization boundaries. Require hosted CI, independent review, and explicit deployment approval.
+
+### Website, leads, and outreach
+- Preserve private CRM records, consent provenance, suppression/DNC screening, and delivery acknowledgments. A form submission saved in IONOS does not prove Zapier or inbox delivery.
+- Verify `/apply`, `/free`, `/outreach-center`, the iPad dialer and Caller #1 readiness before campaign activation. Caller #2 requires demonstrated results and separate approval.
+- Do not initiate calling, messaging, lead exports, webhook dispatch, or campaign activation from this documentation update.
+
+### Live trading and release safety
+- Continue fail-closed order admission while broker-authenticated positions, protective orders, ledger reconciliation, kill-switch truth, nonce ownership, and execution authority are unresolved.
+- Do not infer production readiness from a merged PR, healthy service, green unit tests, or paper simulation. Live trading, DNS, payment activation, publishing, and production deployment require distinct owner approvals.
+
+**Evidence discipline:** Treat historical snapshots below as dated records. Record the source, inspection time, exact environment, and verified/provisional/blocked/unverified status before upgrading any launch claim.
+
+---
+
+## Project status — November 7, 2026 (documentation checkpoint)
+
+**Status: revenue launch and live trading are not independently certified.** This section summarizes the latest reported project evidence; verify current production state before making public launch or operational claims.
+
+### Education and revenue
+
+- **Trading Foundations ($99):** A Stripe payment link exists, but the complete production payment-to-entitlement-to-course-delivery journey has not been independently certified.
+- **Trading IQ personalized results ($1):** A Stripe product and application checkout implementation exist, but deployed checkout and verified paid-report fulfillment remain uncertified.
+- **Founding 100:** Waitlist/pilot onboarding is distinct from an approved, publicly available live brokerage connection or authorized trading service.
+- **Revenue reporting:** Analytics traffic and event totals are not equivalent to verified unique visitors, captured payments, or attributable profit. Reconcile Stripe charges, refunds, fees, lead records, marketing costs, and visitor attribution before claiming the $1 profit-per-visitor target.
+- **Lead intake:** Independently verify published IONOS forms, durable production storage, consent provenance, and downstream delivery acknowledgments. Do not interpret a saved enquiry as successful CRM delivery.
+
+Track launch certification in [issue #3696](https://github.com/dantelrharrell-debug/Nija/issues/3696), and use [issue #3537](https://github.com/dantelrharrell-debug/Nija/issues/3537) as a dated revenue-verification baseline rather than current revenue proof.
+
+### Trading and production boundaries
+
+- Trading commissioning code and documentation do **not** establish production installation, execution authority, or a verified live trade.
+- Keep order admission fail-closed pending authenticated account/ledger reconciliation, pending-close resolution, protective-order readback, writer/nonce authority, risk limits, kill-switch clearance, and independent production certification.
+- A passing CI suite, merged pull request, healthy deployment, or connected broker does not authorize real-money execution.
+- Deployment, billing activation, and live-order approval require separate explicit authorization and verification.
+
+**Change scope:** README documentation only; no payments, production configuration, lead records, or trading controls are modified.
+
+---
+
+
 ## Commissioning proposal — not installed or deployed
 
 The cold-start order-or-fill proof dependency is documented in
@@ -1080,7 +1228,7 @@ execution path. No real historical dataset is bundled with this repository.
 - **Website:** https://nijaaitrading.com
 - **Mobile documentation:** `mobile/README.md`
 - **Owner:** NIJA AI Trading LLC
-- **Business phone:** 425-765-0283
+- **Business phone:** 425-756-0283
 
 ## Disclaimer
 

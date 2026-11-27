@@ -57,6 +57,7 @@ def make_reviewed_kraken_producer_bundle(
     reviewed_ledger_provider_id: str,
     independent_open_intents: Callable[[], Mapping[str, Any]],
     monitoring_category: Any,
+    identity_method: str = "response_echo",
     independently_reviewed: bool = False,
     clock: Callable[[], float] | None = None,
 ) -> Mapping[str, Callable[[], Mapping[str, Any]]]:
@@ -94,6 +95,7 @@ def make_reviewed_kraken_producer_bundle(
         account_scope=account_scope,
         approved_api_key_sha256=approved_api_key_sha256,
         monitoring_category=monitoring_category,
+        identity_method=identity_method,
     )
     if clock is not None:
         common["clock"] = clock
@@ -104,6 +106,7 @@ def make_reviewed_kraken_producer_bundle(
     try:
         permissions = make_kraken_key_permission_provider(
             **common,
+            approved_iban_sha256=approved_iban_sha256,
             reviewed_provider_id=reviewed_provider_ids["account_permissions"],
         )
         identity = make_kraken_account_identity_provider(

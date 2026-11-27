@@ -1,5 +1,7 @@
 # NIJA Mobile Backend - Cloud Deployment Guide
 
+Connection strings below are structural illustrations, not usable credentials. Copy the complete connection string from the provider into protected runtime settings; never commit it. `<credentials>` represents provider-issued, URL-encoded user information.
+
 This guide provides deployment instructions for major cloud platforms.
 
 ## Table of Contents
@@ -363,7 +365,7 @@ railway logs
 **Required:**
 ```bash
 # Database
-DATABASE_URL=postgresql://user:password@host:5432/nija
+DATABASE_URL=postgresql://<credentials>@host:5432/nija
 REDIS_URL=redis://host:6379/0
 
 # JWT Authentication
@@ -400,7 +402,7 @@ SENTRY_DSN=https://xxx@sentry.io/xxx
 
 # Exchange API Keys (for master account - optional)
 COINBASE_API_KEY=organizations/xxx/apiKeys/xxx
-COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----
+# Set COINBASE_API_SECRET privately to the complete downloaded PEM value.
 KRAKEN_MASTER_API_KEY=xxx
 KRAKEN_MASTER_API_SECRET=xxx
 ```

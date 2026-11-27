@@ -126,6 +126,13 @@ class InternationalHistoryTests(unittest.TestCase):
                            TradeHistoryQueryError=TradeHistoryQueryError,
                            logger=logging.getLogger('test'), Optional=__import__('typing').Optional,
                            Dict=__import__('typing').Dict, require_tos_accepted=lambda f: f)
+                # api_server.require_auth now verifies the current account on
+                # every signed JWT; supply only a synthetic enabled account,
+                # never bypass the real decorator or instantiate production DBs.
+                env['user_db'] = types.SimpleNamespace(
+                    get_user=lambda uid: {'user_id': uid, 'enabled': True}
+                    if uid == 'british-user' else None
+                )
                 exec(compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec'), env)
                 ledger_module = types.ModuleType('bot.trade_ledger_db')
                 ledger_module.get_trade_ledger_db = lambda: self.ledger
@@ -138,6 +145,27 @@ class InternationalHistoryTests(unittest.TestCase):
                     client = app.test_client()
                     self.assertEqual(client.get('/api/trading/history').status_code, 401)
                     headers = {'Authorization': 'Bearer ' + token}
+                    # Run the actual source-loaded decorator in both API
+                    # entrypoints: a JWT for a deleted/disabled user must
+                    # never expose another account's history.
+                    deadline = datetime.now(timezone.utc) + timedelta(minutes=1)
+                    for subject in ('deleted-user', 123, '   '):
+                        stale = jwt.encode(
+                            {'user_id': subject, 'exp': deadline},
+                            app.config['SECRET_KEY'], algorithm='HS256')
+                        denied = client.get('/api/trading/history', headers={
+                            'Authorization': 'Bearer ' + stale})
+                        self.assertEqual(denied.status_code, 401)
+                    with patch.object(env['user_db'], 'get_user',
+                                      return_value={'user_id': 'british-user', 'enabled': False}):
+                        disabled = client.get('/api/trading/history', headers=headers)
+                        self.assertEqual(disabled.status_code, 401)
+                    with patch.object(env['user_db'], 'get_user',
+                                      side_effect=RuntimeError('synthetic-private-store-error')):
+                        unavailable = client.get('/api/trading/history', headers=headers)
+                        self.assertEqual(unavailable.status_code, 503)
+                        self.assertNotIn('synthetic-private-store-error',
+                                         unavailable.get_data(as_text=True))
                     other = client.get('/api/trading/history?user_id=japanese-user', headers=headers)
                     self.assertEqual(other.status_code, 403)
                     response = client.get('/api/trading/history?timezone=Asia/Tokyo', headers=headers)
@@ -219,6 +247,12 @@ class InternationalHistoryTests(unittest.TestCase):
                    jwt=jwt, JWT_SECRET_KEY_STR=signing, JWT_ALGORITHM='HS256', time=time,
                    rate_limit_storage=defaultdict(list), RATE_LIMIT_WINDOW=60, RATE_LIMIT_REQUESTS=100,
                    logger=logging.getLogger('test'), Optional=Optional, Dict=Dict, Any=Any)
+        # The real FastAPI auth dependency now checks the current durable account.
+        # Supply a synthetic record without touching production customer stores.
+        env['user_db'] = types.SimpleNamespace(
+            get_user=lambda uid: {'user_id': uid, 'enabled': True}
+            if uid == 'british-user' else None
+        )
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), env)
         ledger_module = types.ModuleType('bot.trade_ledger_db')
         ledger_module.get_trade_ledger_db = lambda: self.ledger

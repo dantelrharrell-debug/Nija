@@ -114,17 +114,23 @@ def _reuse_exact_kraken_snapshot_locked(broker: Any, result: list[Any], authorit
         generation = int(getattr(broker, "_nija_authoritative_position_snapshot_generation_v285", 0))
         raw_generation = int(getattr(broker, "_nija_authoritative_position_raw_generation_v286", -1))
         raw = getattr(broker, "_nija_authoritative_position_raw_rows_v286", None)
+        # These checks precede the normalized comparison diagnostic. Report only
+        # a reason code, never raw rows, account identifiers, or credentials.
         if generation < 1 or raw_generation != generation:
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=generation_invalid_or_mismatch fail_closed=true secrets_logged=false")
             return False
         if not isinstance(raw, (tuple, list)) or len(raw) != len(result):
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=raw_rows_shape_or_count_mismatch fail_closed=true secrets_logged=false")
             return False
         if any(not isinstance(row, Mapping) for row in raw):
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=raw_row_invalid fail_closed=true secrets_logged=false")
             return False
         raw = tuple(dict(row) for row in raw)
         if any(
             not isinstance(returned, Mapping) or observed != dict(returned)
             for observed, returned in zip(raw, result)
         ):
+            LOGGER.warning("KRAKEN_SNAPSHOT_REUSE_EARLY_REJECTED reason=raw_rows_mismatch fail_closed=true secrets_logged=false")
             return False
         status = getattr(authority, "_snapshot_status", None)
         normalise = getattr(authority, "_snapshot_rows", None)
@@ -133,6 +139,15 @@ def _reuse_exact_kraken_snapshot_locked(broker: Any, result: list[Any], authorit
         expected_rows, error = normalise(result)
         ok, _reason, rows, _age, checked_generation = status(broker)
         if error or not ok or rows != expected_rows or checked_generation != generation:
+            # Only comparison outcomes are logged; never emit account positions,
+            # balance values, credentials, or raw authenticated evidence.
+            LOGGER.warning(
+                "KRAKEN_SNAPSHOT_REUSE_CHECK_FAILED "
+                "normalisation_error=%s status_ok=%s normalised_rows_match=%s "
+                "generation_match=%s fail_closed=true secrets_logged=false",
+                bool(error), bool(ok), rows == expected_rows,
+                checked_generation == generation,
+            )
             return False
         # Read in reverse publication order: v286 publishes the canonical
         # generation, raw rows, then raw generation. Reading canonical
@@ -214,7 +229,14 @@ class _FetchProofProxy:
             raise
 
         try:
-            snapshot_ok = _publish_v285_snapshot_if_loaded(broker, result)
+            owner = sys.modules.get("bot.runtime_kraken_position_refresh_liveness_v286_patch")
+            if owner is None:
+                owner = sys.modules.get("runtime_kraken_position_refresh_liveness_v286_patch")
+            check = getattr(owner, "_check_v98_fetch_result", None)
+            if callable(check):
+                snapshot_ok, result = check(broker, result, _publish_v285_snapshot_if_loaded)
+            else:
+                snapshot_ok = _publish_v285_snapshot_if_loaded(broker, result)
         except BaseException as exc:
             object.__setattr__(self, "fetch_ok", False)
             object.__setattr__(self, "fetch_error", f"v285_snapshot_publish_error:{type(exc).__name__}:{exc}")

@@ -77,8 +77,5 @@ export class SandboxReportClient {
     // A return URL cannot unlock the report. Pending webhook => retry visibly; never charge again.
     const result = (await this.request(`runs/${this.runId}/report`)).report;
     return result?.report ?? result;
-    // The return URL cannot unlock a report. Pending webhook => retry visibly;
-    // never charge again. Server rechecks entitlement and refund/dispute state.
-    return (await this.request('runs/' + this.runId + '/report')).report;
   }
 }

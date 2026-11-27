@@ -1,0 +1,41 @@
+name: Verified billing receipt safety tests
+on:
+  pull_request:
+    paths:
+      - 'verified_payment_receipts.py'
+      - 'resend_delivery.py'
+      - 'tests/test_resend_delivery.py'
+      - 'billing_service.py'
+      - 'tests/test_verified_payment_receipts.py'
+      - '.github/workflows/billing-receipt-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  receipt-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-billing.txt
+      - name: Install billing test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-billing.txt pytest
+      - name: Compile guarded billing modules
+        run: |
+          python -m compileall -q verified_payment_receipts.py billing_service.py resend_delivery.py
+      - name: Test receipt validation, duplicate and unknown outcomes
+        env:
+          NIJA_VERIFIED_PAYMENT_OUTBOX_ENABLED: 'false'
+          NIJA_VERIFIED_PAYMENT_SEND_MODE: disabled
+          NIJA_VERIFIED_PAYMENT_RECEIPT_CERTIFIED: 'false'
+        run: |
+          python -m pytest -q tests/test_verified_payment_receipts.py tests/test_resend_delivery.py

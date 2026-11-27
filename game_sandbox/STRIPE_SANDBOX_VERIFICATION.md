@@ -12,7 +12,7 @@ Actual Stripe-hosted Checkout tests were completed in the connected **Nija Ai Tr
 | Receipt verification | Backend predicate accepts the recorded paid receipt and rejects the actual refunded/disputed records |
 | Fail-closed access | A recorded API receipt alone never grants a report without an owned run and durable signed-webhook entitlement |
 
-Sanitized provider snapshots are retained in `tests/fixtures/stripe_iq72_sandbox.py`. They contain only verification fields and sandbox resource IDs; no customer/card data, secret keys, Checkout URLs or browser ownership proofs. The tests replay these captured records; they do not fabricate successful provider states.
+Sanitized provider snapshots are retained in `tests/fixtures/test_stripe_iq72_sandbox.py`. They contain only verification fields and sandbox resource IDs; no customer/card data, secret keys, Checkout URLs or browser ownership proofs. The tests replay these captured records; they do not fabricate successful provider states.
 
 Both refunded and disputed Checkout Sessions continue to report `payment_status=paid`. The backend correctly checks the expanded charge rather than granting access from that field or a return URL alone.
 

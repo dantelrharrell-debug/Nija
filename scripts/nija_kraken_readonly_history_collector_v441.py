@@ -131,6 +131,17 @@ def history_failure_diagnostic(exc: BaseException) -> dict[str, str]:
     return {"error_code": "history_incomplete_unknown"}
 
 
+def _history_read_options(endpoint: str, include_ledger_links: bool = False) -> dict[str, bool]:
+    """Keep closed-order fill links consistent with unconsolidated history."""
+    if type(include_ledger_links) is not bool:
+        raise ValueError("Explicit boolean ledger-link selection required")
+    if endpoint == "ClosedOrders":
+        return {"trades": True, "consolidate_taker": False}
+    if endpoint == "TradesHistory":
+        return {"consolidate_taker": False, **({"ledgers": True} if include_ledger_links else {})}
+    return {}
+
+
 def collect_history(
     private_read: Callable[[str, dict[str, Any]], Mapping[str, Any]],
     *,
@@ -139,6 +150,8 @@ def collect_history(
     include_balance: bool = False,
     include_open_orders: bool = False,
     use_cursor: bool = False,
+    include_ledger_links: bool = False,
+    history_window: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Collect repeat-checked history, optionally bracketed by private balances."""
     if not (account_scope == "platform:kraken" or (
@@ -152,17 +165,31 @@ def collect_history(
         raise ValueError("Trusted read callable and bounded max_pages required")
     if type(use_cursor) is not bool:
         raise ValueError("Explicit boolean cursor selection required")
+    _history_read_options("TradesHistory", include_ledger_links)
+
+    if history_window is not None:
+        if (type(history_window) is not tuple or len(history_window) != 2
+                or any(type(bound) is not int for bound in history_window)
+                or not 0 < history_window[0] < history_window[1] or use_cursor):
+            raise ValueError("Invalid offset history window")
 
     def read_cursor_endpoint(endpoint: str, field: str) -> dict[str, Any]:
-        """Require an explicit cursor envelope; never fall back to offset reads.
+        """Follow an explicit cursor chain; never fall back to offset reads.
 
         Counts are not completion evidence in cursor mode: Kraken returns null
         for Ledgers and zero for ClosedOrders. Only terminal cursor exhaustion
-        completes a pass. Unknown or unsupported response shapes fail closed.
+        completes a pass. A short continuation page may omit the exhausted
+        cursor, as Kraken does in production. Never infer cursor support from
+        a first page without a cursor, a full page, or an explicit malformed
+        cursor. Both complete passes must still agree byte-for-byte.
         """
         records: dict[str, Any] = {}
         seen_cursors: set[str] = set()
-        params: dict[str, Any] = {"with_cursor": True}
+        # Reconciliation needs individual fill IDs, not Kraken's default
+        # consolidation of executions for a taker order. Keep this choice fixed
+        # across every page and both verification passes.
+        trade_options = _history_read_options(endpoint, include_ledger_links)
+        params: dict[str, Any] = {**trade_options, "with_cursor": True}
         for _ in range(max_pages):
             payload = private_read(endpoint, dict(params))
             if not isinstance(payload, Mapping) or payload.get("error") != []:
@@ -174,6 +201,12 @@ def collect_history(
             if len(batch) > PAGE_SIZE:
                 raise IncompleteHistory(f"{endpoint}: oversized page")
             cursor = result.get("cursor")
+            if "cursor" not in result and seen_cursors and len(batch) < PAGE_SIZE:
+                # Kraken documents cursor.next only when more rows exist.
+                # Accept absence only after this pass followed a real token;
+                # count=0/null is not evidence of terminal exhaustion. Do not
+                # mutate the original page retained by the private journal.
+                cursor = {}
             if not isinstance(cursor, Mapping) or set(cursor) - {"next"}:
                 raise IncompleteHistory(f"{endpoint}: invalid cursor")
             next_cursor = cursor.get("next")
@@ -198,7 +231,7 @@ def collect_history(
                     raise IncompleteHistory(f"{endpoint}: non-JSON record") from exc
             if next_cursor is None or next_cursor == "":
                 return records
-            params = {"with_cursor": True, "cursor": next_cursor}
+            params = {**trade_options, "with_cursor": True, "cursor": next_cursor}
         raise IncompleteHistory(f"{endpoint}: page limit before all records")
 
     def read_open_orders() -> tuple[dict[str, Any], dict[str, float]]:
@@ -283,7 +316,12 @@ def collect_history(
             records: dict[str, Any] = {}
             expected: int | None = None
             for index in range(max_pages):
-                payload = private_read(endpoint, {"ofs": index * PAGE_SIZE})
+                params = {"ofs": index * PAGE_SIZE, **_history_read_options(endpoint, include_ledger_links)}
+                if history_window:
+                    params.update(start=history_window[0], end=history_window[1])
+                    if endpoint == "ClosedOrders":
+                        params["closetime"] = "close"
+                payload = private_read(endpoint, params)
                 if not isinstance(payload, Mapping) or payload.get("error") != []:
                     raise _api_failure(endpoint, payload)
                 result = payload.get("result")
@@ -312,6 +350,10 @@ def collect_history(
                         raise IncompleteHistory(f"{endpoint}: invalid record")
                     if identifier in records:
                         raise IncompleteHistory(f"{endpoint}: duplicate identifier across pages")
+                    if history_window:
+                        stamp = row.get("closetm" if endpoint == "ClosedOrders" else "time")
+                        if type(stamp) not in (int, float) or not history_window[0] < stamp <= history_window[1]:
+                            raise IncompleteHistory(f"{endpoint}: invalid record")
                     # Freeze broker response objects: do not trust later mutation of a
                     # nested mapping to silently change already-collected evidence.
                     try:
@@ -351,6 +393,8 @@ def collect_history(
     if include_balance and read_balance() != balance:
         raise IncompleteHistory("balance changed during history collection")
     envelope = {"account_scope_asserted_by_caller": account_scope, "history": collected}
+    if history_window:
+        envelope["history_window"] = {"start_exclusive": history_window[0], "end_inclusive": history_window[1]}
     if use_cursor:
         envelope["history_pagination"] = "cursor"
     if include_balance:
@@ -393,7 +437,12 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
                                  include_balance: bool = False,
                                  include_open_orders: bool = False,
                                  use_cursor: bool = False,
+                                 include_ledger_links: bool = False,
+                                 history_window: tuple[int, int] | None = None,
                                  on_private_read: Callable[[str, str], None] | None = None,
+                                 on_private_response: Callable[
+                                     [str, Mapping[str, Any], float, float], None,
+                                 ] | None = None,
                                  ) -> dict[str, Any]:
     """Reuse Kraken read controls without relabeling another software account."""
     def require_matching_scope() -> None:
@@ -402,18 +451,32 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
 
     if on_private_read is not None and not callable(on_private_read):
         raise ValueError("Read progress callback must be callable")
+    if on_private_response is not None and not callable(on_private_response):
+        raise ValueError("Response archive callback must be callable")
     require_matching_scope()
     private_call = getattr(broker, "_kraken_private_call", None)
     if not callable(private_call) or monitoring_category is None:
         raise ValueError("Authenticated private call and monitoring category required")
 
     def read(endpoint: str, params: dict[str, Any]) -> Mapping[str, Any]:
-        history_read = endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"} and set(params) == {"ofs"}
+        trade_options = _history_read_options(endpoint, include_ledger_links)
+        trade_keys = set(trade_options)
+        bounds = {}
+        if history_window and endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}:
+            bounds.update(start=history_window[0], end=history_window[1])
+            if endpoint == "ClosedOrders":
+                bounds["closetime"] = "close"
+        valid_trade_mode = all(params.get(key) is value for key, value in trade_options.items())
+        history_read = (
+            endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
+            and set(params) == ({"ofs"} | trade_keys | bounds.keys()) and valid_trade_mode
+            and all(params.get(key) == value for key, value in bounds.items())
+        )
         if use_cursor:
             history_read = (
                 endpoint in {"TradesHistory", "ClosedOrders", "Ledgers"}
-                and set(params) in ({"with_cursor"}, {"with_cursor", "cursor"})
-                and params.get("with_cursor") is True
+                and set(params) in ({"with_cursor"} | trade_keys, {"with_cursor", "cursor"} | trade_keys)
+                and valid_trade_mode and params.get("with_cursor") is True
                 and ("cursor" not in params or isinstance(params["cursor"], str) and bool(params["cursor"].strip()))
             )
         balance_read = include_balance and endpoint == "Balance" and not params
@@ -431,11 +494,13 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
         # the next cursor page. Call the existing client exactly once per read.
         if on_private_read is not None:
             on_private_read(endpoint, "started")
+        started = time.time() if on_private_response is not None else None
         try:
             payload = private_call(
                 endpoint, cursor_read_params(broker, endpoint, params),
                 category=monitoring_category,
             )
+            finished = time.time() if on_private_response is not None else None
         except Exception:
             if on_private_read is not None:
                 on_private_read(endpoint, "raised")
@@ -444,10 +509,18 @@ def collect_from_existing_broker(broker: Any, *, account_scope: str,
             # Returned describes transport completion, never broker acceptance.
             on_private_read(endpoint, "returned")
         require_matching_scope()
+        if (on_private_response is not None and isinstance(payload, Mapping)
+                and payload.get("error") == [] and isinstance(payload.get("result"), Mapping)):
+            # Archive before the next read, even if later pagination or final
+            # consistency checks fail. Never archive free-text API errors.
+            # Detach twice: a callback cannot change what the collector sees.
+            frozen = json.loads(json.dumps(dict(payload), allow_nan=False))
+            on_private_response(endpoint, json.loads(json.dumps(frozen["result"])), started, finished)
+            return frozen
         return payload
 
     return collect_history(
         read, account_scope=account_scope, max_pages=max_pages, include_balance=include_balance,
         include_open_orders=include_open_orders,
-        use_cursor=use_cursor,
+        use_cursor=use_cursor, include_ledger_links=include_ledger_links, history_window=history_window,
     )

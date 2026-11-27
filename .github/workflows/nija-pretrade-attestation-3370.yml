@@ -3,6 +3,19 @@ on:
   pull_request:
     branches: [main, release/justcall-handoff-only-20261017]
     paths:
+      - 'bot/commissioning_gate.py'
+      - 'bot/commissioning_runtime.py'
+      - 'bot/startup_two_phase_policy_v8.py'
+      - 'bot/startup_verification_plan.py'
+      - 'bot/account_order_admission.py'
+      - 'bot/order_admission_policy.py'
+      - 'bot/kraken_operator_authorization.py'
+      - 'bot/pretrade_attestation_validation_v452.py'
+      - 'tests/test_commissioning_two_phase_transition_20261105.py'
+      - 'tests/test_pretrade_collector_missing_regression_20261105.py'
+      - 'tests/test_commissioning_single_flight_20261105.py'
+      - 'bot/tests/test_commissioning_gate.py'
+      - 'bot/tests/test_commissioning_runtime.py'
       - 'bot/pretrade_independent_attestation.py'
       - 'bot/pretrade_certified_provider_bridge_3370.py'
       - 'tests/test_pretrade_certified_provider_bridge_3370.py'
@@ -29,6 +42,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install offline commissioning test dependencies
+        run: python -m pip install pytest==8.2.2 cryptography==46.0.3
+      - name: Run mandatory commissioning regressions offline
+        env:
+          NIJA_DEFER_RUNTIME_SITE_HOOKS: '1'
+          GH_TOKEN: ''
+          SSH_PRIVATE_KEY: ''
+          KRAKEN_API_KEY: ''
+          KRAKEN_API_SECRET: ''
+          COINBASE_API_KEY: ''
+          COINBASE_API_SECRET: ''
+          COINBASE_PEM_CONTENT: ''
+          OKX_API_KEY: ''
+          OKX_API_SECRET: ''
+          OKX_PASSPHRASE: ''
+          REDIS_URL: ''
+        run: |
+          python -m pytest -q \
+            tests/test_commissioning_two_phase_transition_20261105.py \
+            tests/test_pretrade_collector_missing_regression_20261105.py \
+            tests/test_commissioning_single_flight_20261105.py \
+            bot/tests/test_commissioning_gate.py \
+            bot/tests/test_commissioning_runtime.py
+
       - name: Compile offline attestation and regression tests
         run: python -S -m py_compile bot/pretrade_independent_attestation.py tests/test_pretrade_independent_attestation_regression_3370.py bot/pretrade_certified_provider_bridge_3370.py tests/test_pretrade_certified_provider_bridge_3370.py
       - name: Verify independent attestation fails closed

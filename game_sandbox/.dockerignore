@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+*.pem
+*.key
+*.sqlite3
+*.sqlite3-*
+*.db
+__pycache__
+*.pyc
+node_modules
+.venv
+venv

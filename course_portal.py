@@ -20,10 +20,11 @@ from urllib.parse import quote
 
 import requests
 from flask import Blueprint, current_app, jsonify, make_response, redirect, request, send_file
-from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, insert, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, func, insert, select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from course_fulfillment import expected_course_link, CourseLedger, reconcile_session
+from course_fulfillment import expected_course_identity, expected_course_link, CourseLedger, reconcile_session
 from course_private_video import configured_catalog, video_response
 
 log = logging.getLogger("nija.billing.course_portal")
@@ -41,6 +42,8 @@ ALLOWED = {
 }
 AUDIO = "NIJA_AI_Trading_Foundations_Final_Audiobook_Under_50MB.mp3"
 MAX_ZIP = 58 * 1024 * 1024
+# Limit individual database parameters on constrained isolated Postgres.
+CHUNK_BYTES = 256 * 1024
 
 
 def utcnow():
@@ -86,6 +89,23 @@ class PortalStore:
             Column("sha256", String(64), nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
         )
+        # Staged chunks are invisible to customers until the manifest is committed.
+        # Each chunk is independently hashed; no database write contains the full ZIP.
+        self.asset_chunks = Table(
+            "billing_course_private_asset_chunks", m,
+            Column("bundle_sha256", String(64), primary_key=True),
+            Column("part_index", Integer, primary_key=True),
+            Column("data", LargeBinary, nullable=False),
+            Column("part_sha256", String(64), nullable=False),
+        )
+        self.asset_manifests = Table(
+            "billing_course_private_asset_manifests", m,
+            Column("bundle_id", String(80), primary_key=True),
+            Column("bundle_sha256", String(64), nullable=False),
+            Column("part_count", Integer, nullable=False),
+            Column("byte_length", Integer, nullable=False),
+            Column("updated_at", DateTime(timezone=True), nullable=False),
+        )
         self.outbox = Table(
             "billing_course_mail_outbox", m,
             Column("session_id", String(128), primary_key=True),
@@ -111,23 +131,114 @@ class PortalStore:
         )
         m.create_all(engine)
 
+    @staticmethod
+    def _chunked_mode():
+        # Never silently switch production storage or customer delivery.
+        return (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+                and os.getenv("NIJA_COURSE_ASSET_CHUNKS", "").strip().lower() == "true")
+
+    def _chunk_manifest(self, conn):
+        row = conn.execute(select(self.asset_manifests).where(
+            self.asset_manifests.c.bundle_id == BUNDLE)).first()
+        return dict(row._mapping) if row else None
+
     def has_bundle(self):
         with self.engine.connect() as conn:
-            return conn.execute(select(self.assets.c.bundle_id).where(self.assets.c.bundle_id == BUNDLE)).first() is not None
+            if self._chunked_mode():
+                info = self._chunk_manifest(conn)
+                if info is not None:
+                    count = conn.execute(select(func.count()).select_from(self.asset_chunks).where(
+                        self.asset_chunks.c.bundle_sha256 == info["bundle_sha256"])).scalar_one()
+                    return count == info["part_count"] and info["part_count"] > 0
+            # Existing private bundles remain readable without data migration.
+            return conn.execute(select(self.assets.c.bundle_id).where(
+                self.assets.c.bundle_id == BUNDLE)).first() is not None
+
+    def _import_chunked(self, payload, digest):
+        if not payload or len(payload) > MAX_ZIP or hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError("asset_digest_mismatch")
+        count = (len(payload) + CHUNK_BYTES - 1) // CHUNK_BYTES
+        # Each small, independently committed write bounds Postgres worker RAM.
+        # A process crash may leave uncommitted-by-manifest pieces, never visible.
+        for index in range(count):
+            part = payload[index * CHUNK_BYTES:(index + 1) * CHUNK_BYTES]
+            part_hash = hashlib.sha256(part).hexdigest()
+            condition = ((self.asset_chunks.c.bundle_sha256 == digest)
+                         & (self.asset_chunks.c.part_index == index))
+            with self.engine.begin() as conn:
+                previous = conn.execute(select(self.asset_chunks.c.part_sha256).where(
+                    condition)).scalar_one_or_none()
+                if previous == part_hash:
+                    continue
+                values = {"data": part, "part_sha256": part_hash}
+                if previous is None:
+                    conn.execute(insert(self.asset_chunks).values(
+                        bundle_sha256=digest, part_index=index, **values))
+                else:
+                    conn.execute(update(self.asset_chunks).where(condition).values(**values))
+
+        # Independently reconstruct and hash the stored data before publication.
+        restored = self._read_chunks_for_digest(digest, count, len(payload))
+        if restored is None:
+            raise RuntimeError("chunk_storage_verification_failed")
+        with self.engine.begin() as conn:
+            values = {"bundle_sha256": digest, "part_count": count,
+                      "byte_length": len(payload), "updated_at": utcnow()}
+            if self._chunk_manifest(conn) is None:
+                conn.execute(insert(self.asset_manifests).values(bundle_id=BUNDLE, **values))
+            else:
+                conn.execute(update(self.asset_manifests).where(
+                    self.asset_manifests.c.bundle_id == BUNDLE).values(**values))
+
+    def _read_chunks_for_digest(self, digest, expected_count, expected_length):
+        total = 0
+        sequence = 0
+        h = hashlib.sha256()
+        parts = []
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(
+                self.asset_chunks.c.part_index, self.asset_chunks.c.data,
+                self.asset_chunks.c.part_sha256).where(
+                self.asset_chunks.c.bundle_sha256 == digest).order_by(
+                self.asset_chunks.c.part_index))
+            for index, value, part_sha in rows:
+                part = bytes(value)
+                if (index != sequence or not part or len(part) > CHUNK_BYTES
+                        or hashlib.sha256(part).hexdigest() != part_sha):
+                    return None
+                sequence += 1
+                total += len(part)
+                h.update(part)
+                parts.append(part)
+        if sequence != expected_count or total != expected_length or h.hexdigest() != digest:
+            return None
+        return b"".join(parts)
 
     def import_bundle(self, payload, digest):
+        if self._chunked_mode():
+            return self._import_chunked(payload, digest)
+        # Legacy format unchanged when explicit isolated chunk mode is disabled.
         with self.engine.begin() as conn:
             values = {"data": payload, "sha256": digest, "updated_at": utcnow()}
-            if conn.execute(select(self.assets.c.bundle_id).where(self.assets.c.bundle_id == BUNDLE)).first():
-                conn.execute(update(self.assets).where(self.assets.c.bundle_id == BUNDLE).values(**values))
+            if conn.execute(select(self.assets.c.bundle_id).where(
+                    self.assets.c.bundle_id == BUNDLE)).first():
+                conn.execute(update(self.assets).where(
+                    self.assets.c.bundle_id == BUNDLE).values(**values))
             else:
                 conn.execute(insert(self.assets).values(bundle_id=BUNDLE, **values))
 
     def asset_bytes(self, name):
         if name not in ALLOWED and name != "NIJA_Foundations_Customer_Package.zip":
             return None
+        payload = None
         with self.engine.connect() as conn:
-            payload = conn.execute(select(self.assets.c.data).where(self.assets.c.bundle_id == BUNDLE)).scalar_one_or_none()
+            info = self._chunk_manifest(conn) if self._chunked_mode() else None
+            if info is None:
+                payload = conn.execute(select(self.assets.c.data).where(
+                    self.assets.c.bundle_id == BUNDLE)).scalar_one_or_none()
+        if info is not None:
+            payload = self._read_chunks_for_digest(
+                info["bundle_sha256"], info["part_count"], info["byte_length"])
         if payload is None:
             return None
         if name == "NIJA_Foundations_Customer_Package.zip":
@@ -321,6 +432,11 @@ def _layout(title, body):
 
 
 def _email_access(email, sid, token, *, delivery=False):
+    # This test-only service can NEVER deliver to an actual customer, even if
+    # an old paid test record is retried or a test webhook is replayed.
+    if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"
+            and email.strip().lower() != "delivered@resend.dev"):
+        raise RuntimeError("sandbox_simulator_recipient_required")
     key = os.getenv("RESEND_API_KEY", "")
     link = os.getenv("NIJA_COURSE_PUBLIC_URL", "https://nija-billing-api.onrender.com").rstrip("/") + \
         "/course-portal/claim?token=" + quote(token)
@@ -529,8 +645,78 @@ def register_course_portal(app, billing_store):
         <p><input id="operator-token" type="password" autocomplete="off"
         placeholder="Private upload token"></p>
         <button type="button" id="import-button">Upload Protected Package</button>
+        <button type="button" id="preview-button">Review Paid Test Orders (Read Only)</button>
+        <button type="button" id="simulated-email-button">Verify Sandbox Email Sender (Simulator Only)</button>
+        <button type="button" id="reconcile-test-button" disabled>Reconcile Two Missing TEST Grants (No Emails)</button>
         <pre id="import-result" role="status"></pre></div>
         <script>
+        let missingTestSessions=[];
+        document.getElementById("simulated-email-button").addEventListener("click",async()=>{
+          const input=document.getElementById("operator-token");
+          const output=document.getElementById("import-result");
+          const button=document.getElementById("simulated-email-button");
+          if(!input.value){output.textContent="Enter the private upload token.";return;}
+          button.disabled=true;output.textContent="Contacting the Resend simulator; no customer is contacted…";
+          try {
+            const res=await fetch("/course-portal/admin/test-simulator-email",{
+              method:"POST",headers:{"Authorization":"Bearer "+input.value,
+                "Content-Type":"application/json"},
+              credentials:"same-origin",cache:"no-store",
+              body:JSON.stringify({confirmation:"SIMULATOR_ONLY"})
+            });
+            const result=await res.json();
+            output.textContent=res.ok && result.simulated === true && result.provider_accepted === true
+              ? "Resend accepted a SIMULATED delivery to delivered@resend.dev. No purchase or course link was created."
+              : "Sandbox email test unavailable: "+(result.error||res.status);
+          } catch(e) {output.textContent="Sender test unavailable; no customer email sent.";}
+          finally {input.value="";button.disabled=false;}
+        });
+        document.getElementById("preview-button").addEventListener("click",async()=>{
+          const input=document.getElementById("operator-token");
+          const output=document.getElementById("import-result");
+          if(!input.value){output.textContent="Enter the private upload token.";return;}
+          const button=document.getElementById("preview-button");
+          button.disabled=true;output.textContent="Checking test order evidence…";
+          try {
+            const res=await fetch("/course-portal/admin/preview",{
+              method:"GET",headers:{"Authorization":"Bearer "+input.value},
+              credentials:"same-origin",cache:"no-store"
+            });
+            const result=await res.json();
+            if(!res.ok||!result.dry_run){output.textContent="Review unavailable: "+(result.error||res.status);return;}
+            const ids=Array.isArray(result.missing_test_session_ids) ? result.missing_test_session_ids : [];
+            missingTestSessions=(ids.length===2 && ids.every(s=>typeof s==="string" && s.startsWith("cs_test_"))) ? ids : [];
+            document.getElementById("reconcile-test-button").disabled=missingTestSessions.length!==2;
+            const counts=result.counts||{};
+            const keys=["paid","pending_or_unpaid","already_reconciled","paid_without_entitlement"];
+            output.textContent="DRY RUN — NO ORDERS CHANGED\\n"+
+              keys.map(key=>key+": "+Number(counts[key]||0)).join("\\n")+
+              (result.has_more?"\\nAdditional Stripe pages exist; totals incomplete.":"");
+          } catch(e) {output.textContent="Order preview unavailable; no orders changed.";}
+          finally {input.value="";button.disabled=false;}
+        });
+        document.getElementById("reconcile-test-button").addEventListener("click",async()=>{
+          const input=document.getElementById("operator-token");
+          const output=document.getElementById("import-result");
+          if(missingTestSessions.length!==2){output.textContent="Review missing test orders again first.";return;}
+          if(!input.value){output.textContent="Enter the private upload token again.";return;}
+          const button=document.getElementById("reconcile-test-button");
+          button.disabled=true;output.textContent="Verifying two Stripe TEST payments; no emails sent…";
+          try {
+            const res=await fetch("/course-portal/admin/reconcile-test-missing",{
+              method:"POST",
+              headers:{"Authorization":"Bearer "+input.value,"Content-Type":"application/json"},
+              credentials:"same-origin",cache:"no-store",
+              body:JSON.stringify({expected_session_ids:missingTestSessions})
+            });
+            const result=await res.json();
+            output.textContent=res.ok
+              ? "Verified TEST entitlements reconciled: "+Number(result.reconciled||0)+
+                ". Email delivery stayed OFF. Review orders again."
+              : "Reconciliation blocked: "+(result.error||res.status);
+          } catch(e) {output.textContent="Reconciliation unavailable; recheck before retrying.";}
+          finally {input.value="";missingTestSessions=[];button.disabled=true;}
+        });
         document.getElementById("import-button").addEventListener("click",async()=>{
           const f=document.getElementById("archive").files[0];
           const input=document.getElementById("operator-token");
@@ -553,6 +739,51 @@ def register_course_portal(app, billing_store):
         </script>
         ''')
 
+    @portal.post("/admin/test-simulator-email")
+    def test_simulator_email():
+        """One strictly simulated sending diagnostic; no Stripe, access or customer data.
+
+        This cannot run in production or while any course email fulfillment is on.
+        Resend's delivered@resend.dev simulator never delivers to a real inbox.
+        """
+        if not _admin_allowed():
+            return jsonify({"error": "unauthorized"}), 403
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("confirmation") != "SIMULATOR_ONLY":
+            return jsonify({"error": "simulator_confirmation_required"}), 400
+        identity = expected_course_identity()
+        if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").lower() != "true"
+                or not identity or identity[3] is not False
+                or os.getenv("NIJA_COURSE_DELIVERY_ENABLED", "false").lower() != "false"
+                or not os.getenv("RESEND_API_KEY")
+                or not store.has_bundle()):
+            return jsonify({"error": "isolated_simulator_unavailable"}), 503
+        # Daily idempotency prevents an admin page double-click sending twice.
+        today = utcnow().strftime("%Y-%m-%d")
+        message = {
+            "from": os.getenv("NIJA_COURSE_SENDER",
+                              "NIJA AI Trading <support@nijaaitrading.com>"),
+            "to": ["delivered@resend.dev"],
+            "subject": "NIJA isolated course sender check (SIMULATED)",
+            "text": ("NIJA sandbox-only email transport check. No payment, customer, "
+                     "purchase entitlement or course access link was created.")
+        }
+        try:
+            response = requests.post("https://api.resend.com/emails",
+                json=message, headers={
+                    "Authorization": "Bearer " + os.environ["RESEND_API_KEY"],
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": "nija-course-simulator-v1-" + today
+                }, timeout=8)
+            if response.status_code not in (200, 201) or not response.json().get("id"):
+                return jsonify({"error": "simulated_provider_not_accepted"}), 503
+        except (requests.RequestException, ValueError):
+            log.warning("Simulated course sender check failed without customer data")
+            return jsonify({"error": "simulated_sender_unavailable"}), 503
+        return jsonify({"provider_accepted": True, "simulated": True,
+                        "email_sent_to_real_customer": False,
+                        "course_access_granted": False, "test_mode": True})
+
     @portal.post("/admin/import")
     def admin_import():
         if not _admin_allowed():
@@ -567,7 +798,12 @@ def register_course_portal(app, billing_store):
             digest = validate_bundle(payload)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 422
-        store.import_bundle(payload, digest)
+        try:
+            store.import_bundle(payload, digest)
+        except (SQLAlchemyError, RuntimeError, ValueError) as exc:
+            # Never echo database connection strings, ZIP content or auth tokens.
+            log.error("Protected package storage unavailable: %s", type(exc).__name__)
+            return jsonify({"error": "course_storage_unavailable"}), 503
         # Flush pre-existing paid orders after the private package is available.
         # Failed emails remain durable for subsequent admin retry or buyer recovery.
         attempted = 0
@@ -603,6 +839,7 @@ def register_course_portal(app, billing_store):
             return jsonify({"error": "stripe_history_unavailable"}), 503
         history = {"paid": 0, "pending_or_unpaid": 0, "already_reconciled": 0,
                    "paid_without_entitlement": 0}
+        missing_ids = []
         ledger = current_app.config["COURSE_LEDGER"]
         for session in data:
             sid = session.get("id")
@@ -614,10 +851,81 @@ def register_course_portal(app, billing_store):
                     history["already_reconciled"] += 1
                 else:
                     history["paid_without_entitlement"] += 1
+                    if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").lower() == "true"
+                            and os.getenv("NIJA_COURSE_DELIVERY_ENABLED", "false").lower() != "true"
+                            and session.get("livemode") is False
+                            and session.get("payment_link") == link
+                            and isinstance(sid, str) and sid.startswith("cs_test_")):
+                        missing_ids.append(sid)
             else:
                 history["pending_or_unpaid"] += 1
         return jsonify({"counts": history, "has_more": bool(sessions.get("has_more")),
+                        "missing_test_session_ids": missing_ids
+                        if not bool(sessions.get("has_more")) else [],
                         "dry_run": True})
+
+    @portal.post("/admin/reconcile-test-missing")
+    def reconcile_test_missing():
+        """Only the two browser-previewed, independently paid TEST sessions may be repaired.
+
+        This route cannot send email, enqueue access links, or operate in production.
+        Existing Stripe server reconciliation validates checkout price/product, paid
+        amount, charge status, refunds, disputes, and sandbox identity.
+        """
+        if not _admin_allowed():
+            return jsonify({"error": "unauthorized"}), 403
+        identity = expected_course_identity()
+        if (os.getenv("NIJA_COURSE_SANDBOX_MODE", "").lower() != "true"
+                or not identity or identity[3] is not False
+                or os.getenv("NIJA_COURSE_DELIVERY_ENABLED", "false").lower() != "false"
+                or not store.has_bundle()):
+            return jsonify({"error": "isolated_test_reconciliation_not_ready"}), 503
+
+        body = request.get_json(silent=True)
+        wanted = body.get("expected_session_ids") if isinstance(body, dict) else None
+        if (not isinstance(wanted, list) or len(wanted) != 2
+                or len(set(x for x in wanted if isinstance(x, str))) != 2
+                or any(not isinstance(x, str) or not x.startswith("cs_test_")
+                       or len(x) > 128 for x in wanted)):
+            return jsonify({"error": "exactly_two_test_sessions_required"}), 400
+        try:
+            stripe = _stripe()
+            listing = stripe.checkout.Session.list(payment_link=identity[0], limit=100)
+            if listing.get("has_more"):
+                return jsonify({"error": "test_history_incomplete"}), 409
+            ledger = current_app.config["COURSE_LEDGER"]
+            missing = []
+            for session in listing.get("data", []):
+                sid = session.get("id")
+                if (session.get("payment_link") != identity[0]
+                        or session.get("livemode") is not False
+                        or not isinstance(sid, str) or not sid.startswith("cs_test_")
+                        or session.get("status") != "complete"
+                        or session.get("payment_status") != "paid"):
+                    continue
+                row = ledger.get(sid)
+                if not row or not row["granted"] or row["status"] != "paid":
+                    missing.append(sid)
+            if len(missing) != 2 or set(missing) != set(wanted):
+                return jsonify({"error": "test_order_preview_changed"}), 409
+            repaired = 0
+            for sid in sorted(missing):
+                outcome = reconcile_session(stripe, ledger, sid)
+                if not outcome or outcome.get("paid") is not True:
+                    return jsonify({"error": "stripe_payment_not_verified",
+                                    "reconciled": repaired}), 409
+                row = ledger.get(sid)
+                if not row or row["status"] != "paid" or not row["granted"]:
+                    return jsonify({"error": "test_entitlement_not_persisted",
+                                    "reconciled": repaired}), 503
+                repaired += 1
+            # No call to on_course_payment: no outbox queue, email, or access links.
+            return jsonify({"reconciled": repaired, "email_sent": False,
+                            "delivery_enabled": False, "test_mode": True})
+        except Exception as exc:
+            # Keep credentials, buyer addresses and provider failure detail private.
+            log.error("Test reconciliation unavailable: %s", type(exc).__name__)
+            return jsonify({"error": "test_reconciliation_unavailable"}), 503
 
     @portal.post("/admin/reconcile")
     def admin_reconcile():
@@ -650,7 +958,9 @@ def register_course_portal(app, billing_store):
         return jsonify({"service": "nija-course", "ready": bool(_email_ready(current_app)),
             "access_ready": bool(_enabled(current_app)),
             "assets_present": store.has_bundle(), "email_configured": bool(os.getenv("RESEND_API_KEY")),
-            "access_key_configured": bool(_signer()), "checkout_access_enabled": False}), 200
+            "access_key_configured": bool(_signer()), "checkout_access_enabled": False,
+            "simulator_recipient_only":
+                os.getenv("NIJA_COURSE_SANDBOX_MODE", "").strip().lower() == "true"}), 200
 
     app.register_blueprint(portal)
     return store

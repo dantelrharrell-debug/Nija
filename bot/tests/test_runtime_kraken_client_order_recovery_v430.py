@@ -6,6 +6,13 @@ from types import SimpleNamespace
 import pytest
 
 from bot import runtime_kraken_client_order_recovery_v430_patch as v430
+from bot.kraken_submission_journal import (
+    KrakenSubmissionJournal,
+    SubmissionDenied,
+    initialize_journal,
+    query_direct_order,
+)
+from bot.runtime_correlation import runtime_correlation_scope
 
 
 class _Broker:
@@ -75,6 +82,50 @@ def test_lost_addorder_response_retains_client_id_for_read_only_recovery(state_p
     assert entry["account"] == "platform"
     assert entry["pair"] == "XETHZUSD"
     assert entry["side"] == "buy"
+
+
+@pytest.mark.parametrize("response_lost", [False, True])
+def test_direct_journal_and_recovery_wrapper_share_one_client_id(state_path, monkeypatch, response_lost):
+    journal_path = state_path.with_suffix(".db")
+    initialize_journal(journal_path, "platform:kraken")
+    monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal_path))
+    journal = KrakenSubmissionJournal(journal_path, "platform:kraken")
+    sent = []
+    seeded = []
+    monkeypatch.setattr(v430, "_seed_txids", lambda txids, **meta: seeded.append(txids) or len(txids))
+
+    def transport(method, params):
+        assert method == "AddOrder"
+        assert journal.unresolved_count() == 1
+        sent.append(params["cl_ord_id"])
+        if response_lost:
+            raise TimeoutError("response lost")
+        return {"error": [], "result": {"txid": ["OID-DIRECT"]}}
+
+    class DirectBroker:
+        broker_type = "kraken"
+        account_type = "platform"
+        user_id = None
+        api = SimpleNamespace(query_private=transport)
+
+        def _kraken_private_call(self, method, params):
+            return query_direct_order(self, method, params, assert_deadline=lambda _method: None)
+
+    assert v430._patch_class(DirectBroker)
+    broker = DirectBroker()
+    params = {"pair": "XETHZUSD", "type": "buy"}
+    with runtime_correlation_scope(intent_id="intent-1"):
+        if response_lost:
+            with pytest.raises(TimeoutError, match="response lost"):
+                broker._kraken_private_call("AddOrder", params)
+        else:
+            assert broker._kraken_private_call("AddOrder", params)["result"]["txid"] == ["OID-DIRECT"]
+        with pytest.raises(SubmissionDenied, match="already reserved"):
+            broker._kraken_private_call("AddOrder", params)
+
+    assert sent == [journal._client_order_id("intent-1")]
+    assert seeded == ([] if response_lost else [("OID-DIRECT",)])
+    assert not state_path.exists()
 
 
 def test_existing_client_id_is_never_replaced_or_registered(state_path):

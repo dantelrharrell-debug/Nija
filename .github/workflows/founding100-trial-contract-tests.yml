@@ -1,0 +1,52 @@
+name: Founding 100 isolated trial contract
+
+on:
+  pull_request:
+    paths:
+      - 'founding_trial_contract.py'
+      - 'founding_trial_ledger.py'
+      - 'founding_trial_evidence.py'
+      - 'founding_trial_billing_gate.py'
+      - 'founding_trial_sandbox_workflow.py'
+      - 'founding_trial_sandbox_receipt.py'
+      - 'founding_trial_stripe_test_readback.py'
+      - 'tests/test_founding_trial_contract.py'
+      - 'tests/test_founding_trial_ledger.py'
+      - 'tests/test_founding_trial_evidence.py'
+      - 'tests/test_founding_trial_billing_gate.py'
+      - 'tests/test_founding_trial_sandbox_workflow.py'
+      - 'tests/test_founding_trial_sandbox_receipt.py'
+      - 'tests/test_founding_trial_stripe_test_readback.py'
+      - '.github/workflows/founding100-trial-contract-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated test runner
+        run: python -m pip install pytest
+      - name: Compile standalone files
+        run: python -m py_compile founding_trial_contract.py founding_trial_ledger.py founding_trial_evidence.py founding_trial_billing_gate.py founding_trial_sandbox_workflow.py founding_trial_sandbox_receipt.py founding_trial_stripe_test_readback.py
+      - name: Run synthetic trial tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -m pytest -q \
+            tests/test_founding_trial_contract.py \
+            tests/test_founding_trial_ledger.py \
+            tests/test_founding_trial_evidence.py \
+            tests/test_founding_trial_billing_gate.py \
+            tests/test_founding_trial_sandbox_workflow.py \
+            tests/test_founding_trial_sandbox_receipt.py \
+            tests/test_founding_trial_stripe_test_readback.py

@@ -76,13 +76,13 @@ logger = logging.getLogger("nija.reinvest_meta_learner")
 # ─────────────────────────────────────────────────────────────────────────────
 
 EMA_DECAY: float = 0.88
-"""EMA smoothing factor — higher keeps older data longer."""
+# """EMA smoothing factor — higher keeps older data longer."""
 
 MIN_TRADES_FOR_CONFIDENCE: int = 5
-"""Number of observations before confidence starts saturating."""
+# """Number of observations before confidence starts saturating."""
 
 CONFIDENCE_SATURATION_TRADES: int = 30
-"""Number of observations at which confidence reaches ~1.0."""
+# """Number of observations at which confidence reaches ~1.0."""
 
 #: Condition quality multiplier bounds.  The multiplier is applied to the
 #: effective recycling pool so allocations are scaled up/down by condition.

@@ -1,0 +1,28 @@
+# PLAN ONLY. Intended exclusively for Render workspace "Nija"
+# (tea-d3qjmmc9c44c73cqvpug), NOT Nija_Trading_Bot or Nija Ai Trading Live.
+# Dedicated 12-round EDUCATION staging; never adopt another NIJA resource.
+# Render billing suspension and exact recurring cost approval must be resolved
+# BEFORE any Blueprint sync is approved. autoSync must remain false.
+# Even if provisioned later, healthz is holding-only: no Checkout/API/game active.
+services:
+  - type: web
+    name: nija-tiq12-education-holding
+    runtime: docker
+    plan: starter
+    region: oregon
+    numInstances: 1
+    autoDeployTrigger: off
+    dockerfilePath: ./web/trading-challenge/Dockerfile.tiq12-education
+    dockerContext: ./web/trading-challenge
+    healthCheckPath: /healthz
+    disk:
+      name: nija-tiq12-private-staging
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NIJA_TIQ12_ENABLED
+        value: "false"
+      - key: NIJA_TIQ12_MODE
+        value: holding
+      - key: NODE_ENV
+        value: production

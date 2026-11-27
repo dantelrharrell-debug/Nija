@@ -9594,6 +9594,9 @@ class KrakenBroker(BaseBroker):
                     if method == "GetApiKeyInfo":
                         from bot.kraken_identity_read_timing import query_identity_with_timing
                         result = query_identity_with_timing(self.api, params)
+                    elif method in {"AddOrder", "AddOrderBatch"}:
+                        from bot.kraken_submission_journal import query_direct_order
+                        result = query_direct_order(self, method, params, assert_deadline=assert_mutation_deadline)
                     else:
                         result = self.api.query_private(method, params)
             finally:

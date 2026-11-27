@@ -94,7 +94,60 @@ def test_cursor_budget_never_falls_back_to_offset():
 
     with pytest.raises(IncompleteHistory, match="page limit"):
         collect_history(read, account_scope="platform:kraken", use_cursor=True, max_pages=1)
-    assert calls == [{"with_cursor": True}]
+    assert calls == [{"with_cursor": True, "consolidate_taker": False}]
+
+
+@pytest.mark.parametrize("endpoint", FIELDS)
+@pytest.mark.parametrize("terminal_rows", [0, 3])
+def test_short_continuation_can_omit_exhausted_cursor(endpoint, terminal_rows):
+    """Production terminal shape completes both passes, without certifying identity."""
+    calls = []
+    originals = []
+
+    def read(name, params):
+        calls.append((name, dict(params)))
+        row = page(name, params)
+        if name == endpoint and "cursor" in params:
+            del row["result"]["cursor"]
+            row["result"][FIELDS[name]] = {f"terminal-{i}": {"fee": "1"} for i in range(terminal_rows)}
+            originals.append(row)
+        return row
+
+    report = collect_history(read, account_scope="platform:kraken", use_cursor=True, max_pages=2)
+    assert len(calls) == 12
+    assert len(report["history"][FIELDS[endpoint]]) == 1 + terminal_rows
+    assert all("cursor" not in row["result"] for row in originals)
+    assert report["repeat_read_consistent"] is True
+    assert report["trading_authorized"] is False
+    assert report["authenticated_identity_independently_verified"] is False
+    assert all("ofs" not in params for _, params in calls)
+
+
+@pytest.mark.parametrize("case", ["first_page", "full_page", "null", "unknown_field", "changed_pass"])
+@pytest.mark.parametrize("endpoint", FIELDS)
+def test_omitted_cursor_does_not_hide_unsupported_or_inconsistent_history(endpoint, case):
+    """Only an absent exhausted cursor on a short proven continuation is accepted."""
+    calls = 0
+
+    def read(name, params):
+        nonlocal calls
+        calls += 1
+        row = page(name, params)
+        if name == endpoint:
+            if case == "first_page" or "cursor" in params:
+                del row["result"]["cursor"]
+                if case == "full_page":
+                    row["result"][FIELDS[name]] = {f"terminal-{i}": {} for i in range(50)}
+                elif case == "null":
+                    row["result"]["cursor"] = None
+                elif case == "unknown_field":
+                    row["result"]["cursor"] = {"previous": "unrecognized"}
+                elif case == "changed_pass" and calls > 6:
+                    row["result"][FIELDS[name]] = {"changed": {}}
+        return row
+
+    with pytest.raises(IncompleteHistory):
+        collect_history(read, account_scope="platform:kraken", use_cursor=True, max_pages=2)
 
 
 @pytest.mark.parametrize("cursor", [True, False, "true", 1])
@@ -115,7 +168,10 @@ def test_private_request_selects_cursor_explicitly_without_replay(tmp_path, curs
             return {"error": [], "result": {"open": {}}}
         if cursor is True:
             return page(endpoint, params)
-        assert set(params) == {"ofs"}
+        assert set(params) == {
+            "TradesHistory": {"ofs", "consolidate_taker", "ledgers"},
+            "ClosedOrders": {"ofs", "trades", "consolidate_taker"}, "Ledgers": {"ofs"},
+        }[endpoint]
         return {"error": [], "result": {FIELDS[endpoint]: {}, "count": 0}}
 
     broker = SimpleNamespace(broker_type="kraken", account_type="platform", user_id=None,
@@ -187,7 +243,7 @@ def test_recovery_transport_mode_diagnostic_is_fixed_label_without_gateway_addre
     from bot.kraken_live_history_recovery import _transport_mode_label
 
     assert _transport_mode_label(SimpleNamespace(_gateway_url="", _gateway_only_mode=False)) == "direct_krakenex_configured"
-    secret_url = "https://private.example/path?token=never-log"
+    secret_url = "https://private.example/path?token=never-log"  # pragma: allowlist secret -- synthetic URL redaction fixture
     label = _transport_mode_label(SimpleNamespace(_gateway_url=secret_url, _gateway_only_mode=True))
     assert label == "gateway_configured"
     assert "private" not in label and "token" not in label
