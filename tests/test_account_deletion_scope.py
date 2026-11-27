@@ -273,7 +273,7 @@ def test_partial_cleanup_never_claims_success_or_logs_raw_error(isolated_api, mo
     assert all(record.exc_info is None for record in records)
 
 
-def test_repeat_request_preserves_existing_missing_account_status(isolated_api):
+def test_repeat_request_denies_deleted_jwt_subject(isolated_api):
     api = isolated_api
     assert _delete(api).status_code == 200
     response = _delete(api)
