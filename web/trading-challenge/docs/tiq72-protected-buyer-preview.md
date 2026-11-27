@@ -19,3 +19,7 @@ Identify and test the existing trusted account issuer against the canonical NIJA
 Run a fresh authorized browser TEST with a genuine eligible test account, then reopen the correct report from another authenticated browser and deny anonymous, ineligible, revoked and wrong-owner access. Verify signed Stripe delivery, unpaid and canceled returns, refund and dispute revocation, duplicate delivery and restart persistence. The internal signed payment and refund rehearsal is good backend evidence but does not replace this customer-facing browser test.
 
 A later production review must separately certify the live adapter, ledger, webhook, buyer issuer, shared rate limits, exact build/security checks, rollout and rollback. Do not flip the TEST bridge or legacy five-decision checkout into live operation.
+
+## Reviewed SEO source drift
+
+The standalone CI check failed against the old SEO pin before this preview work: all 56 inherited pinned files were checked individually, and only `src/lib/seo.js` differed. The pinned bytes match production commit `b582df3e`. The current source changes exactly one `/affiliate` metadata entry to remove the discontinued ClickBank 30% offer and state that course affiliate enrollment is unavailable. Preserve the corrected text. Update only the active standalone pin for those reviewed bytes; the original export manifest and all other source hashes and assertions remain unchanged. See [the failing check](https://github.com/dantelrharrell-debug/Nija/actions/runs/46069797514/job/140743741467).
