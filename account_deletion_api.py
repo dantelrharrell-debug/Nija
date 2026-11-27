@@ -1,13 +1,14 @@
 """Authenticated NIJA account-deletion API.
 
-Deletion is fail-closed and covers the active NIJA stores currently used by the
-mobile stack: authentication/session data, persistent encrypted broker vault,
-legacy in-memory broker credentials, mobile push registrations, permission
-state, runtime user cache, and per-user trading-rule files.
+Deletion covers the active stores explicitly called below: the current mobile
+authentication database, encrypted broker vault, legacy in-memory broker
+credentials, mobile push registrations, permission state, runtime user cache,
+and per-user trading-rule files. A failure never returns a success response.
 
-Third-party brokerage/Apple/Google accounts are never represented as deleted by
-this endpoint. Any future legally-required retention must be defined by policy
-and counsel before enabling a retention exception.
+Other NIJA stores, connected providers and backups are outside this endpoint's
+coverage. Successful active-store cleanup is not system-wide erasure or proof
+of a retention schedule. Retention exceptions require separately reviewed
+policy and implementation; this module does not add any exception or cleanup.
 """
 
 from __future__ import annotations
@@ -30,6 +31,31 @@ from bot.user_rules_engine import get_user_rules_engine
 logger = logging.getLogger("nija.account_deletion")
 
 account_deletion_api = Blueprint("account_deletion_api", __name__)
+
+_NOT_COVERED = (
+    "website submissions, consent history, lead queues, CRM and marketing records",
+    "billing, purchase, course, education-progress and trading-history records",
+    "the separate member broker vault and other authentication-token or two-factor stores",
+    "support records, application/security logs, exports and uploaded files",
+    "backups and records or copies held by connected service providers",
+)
+
+
+def _scope_disclosures() -> dict[str, object]:
+    """Describe the fixed cleanup boundary without implying broader erasure."""
+    return {
+        "deletion_scope": "covered_active_stores_only",
+        "not_covered": list(_NOT_COVERED),
+        "retention_notice": (
+            "Records outside the covered active stores may remain. This request does not confirm "
+            "their deletion, a retention period, or a legal reason for retaining them."
+        ),
+        "privacy_follow_up": (
+            "For other NIJA records and copies held by its service providers, contact support@nijaaitrading.com "
+            "to request a separate review. No separate privacy request is submitted automatically. "
+            "This action does not cancel a separately managed subscription."
+        ),
+    }
 
 
 def _delete_auth_database_records(user_id: str) -> bool:
@@ -106,22 +132,21 @@ def deletion_requirements():
         "user_id": request.user_id,
         "confirmation_phrase": "DELETE MY NIJA ACCOUNT",
         "effects": [
-            "NIJA account access and active sessions will be removed",
-            "NIJA-held broker API credentials will be removed",
-            "registered mobile push tokens will be removed",
-            "NIJA trading-rule and permission state will be removed",
-            "known NIJA authentication/login records will be removed",
+            "account records and sessions in this service's authentication store will be removed",
+            "broker credentials in this service's covered vault and legacy credential cache will be removed",
+            "registered mobile push tokens in this service's device store will be removed",
+            "trading-rule files and permissions in this service's runtime cache will be removed",
+            "login-history records in this service's authentication store will be removed",
         ],
         "not_deleted": [
             "accounts held directly with brokerages or exchanges",
             "Apple or Google accounts",
             "third-party records those providers control",
         ],
-        "retention_notice": (
-            "NIJA does not retain an account-linked record by default after this deletion path. "
-            "Any future legally required retention exception must be separately documented and implemented."
+        **_scope_disclosures(),
+        "warning": (
+            "Account deletion is permanent. Stop live trading and review open broker positions before proceeding."
         ),
-        "warning": "Account deletion is permanent. Stop live trading and review open broker positions before proceeding.",
     })
 
 
@@ -140,20 +165,25 @@ def delete_account():
     if not user_db.get_user(user_id):
         return jsonify({"error": "Account is no longer available"}), 404
 
+    stage = "persistent_vault"
     try:
         vault_brokers = _delete_persistent_vault_data(user_id)
+        stage = "legacy_credentials"
         legacy_brokers = _delete_legacy_broker_credentials(user_id)
+        stage = "mobile_devices"
         devices_deleted = get_mobile_device_store().delete_user_devices(user_id)
+        stage = "user_rules"
         rules_deleted = _delete_user_rules(user_id)
+        stage = "runtime_state"
         _delete_runtime_state(user_id)
+        stage = "authentication_store"
         auth_deleted = _delete_auth_database_records(user_id)
         if not auth_deleted:
             raise RuntimeError("Primary account record was not deleted")
 
         brokers_deleted = sorted(set(vault_brokers + legacy_brokers))
         logger.warning(
-            "ACCOUNT_DELETED user_id=%s brokers=%s devices=%s rules=%s at=%s",
-            user_id,
+            "ACCOUNT_DELETED scope=covered_active_stores_only brokers=%s devices=%s rules=%s at=%s",
             len(brokers_deleted),
             devices_deleted,
             rules_deleted,
@@ -165,18 +195,24 @@ def delete_account():
             "broker_credentials_removed": brokers_deleted,
             "mobile_devices_removed": devices_deleted,
             "trading_rules_removed": rules_deleted,
+            **_scope_disclosures(),
             "message": (
-                "Your NIJA-controlled account data was removed from the active stores covered by this deletion service. "
-                "Third-party brokerage, Apple, and Google accounts were not deleted."
+                "Your account records, sessions, broker credentials, mobile push registrations and trading-rule "
+                "state were removed only from the active stores covered by this deletion service. "
+                "Other NIJA records, the separate member broker vault, provider copies and backups are outside "
+                "this request. Accounts held directly with brokerages, Apple or Google were not deleted."
             ),
         })
-    except Exception:
-        logger.exception("Account deletion failed for user %s", user_id)
+    except Exception as exc:
+        # Stage and exception category support diagnosis without copying a user
+        # identifier, credential, path or raw provider exception into this log.
+        logger.error("ACCOUNT_DELETION_FAILED stage=%s error_type=%s", stage, type(exc).__name__)
         return jsonify({
-            "error": "Account deletion failed safely",
+            "error": "Account deletion could not be confirmed",
             "message": (
-                "A complete deletion could not be confirmed. Access remains fail-closed where data has already been removed; "
-                "contact NIJA support before retrying."
+                "Complete cleanup could not be confirmed. Cleanup may be partial: some covered records "
+                "may already have been removed. Contact NIJA support before retrying. "
+                "This response does not confirm that account access has been revoked."
             ),
         }), 500
 
