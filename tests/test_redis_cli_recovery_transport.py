@@ -30,7 +30,7 @@ class RedisCliRecoveryTransportTests(unittest.TestCase):
         code, out, err, run = self.invoke("rediss://tester:d%75mmy@redis.example:6380/2", result)
         self.assertEqual((code, out, err), (0, "PONG\n", ""))
         cmd = run.call_args.args[0]
-        self.assertEqual(cmd, ["redis-cli", "-h", "redis.example", "-p", "6380",
+        self.assertEqual(cmd, ["redis-cli", "-e", "-h", "redis.example", "-p", "6380",
                                "-n", "2", "--user", "tester", "--tls", "--sni",
                                "redis.example", "PING"])
         self.assertEqual(run.call_args.kwargs["env"]["REDISCLI_AUTH"], "dummy")
