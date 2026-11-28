@@ -140,3 +140,44 @@ test("checkout report access follows only the designated operator's active TEST 
   await manual.recordDecision({},{buyerId:active.ownerId,decision:"revoke"});
   assert.equal((await invoke(handler)).status,401);
 });
+
+const bootstrap={path:"/sandbox/checkout/session",headers:{"sec-fetch-site":"same-origin",accept:"application/json"}};
+test("eligible same-origin browser can obtain the checkout CSRF without exposing identity",async()=>{
+  const f=fixture({verifyBuyer:async()=>({...active,accessToken:"upstream fixture must not escape"})});
+  const r=await invoke(hand(f),bootstrap);
+  assert.equal(r.status,200);
+  assert.deepEqual(r.body,{csrfToken:csrf});
+  assert.equal(r.headers["Cache-Control"],"private, no-store");
+  assert.equal(r.headers["Referrer-Policy"],"no-referrer");
+  assert.equal(f.reads,0);
+  assert.equal(f.created,undefined);
+  const checkout=await invoke(hand(f),{path:"/sandbox/checkout",method:"POST",
+    headers:{origin,[CSRF_HEADER]:r.body.csrfToken},
+    body:{attemptKey:"synthetic-bootstrap-attempt",adultAttested:true,canonicalRun}});
+  assert.equal(checkout.status,200);
+});
+
+test("checkout session bootstrap refuses malformed and cross-origin requests before identity",async()=>{
+  const f=fixture({verifyBuyer:()=>assert.fail("unexpected identity lookup"),
+    takeRateLimit:()=>assert.fail("unexpected limiter lookup")});
+  for(const headers of [{},{accept:"application/json","sec-fetch-site":"same-site"},
+    {accept:"application/json","sec-fetch-site":"same-origin",origin:"https://unrelated.invalid"},
+    {accept:"text/html","sec-fetch-site":"same-origin"}])
+    assert.equal((await invoke(hand(f),{...bootstrap,headers})).status,403);
+  assert.equal((await invoke(hand(f),{...bootstrap,method:"POST"})).status,405);
+  assert.equal((await invoke(hand(f),{...bootstrap,path:bootstrap.path+"?subject=spoof"})).status,400);
+});
+
+test("checkout session bootstrap is rate limited and rejects revoked or ineligible state",async()=>{
+  let limiterLane;
+  const denied=fixture({takeRateLimit:async(_request,lane)=>{limiterLane=lane;return false;},
+    verifyBuyer:()=>assert.fail("unexpected identity lookup")});
+  assert.equal((await invoke(hand(denied),bootstrap)).status,429);
+  assert.equal(limiterLane,"authenticated_commerce");
+  for(const value of [null,{...active,active:false},{...active,adultVerified:false},
+    {...active,csrfToken:[csrf]},{...active,ownerId:[active.ownerId]}]){
+    const f=fixture({verifyBuyer:async()=>value});
+    assert.equal((await invoke(hand(f),bootstrap)).status,401);
+  }
+  assert.equal((await invoke(createTiq72CustomerTestBridge(),bootstrap)).status,503);
+});
