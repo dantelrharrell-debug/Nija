@@ -432,7 +432,7 @@
             const adoption = data.adoption;
             const adoptionCard = document.getElementById('adoption-card');
             const adoptionStatus = document.getElementById('adoption-status');
-            
+
             if (adoption.status === 'failed') {
                 adoptionCard.className = 'card failed';
                 adoptionStatus.className = 'status-indicator failed';
@@ -469,7 +469,7 @@
             const brokerHealth = data.broker_health;
             const brokerCard = document.getElementById('broker-card');
             const brokerStatus = document.getElementById('broker-health-status');
-            
+
             if (brokerHealth.status === 'failed') {
                 brokerCard.className = 'card failed';
                 brokerStatus.className = 'status-indicator failed';
@@ -491,7 +491,7 @@
             // Show broker status list
             const brokerStatusList = document.getElementById('broker-status-list');
             brokerStatusList.innerHTML = '';
-            
+
             if (brokerHealth.broker_status && Object.keys(brokerHealth.broker_status).length > 0) {
                 Object.entries(brokerHealth.broker_status).forEach(([broker, status]) => {
                     const item = document.createElement('div');
@@ -510,7 +510,7 @@
             const threads = data.trading_threads;
             const threadsCard = document.getElementById('threads-card');
             const threadStatus = document.getElementById('thread-status');
-            
+
             if (threads.status === 'halted') {
                 threadsCard.className = 'card failed';
                 threadStatus.className = 'status-indicator halted';
@@ -527,7 +527,7 @@
             // Show thread status list
             const threadStatusList = document.getElementById('thread-status-list');
             threadStatusList.innerHTML = '';
-            
+
             if (threads.thread_status && Object.keys(threads.thread_status).length > 0) {
                 Object.entries(threads.thread_status).forEach(([broker, status]) => {
                     const item = document.createElement('div');
@@ -545,7 +545,7 @@
             // Update overall status banner
             const overallStatus = document.getElementById('overall-status');
             const hasFailures = adoption.status === 'failed' || brokerHealth.status === 'failed' || threads.status === 'halted';
-            
+
             if (hasFailures) {
                 overallStatus.className = 'alert-banner failed';
                 overallStatus.innerHTML = '<span style="font-size: 2em;">🚨</span><span>CRITICAL FAILURES DETECTED - IMMEDIATE ATTENTION REQUIRED</span>';
