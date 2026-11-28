@@ -66,3 +66,27 @@ def test_nonledger_sqlite_fails_closed(tmp_path):
         conn.execute("CREATE TABLE unrelated (id INT)")
     with pytest.raises(RuntimeError, match="missing required ledger tables"):
         inspect_ledger(source)
+
+
+
+def test_ledger_counts_share_one_wal_snapshot(tmp_path, monkeypatch):
+    from scripts import nija_ledger_evidence_v438 as evidence
+
+    source = tmp_path / "ledger.db"
+    _fixture(source)
+    count_tables = evidence._table_counts
+
+    with sqlite3.connect(source) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+
+        def count_then_commit(reader):
+            counts = count_tables(reader)
+            writer.execute("DELETE FROM pending_kraken_closes")
+            writer.commit()
+            return counts
+
+        monkeypatch.setattr(evidence, "_table_counts", count_then_commit)
+        report = inspect_ledger(source)
+        assert report["tables"]["pending_kraken_closes"] == 1
+        assert report["unmatched_kraken_closes"] == 1
+        assert writer.execute("SELECT COUNT(*) FROM pending_kraken_closes").fetchone() == (0,)
