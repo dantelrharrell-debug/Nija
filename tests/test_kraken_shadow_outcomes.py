@@ -180,6 +180,26 @@ class ShadowOutcomesTest(unittest.TestCase):
             self.assertIsNone(metrics["net_win_fraction"])
             self.assertIsNone(metrics["mean_net_pnl_usd_per_closed_lot"])
 
+    def test_strategy_rollup_uses_observed_lots_without_ranking_or_imputing(self):
+        from bot.kraken_offline_strategy_review import _observed_performance_by_strategy
+
+        rows = [
+            {"strategy": "z", "economics": None},
+            {"strategy": "a", "economics": {
+                "gross_pnl_usd": "3", "execution_cost_usd": "1", "closed_at_epoch": 100,
+            }},
+            {"strategy": "a", "economics": {
+                "gross_pnl_usd": "0", "execution_cost_usd": "1", "closed_at_epoch": 101,
+            }},
+        ]
+        a, z = _observed_performance_by_strategy(rows)
+        self.assertEqual((a["admitted_strategy_label"], z["admitted_strategy_label"]), ("a", "z"))
+        self.assertEqual(a["sample_count"], 2)
+        self.assertEqual(a["observed_metrics"]["net_realized_pnl_usd"], "1")
+        self.assertEqual(a["observed_metrics"]["realized_drawdown_usd"], "1")
+        self.assertEqual(z["observed_metrics"]["status"], "unavailable")
+        self.assertIsNone(z["observed_metrics"]["net_realized_pnl_usd"])
+
     def test_offline_cutoff_keeps_future_and_same_second_lots_out_of_the_wrong_sample(self):
         from bot.kraken_offline_strategy_review import evaluate
         from bot.kraken_shadow_outcomes import CloseEconomics, OwnerDecision
@@ -202,6 +222,9 @@ class ShadowOutcomesTest(unittest.TestCase):
         self.assertEqual(chronology["status"], "separate_samples")
         self.assertEqual(chronology["holdout_sample_count"], 1)
         self.assertEqual(chronology["observed_holdout_metrics"]["net_realized_pnl_usd"], "20")
+        grouped = chronology["observed_holdout_performance_by_strategy"]
+        self.assertEqual(sum(group["sample_count"] for group in grouped), 1)
+        self.assertEqual(grouped[0]["observed_metrics"]["net_realized_pnl_usd"], "20")
         self.assertEqual(chronology["candidate_comparison_status"], "not_evaluated")
         self.assertIsNone(chronology["candidate_comparison"])
         self.assertFalse(report["authorizes_orders"])

@@ -89,6 +89,21 @@ def _observed_cost_by_regime(rows: list[dict]) -> list[dict]:
     ]
 
 
+def _observed_performance_by_strategy(rows: list[dict]) -> list[dict]:
+    # These labels are admitted evidence, not a recommendation or causal comparison.
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["strategy"], []).append(row)
+    return [
+        {
+            "admitted_strategy_label": label,
+            "sample_count": len(groups[label]),
+            "observed_metrics": _realized_metrics(groups[label]),
+        }
+        for label in sorted(groups)
+    ]
+
+
 def evaluate(
     inbox: KrakenShadowOutcomes, scope: str, *, training_through_epoch: int | None = None,
 ) -> dict:
@@ -116,6 +131,7 @@ def evaluate(
         "lots_without_economics": len(rows) - len(dated),
         "observed_holdout_metrics": None,
         "observed_holdout_cost_by_regime": None,
+        "observed_holdout_performance_by_strategy": None,
         "slippage_status": "unavailable_no_benchmark_evidence",
         "candidate_comparison_status": "not_evaluated",
         "candidate_comparison": None,
@@ -136,6 +152,9 @@ def evaluate(
             holdout_sample_count=len(holdout),
             observed_holdout_metrics=_realized_metrics(holdout) if holdout else None,
             observed_holdout_cost_by_regime=_observed_cost_by_regime(holdout) if holdout else None,
+            observed_holdout_performance_by_strategy=(
+                _observed_performance_by_strategy(holdout) if holdout else None
+            ),
         )
         recommendation_basis = "training_samples_only"
     digest = _evidence_digest(evidence)
