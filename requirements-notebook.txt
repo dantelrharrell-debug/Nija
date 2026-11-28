@@ -1,9 +1,11 @@
 # Optional notebook and debugger tools.
 # For NIJA notebooks install with: python -m pip install -r requirements.txt -r requirements-notebook.txt
 asttokens==3.0.1
+bleach==6.4.0
 comm==0.2.3
 debugpy==1.8.17
 decorator==5.2.1
+defusedxml==0.7.1
 executing==2.2.1
 ipykernel==7.1.0
 ipython==9.7.0
@@ -21,6 +23,7 @@ jupyterlab_git==0.54.0
 jupyterlab_pygments==0.3.0
 jupyterlab_server==2.28.0
 matplotlib-inline==0.2.1
+mistune==3.3.4
 nbclient==0.10.2
 nbconvert==7.17.2
 nbdime==4.0.2
@@ -33,6 +36,7 @@ pexpect==4.9.0
 prompt_toolkit==3.0.52
 ptyprocess==0.7.0
 pure_eval==0.2.3
+Pygments==2.20.0
 pyzmq==27.1.0
 Send2Trash==1.8.3
 stack-data==0.6.3

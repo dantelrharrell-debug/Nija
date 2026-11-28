@@ -118,12 +118,12 @@ def test_all_ci_requirement_files_are_supported():
         assert checker.required_packages(ROOT / filename)
 
 
-def test_notebook_git_dependencies_remain_pinned_and_scanned_outside_runtime():
+def test_notebook_dependencies_remain_pinned_and_scanned_outside_runtime():
     runtime = checker.required_packages(ROOT / "requirements.txt")
     notebooks = checker.required_packages(ROOT / "requirements-notebook.txt")
-    notebook_git_packages = {"gitpython", "gitdb", "smmap"}
-    assert notebook_git_packages.isdisjoint(runtime)
-    assert notebook_git_packages <= notebooks.keys()
+    notebook_packages = {"gitpython", "gitdb", "smmap", "bleach", "defusedxml", "mistune", "pygments"}
+    assert notebook_packages.isdisjoint(runtime)
+    assert notebook_packages <= notebooks.keys()
 
 
 def test_workflow_preserves_status_and_requires_coverage():
