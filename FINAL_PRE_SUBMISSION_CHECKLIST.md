@@ -82,9 +82,10 @@ frontend/templates/index.html - Includes onboarding script
 **Provide These to Reviewers**:
 ```
 Demo Account (if login added):
-  Email: reviewer@nija.app
-  Password: NijaReview2026!
-  
+If review login is required, enter a dedicated review-only sign-in in the
+submission portal's private review-access fields. Do not commit or paste
+login values into this checklist or public notes.
+
 Testing Instructions:
   1. App starts in Education Mode (safe simulation)
   2. No broker credentials needed to explore features
@@ -269,14 +270,14 @@ from bot.kill_switch import get_kill_switch
 
 def test_all_functions():
     results = []
-    
+
     # Test 1: Execution engine initializes
     try:
         engine = ExecutionEngine('test_user', dry_run=True)
         results.append(('Execution Engine Init', 'PASS'))
     except Exception as e:
         results.append(('Execution Engine Init', f'FAIL: {e}'))
-    
+
     # Test 2: Risk manager works
     try:
         risk_mgr = RiskManager()
@@ -284,7 +285,7 @@ def test_all_functions():
         results.append(('Risk Manager', 'PASS'))
     except Exception as e:
         results.append(('Risk Manager', f'FAIL: {e}'))
-    
+
     # Test 3: Kill switch functional
     try:
         ks = get_kill_switch()
@@ -293,7 +294,7 @@ def test_all_functions():
         results.append(('Kill Switch', 'PASS'))
     except Exception as e:
         results.append(('Kill Switch', f'FAIL: {e}'))
-    
+
     return results
 
 if __name__ == '__main__':
@@ -404,8 +405,9 @@ This is a trading tool, NOT investment advice. No profit guarantees. Trading car
 
 **Demo Account** (if applicable):
 ```
-Email: demo@nija.app
-Password: NijaDemo2026!
+If review login is required, enter a dedicated review-only sign-in in the
+submission portal's private review-access fields. Do not commit or paste
+login values into this checklist or public notes.
 
 OR
 
