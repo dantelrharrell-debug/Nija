@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -84,14 +86,33 @@ def compare_archive(archive: Path, live_counts: dict[str, int | None]) -> dict[s
     """Verify the supplied archive independently; never claim off-host proof."""
     # Same-directory import also works when the operator invokes this script
     # directly as python scripts/nija_ledger_evidence_v438.py.
-    from nija_trade_ledger_snapshot_v436 import verify_snapshot
-    import hashlib
+    if __package__:
+        from . import nija_trade_ledger_snapshot_v436 as snapshot
+    else:
+        import nija_trade_ledger_snapshot_v436 as snapshot
 
-    manifest = verify_snapshot(archive)
-    with archive.open("rb") as stream:
-        h = hashlib.sha256()
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(block)
+    limit = (
+        snapshot.MAX_SQLITE_BYTES + snapshot.MAX_MANIFEST_BYTES
+        + (len(snapshot.OPTIONAL_FILES) + 1) * snapshot.MAX_COMPANION_BYTES + 2 * 1024 * 1024
+    )
+    digest = hashlib.sha256()
+    fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("unsafe or oversized source archive")
+        remaining = info.st_size
+        while remaining:
+            block = stream.read(min(remaining, snapshot.CHUNK_SIZE))
+            if not block:
+                raise ValueError("source archive changed during inventory")
+            digest.update(block)
+            remaining -= len(block)
+        if stream.read(1):
+            raise ValueError("source archive changed during inventory")
+
+    archive_digest = digest.hexdigest()
+    manifest = snapshot.verify_snapshot(archive, expected_sha256=archive_digest)
     saved = manifest.get("sqlite_tables") or {}
     differences = {
         table: {
@@ -103,7 +124,7 @@ def compare_archive(archive: Path, live_counts: dict[str, int | None]) -> dict[s
     }
     return {
         "archive_path": str(archive),
-        "archive_sha256": h.hexdigest(),
+        "archive_sha256": archive_digest,
         "archive_sqlite_and_member_hashes_verified": True,
         "archive_table_counts": {
             name: saved.get(name) for name in TABLE_COUNT_QUERIES
