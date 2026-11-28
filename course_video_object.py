@@ -13,6 +13,19 @@ from werkzeug.http import parse_range_header
 _stream_slot = BoundedSemaphore(1)
 
 
+def video_range_header(size: int) -> str | None:
+    """Return the applicable GET range for media served without a validator."""
+    if request.method != "GET" or "If-Range" in request.headers:
+        return None
+    value = request.headers.get("Range")
+    ranges = parse_range_header(value)
+    if ranges and ranges.units == "bytes" and len(ranges.ranges) == 1:
+        start, stop = ranges.ranges[0]
+        if stop is None and start < -size:
+            return f"bytes=0-{size - 1}"
+    return value
+
+
 @dataclass(frozen=True)
 class ObjectSource:
     """Read only content-addressed objects, always using an explicit version."""
@@ -78,8 +91,9 @@ class ObjectSource:
         headers = {"Cache-Control": "private, no-store", "Accept-Ranges": "bytes", "Content-Disposition": "inline"}
         args = self._params(entry)
         span = None
-        if "Range" in request.headers:
-            ranges = parse_range_header(request.headers["Range"])
+        value = video_range_header(size)
+        if value is not None:
+            ranges = parse_range_header(value)
             span = ranges.range_for_length(size) if ranges else None
             if not span:
                 return Response(status=416, headers={**headers, "Content-Range": f"bytes */{size}"})

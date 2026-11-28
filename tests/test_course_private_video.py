@@ -318,9 +318,10 @@ def test_pinned_s3_versions_through_buyer_route(context, monkeypatch):
             data = payload
             reply = {}
             if interval:
-                assert interval == "bytes=2-6"
-                data = payload[2:7]
-                reply["ContentRange"] = f"bytes 2-6/{len(payload)}"
+                assert interval in ("bytes=2-6", f"bytes=0-{len(payload) - 1}")
+                start, end = map(int, interval.removeprefix("bytes=").split("-"))
+                data = payload[start:end + 1]
+                reply["ContentRange"] = f"bytes {start}-{end}/{len(payload)}"
             return dict(reply, VersionId=item["version"], ContentLength=len(data),
                         Body=StreamingBody(BytesIO(data), len(data)))
 
@@ -337,8 +338,29 @@ def test_pinned_s3_versions_through_buyer_route(context, monkeypatch):
         assert client.head(LESSON, base_url=BASE).status_code == 503
     with client.get(LESSON, base_url=BASE) as whole:
         assert whole.status_code == 200 and whole.data == payload
+    with client.head(LESSON, base_url=BASE, headers={"Range": "bytes=2-6"}) as head:
+        assert head.status_code == 200 and head.content_length == len(payload) and head.data == b""
+        assert "Content-Range" not in head.headers
+    with client.get(LESSON, base_url=BASE, headers={"Range": f"bytes=-{len(payload) + 1}"}) as suffix:
+        assert suffix.status_code == 206 and suffix.data == payload
+        assert suffix.headers["Content-Range"] == f"bytes 0-{len(payload) - 1}/{len(payload)}"
+    with client.get(LESSON, base_url=BASE, headers={"Range": "bytes=2-6", "If-Range": '"old"'}) as old:
+        assert old.status_code == 200 and old.data == payload
     checksum = "mismatched"
     assert client.get(LESSON, base_url=BASE).status_code == 404
     paid.clear()
     n = len(calls)
     assert client.head(LESSON, base_url=BASE).status_code == 403 and len(calls) == n
+
+
+def test_file_range_metadata_and_validators(context):
+    client, sign, _, _, _, _, payload = context
+    sign()
+    with client.head(LESSON, base_url=BASE, headers={"Range": "bytes=2-6"}) as head:
+        assert head.status_code == 200 and head.content_length == len(payload) and head.data == b""
+        assert "Content-Range" not in head.headers
+    with client.get(LESSON, base_url=BASE, headers={"Range": f"bytes=-{len(payload) + 1}"}) as suffix:
+        assert suffix.status_code == 206 and suffix.data == payload
+        assert suffix.headers["Content-Range"] == f"bytes 0-{len(payload) - 1}/{len(payload)}"
+    with client.get(LESSON, base_url=BASE, headers={"Range": "bytes=2-6", "If-Range": '"old"'}) as old:
+        assert old.status_code == 200 and old.data == payload
