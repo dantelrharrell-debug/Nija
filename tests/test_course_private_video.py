@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ def context(tmp_path, monkeypatch):
     monkeypatch.setenv("NIJA_COURSE_VIDEO_MANIFEST_SHA256", hashlib.sha256(raw).hexdigest())
     # The production root guard is tested independently; the fixture is disposable.
     monkeypatch.setattr(private, "_allowed_root", lambda candidate: candidate == root)
+    monkeypatch.setattr(private, "_mount_is_readonly", lambda fd: True)
     monkeypatch.setattr(portal.PortalStore, "has_bundle", lambda self: True)
     # Exercise real cookie verification and request path; replace only provider evidence.
     paid = {"cs_test_paid": {"customer_email": "synthetic@example.invalid"}}
@@ -121,3 +123,40 @@ def test_runtime_catalog_rejects_application_root_and_system_temp():
     import course_private_video
     assert not _allowed_root(Path(course_private_video.__file__).resolve().parent)
     assert not _allowed_root(Path("/tmp"))
+
+
+def test_entitled_requests_do_not_serve_a_writable_store(context, monkeypatch):
+    import course_private_video as private
+
+    client, sign, _, _, _, media, payload = context
+    sign()
+    monkeypatch.setattr(private, "_mount_is_readonly", lambda fd: False)
+    media.write_bytes(b"x" * len(payload))
+    assert private.configured_catalog() == (None, {})
+    assert client.get(LESSON, base_url=BASE, headers={"Range": "bytes=0-7"}).status_code == 404
+    assert client.get("/course-portal/library", base_url=BASE).status_code == 200
+
+
+def test_readonly_catalog_does_not_authorize_a_writable_child_media_mount(context, monkeypatch):
+    import course_private_video as private
+
+    client, sign, _, root, item, _, _ = context
+    sign()
+    def is_catalog_entry(fd):
+        return os.fstat(fd).st_ino == (root / "manifest.json").stat().st_ino
+
+    monkeypatch.setattr(private, "_mount_is_readonly", lambda fd: (
+        stat.S_ISDIR(os.fstat(fd).st_mode) or is_catalog_entry(fd)
+    ))
+    assert private.configured_catalog()[1] == {"lesson-01": item}
+    assert client.get(LESSON, base_url=BASE, headers={"Range": "bytes=0-7"}).status_code == 404
+
+
+def test_mount_gate_rejects_chmod_as_substitute_for_readonly_filesystem(tmp_path):
+    from course_private_video import _mount_is_readonly
+
+    file = tmp_path / "readonly-permissions"
+    file.write_bytes(b"fixture")
+    file.chmod(0o444)
+    with file.open("rb") as opened:
+        assert not _mount_is_readonly(opened.fileno())
