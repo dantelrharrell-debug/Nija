@@ -9,10 +9,12 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+import logging
 import threading
 from types import MappingProxyType
 from typing import Any
 
+LOGGER = logging.getLogger(__name__)
 OWNER_RELEASE = "owner_release"
 RECEIPTS = frozenset({"independent_review", "backup_restore", "broker_ledger_exits"})
 
@@ -89,6 +91,32 @@ def register_reviewed_startup_binding(
         if not callable(factory) or not callable(verify_receipts):
             raise TypeError("reviewed_factory_and_receipt_verifier_required")
         _factory, _verify_receipts = factory, verify_receipts
+
+
+def report_recovery_observations(binding: ReviewedStartupBinding) -> None:
+    """Sample authenticated providers for logs without publishing an admission registry."""
+    from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED
+    from bot.pretrade_composition_bridge_v465 import make_collector
+
+    try:
+        collect = make_collector(
+            {"platform:kraken": binding.providers},
+            trusted_provider_ids=binding.reviewed_provider_ids,
+        )
+        collect("platform:kraken")
+    except IndependentEvidenceRejected as exc:
+        for field in REQUIRED:
+            LOGGER.info(
+                "KRAKEN_RECOVERY_OBSERVATION field=%s status=%s authorizes_orders=false",
+                field, exc.failure_reasons.get(field) or "no_field_failure_reported",
+            )
+    except Exception:
+        LOGGER.warning("KRAKEN_RECOVERY_OBSERVATIONS status=observation_batch_unavailable authorizes_orders=false")
+    else:
+        for field in REQUIRED:
+            LOGGER.info(
+                "KRAKEN_RECOVERY_OBSERVATION field=%s status=validated authorizes_orders=false", field,
+            )
 
 
 def install_from_canonical_startup(manager: Any, strategy: Any) -> str:

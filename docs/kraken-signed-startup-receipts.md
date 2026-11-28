@@ -89,3 +89,15 @@ The verifier accepts the signature format selected by the provisioned pins. Exis
 role-pinned keys continue to use three receipts. Switching formats requires an explicit update of the protected
 trust manifest. The owner release signature approves startup evidence only. Live order authorization still goes
 through the existing operator and execution checks.
+
+### Read-only evidence collection during recovery
+
+For optional recovery diagnostics before the backup and broker reports are ready, use the same owner key and
+payload schema with `status: "diagnostic"` and only the `protected_source` digest in `artifacts`. The runtime loads
+that exact source, checks the canonical provider bindings, and samples the read-only providers at startup. It logs
+the individual outcomes using fixed field names and reasons. No raw exchange response is logged. A field with
+no specific failure reported is not certified by itself.
+
+The diagnostic signature never satisfies the release verifier. Even when all 13 samples validate, diagnostics do
+not publish an admission collector or authorize orders. To commission the release, replace the diagnostic
+envelope with a `certified` envelope that binds the complete evidence.

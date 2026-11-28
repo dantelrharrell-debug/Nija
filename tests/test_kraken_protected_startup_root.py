@@ -514,3 +514,38 @@ def test_owner_signed_source_uses_same_protected_loader(protected, owner_approva
         "diagnostic_collector_installed"
     )
     assert attestation.inspect_authenticated_attestations("platform:kraken")["authorizes_orders"] is False
+
+
+@pytest.mark.parametrize("missing_field", [None, "risk_limits"])
+def test_owner_recovery_diagnostics_report_without_registering_for_admission(
+    protected, owner_approval, monkeypatch, caplog, missing_field,
+):
+    trust, payload = owner_approval
+    kind = startup.OWNER_RELEASE
+    w = protected.wiring
+    w.signed.trust = trust
+    payload.update(status="diagnostic", artifacts={"protected_source": hashlib.sha256(SOURCE).hexdigest()})
+
+    def use_diagnostic_envelope(manifest):
+        manifest["trust"]["public_keys"] = {kind: trust.public_keys[kind].hex()}
+        manifest["receipts"] = {kind: w.signed.sign(kind, payload)}
+
+    providers = dict(w.signed.binding.providers)
+    if missing_field:
+        providers[missing_field] = lambda: None
+    protected.write(change=use_diagnostic_envelope)
+    monkeypatch.setattr(canonical, "compose_authenticated_kraken_collector_sources",
+                        lambda **kwargs: providers)
+    assert root.register_from_protected_root() == "protected_startup_recovery_diagnostics_registered"
+    with caplog.at_level("INFO", logger=startup.__name__):
+        assert startup.install_from_canonical_startup(w.sources.manager, w.sources.strategy) == (
+            "authenticated_release_receipts_required"
+        )
+    assert attestation._COLLECTOR is None
+    assert caplog.text.count("KRAKEN_RECOVERY_OBSERVATION field=") == 13
+    if missing_field:
+        assert "field=risk_limits status=provider_result_invalid" in caplog.text
+    else:
+        assert caplog.text.count("status=validated") == 13
+    assert "authorizes_orders=true" not in caplog.text
+    w.private_call.assert_not_called()

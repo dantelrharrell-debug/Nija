@@ -116,7 +116,22 @@ def verify_startup_receipt_set(
     For protected-root preflight only and the existing binding verifier. This
     authenticates external signatures, not underlying source truth or orders.
     """
+    return _verify_receipt_set(receipts, trust, clock=clock, diagnostic_only=False)
+
+
+def verify_owner_diagnostic_receipt(
+    receipts: Mapping[str, str], trust: StartupReceiptTrust, *, clock: Callable[[], float] = time.time,
+) -> bool:
+    """Authenticate only a source approval for diagnostics during recovery."""
+    return _verify_receipt_set(receipts, trust, clock=clock, diagnostic_only=True)
+
+
+def _verify_receipt_set(
+    receipts: Mapping[str, str], trust: StartupReceiptTrust, *, clock: Callable[[], float], diagnostic_only: bool,
+) -> bool:
     if type(trust) is not StartupReceiptTrust or not callable(clock):
+        return False
+    if diagnostic_only and OWNER_RELEASE not in trust.public_keys:
         return False
     expected = {
         "contract": CONTRACT, "status": "certified", "service_id": trust.service_id,
@@ -135,13 +150,16 @@ def verify_startup_receipt_set(
             return False
         if OWNER_RELEASE in trust.public_keys:
             expected["contract"] = OWNER_CONTRACT
+            if diagnostic_only:
+                expected["status"] = "diagnostic"
+            required_artifacts = {"protected_source"} if diagnostic_only else OWNER_ARTIFACTS
             payload = _verified_payload(_receipt(receipts[OWNER_RELEASE]), trust.public_keys[OWNER_RELEASE], OWNER_FIELDS)
             if any(payload.get(key) != value for key, value in expected.items()):
                 return False
             artifacts = payload["artifacts"]
-            if (type(artifacts) is not dict or set(artifacts) != OWNER_ARTIFACTS
+            if (type(artifacts) is not dict or set(artifacts) != required_artifacts
                     or any(not _digest(digest) for digest in artifacts.values())
-                    or len(set(artifacts.values())) != len(OWNER_ARTIFACTS)
+                    or len(set(artifacts.values())) != len(required_artifacts)
                     or not _identifier(payload["evidence_id"])
                     or not _positive_number(payload["approved_at_epoch"])
                     or not _positive_number(payload["expires_at_epoch"])):
