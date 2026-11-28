@@ -3,7 +3,9 @@ import hashlib
 import json
 import os
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import BoundedSemaphore, Event
 
 import pytest
 
@@ -160,3 +162,126 @@ def test_mount_gate_rejects_chmod_as_substitute_for_readonly_filesystem(tmp_path
     file.chmod(0o444)
     with file.open("rb") as opened:
         assert not _mount_is_readonly(opened.fileno())
+
+
+@pytest.fixture
+def fake_object_origin(context, monkeypatch):
+    """Exercise the portal with an injected immutable origin, never real storage."""
+    from flask import Response, request
+    from werkzeug.http import parse_range_header
+
+    monkeypatch.setenv("NIJA_BILLING_IDENTITY_SECRET", "synthetic-fixture-" * 3)
+
+    import course_portal as portal
+
+    client, sign, paid, root, item, _, payload = context
+    version = "fixture-immutable-version"
+    sha = hashlib.sha256(payload).hexdigest()
+    objects = {(sha, version): payload}
+    calls = []
+    occupied = Event()
+    release = Event()
+    hold_seek = Event()
+    slot = BoundedSemaphore(1)
+
+    def fake_response(catalog_root, entry):
+        assert catalog_root == root
+        if not slot.acquire(blocking=False):
+            return Response(status=503, headers={"Retry-After": "1", "Cache-Control": "private, no-store"})
+        try:
+            data = objects.get((entry["sha256"], version))
+            calls.append((request.method, request.headers.get("Range")))
+            if data is None or len(data) != entry["size_bytes"]:
+                raise ValueError("fixture_object_unavailable")
+            if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+                raise ValueError("fixture_object_digest_mismatch")
+            headers = {"Cache-Control": "private, no-store", "Accept-Ranges": "bytes"}
+            if request.method == "HEAD" or not request.headers.get("Range"):
+                response = Response(data if request.method != "HEAD" else b"",
+                                    mimetype="video/mp4", headers=headers)
+                response.content_length = len(data)
+                return response
+            parsed = parse_range_header(request.headers["Range"])
+            bounds = parsed.range_for_length(len(data)) if parsed is not None else None
+            if bounds is None:
+                headers["Content-Range"] = f"bytes */{len(data)}"
+                return Response(status=416, headers=headers)
+            start, end = bounds
+            if hold_seek.is_set():
+                occupied.set()
+                if not release.wait(timeout=5):
+                    raise ValueError("fixture_seek_deadline")
+            headers["Content-Range"] = f"bytes {start}-{end - 1}/{len(data)}"
+            return Response(data[start:end], status=206, mimetype="video/mp4", headers=headers)
+        finally:
+            slot.release()
+
+    monkeypatch.setattr(portal, "video_response", fake_response)
+    return client, sign, paid, payload, objects, calls, occupied, release, hold_seek
+
+
+def test_object_rehearsal_entitlement_head_seek_and_revocation(fake_object_origin):
+    client, sign, paid, payload, _, calls, *_ = fake_object_origin
+    assert client.get(LESSON, base_url=BASE).status_code == 403
+    assert client.head(LESSON, base_url=BASE).status_code == 403
+    assert calls == []
+    sign()
+    whole = client.get(LESSON, base_url=BASE)
+    assert whole.status_code == 200 and whole.data == payload
+    head = client.head(LESSON, base_url=BASE)
+    assert head.status_code == 200 and head.data == b"" and head.content_length == len(payload)
+    seek = client.get(LESSON, base_url=BASE, headers={"Range": "bytes=-5"})
+    assert seek.status_code == 206 and seek.data == payload[-5:]
+    assert seek.headers["Cache-Control"] == "private, no-store"
+    assert seek.headers["Content-Range"] == f"bytes {len(payload) - 5}-{len(payload) - 1}/{len(payload)}"
+    bad = client.get(LESSON, base_url=BASE, headers={"Range": "bytes=0-2,5-7"})
+    assert bad.status_code == 416 and bad.headers["Content-Range"] == f"bytes */{len(payload)}"
+    n = len(calls)
+    paid.clear()
+    assert client.get(LESSON, base_url=BASE, headers={"Range": "bytes=0-7"}).status_code == 403
+    assert len(calls) == n
+
+
+def test_object_rehearsal_missing_and_changed_bytes_do_not_serve(fake_object_origin):
+    client, sign, _, payload, objects, *_ = fake_object_origin
+    sign()
+    key = next(iter(objects))
+    objects[key] = b"x" * len(payload)
+    changed = client.get(LESSON, base_url=BASE, headers={"Range": "bytes=0-7"})
+    assert changed.status_code == 404 and changed.json["error"] == "asset_not_available"
+    objects.clear()
+    assert client.get(LESSON, base_url=BASE).status_code == 404
+
+
+def test_object_rehearsal_keeps_a_worker_slot_for_health_and_checkout(fake_object_origin):
+    from course_portal import COOKIE
+
+    client, sign, _, payload, _, calls, occupied, release, hold_seek = fake_object_origin
+    sign()
+    app = client.application
+    cookie = client.get_cookie(COOKIE, path="/course-portal")
+    assert cookie is not None
+    hold_seek.set()
+
+    def make_request(method, path, **kwargs):
+        with app.test_client() as separate_client:
+            separate_client.set_cookie(COOKIE, cookie.value, path="/course-portal", secure=True)
+            return separate_client.open(path, method=method, base_url=BASE, **kwargs)
+
+    with ThreadPoolExecutor(2) as requests:
+        first = requests.submit(make_request, "GET", LESSON, headers={"Range": "bytes=0-31"})
+        try:
+            assert occupied.wait(timeout=3)
+            second = requests.submit(make_request, "GET", LESSON, headers={"Range": "bytes=32-63"})
+            rejected = second.result(timeout=2)
+            assert rejected.status_code == 503 and rejected.headers["Retry-After"] == "1"
+            # Checkout reaches its real request/authentication gate without a provider call.
+            assert requests.submit(make_request, "POST", "/api/billing/checkout", json={}).result(
+                timeout=2
+            ).status_code == 401
+            assert requests.submit(make_request, "GET", "/healthz").result(timeout=2).status_code == 200
+            assert len(calls) == 1
+        finally:
+            release.set()
+        result = first.result(timeout=2)
+        assert result.status_code == 206 and result.data == payload[:32]
