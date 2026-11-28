@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import sys
 import sqlite3
 from pathlib import Path
 
@@ -323,3 +325,28 @@ def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch
     archive = snapshot.create_snapshot(source, tmp_path / "legacy")
     with pytest.raises(ValueError, match=expected):
         journal_backup.restore(Path(archive["archive"]), expected_sha256=archive["sha256"])
+
+
+@pytest.mark.parametrize("digest", ["invalid", "a" * 63, "g" * 64])
+def test_strict_restore_rejects_malformed_digest_before_archive_check(tmp_path, monkeypatch, digest):
+    def unexpected_archive_access(*args, **kwargs):
+        pytest.fail("invalid checksum must not reach archive validation")
+
+    monkeypatch.setattr(journal_backup, "_verify_account_journal", unexpected_archive_access)
+    with pytest.raises(ValueError, match="64 hex characters"):
+        journal_backup.restore(tmp_path / "unused.tar.gz", expected_sha256=digest)
+
+
+def test_strict_restore_cli_redacts_integrity_failure(tmp_path, monkeypatch, capsys):
+    def failed_integrity_check(*args, **kwargs):
+        raise RuntimeError("synthetic integrity failure details")
+
+    monkeypatch.setattr(journal_backup, "restore", failed_integrity_check)
+    monkeypatch.setattr(sys, "argv", [
+        "journal-backup", "restore-test", "--archive", str(tmp_path / "unused.tar.gz"),
+        "--expected-sha256", "0" * 64,
+    ])
+    assert journal_backup.main() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert json.loads(output.err) == {"status": "FAILED_CLOSED", "error_type": "RuntimeError"}
