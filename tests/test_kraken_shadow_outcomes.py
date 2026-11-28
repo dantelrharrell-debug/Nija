@@ -158,6 +158,56 @@ class ShadowOutcomesTest(unittest.TestCase):
         self.assertEqual(report["owner_decisions"], [])
         self.assertEqual(report["metrics"]["net_realized_pnl_usd"], "-1")
 
+    def test_offline_cutoff_keeps_future_and_same_second_lots_out_of_the_wrong_sample(self):
+        from bot.kraken_offline_strategy_review import evaluate
+        from bot.kraken_shadow_outcomes import CloseEconomics, OwnerDecision
+
+        for lot, epoch, gross in (("early", 99, "3"), ("boundary-a", 100, "3"),
+                                  ("boundary-b", 100, "3"), ("holdout", 101, "21")):
+            income = Decimal(gross)
+            self.proofs[("test:a", lot)] = close(
+                lot=lot, closing_fill_ids=(lot + "-fill",), net_return=(income - 1) / 100,
+                economics=CloseEconomics(Decimal("100"), income, Decimal("1"), epoch),
+            )
+            self.assertEqual(self.inbox.observe("test:a", lot), "accepted")
+        cut = 100
+        with patch.object(RegimePerformanceCalibrator, "record_closed_trade", autospec=True) as record:
+            report = evaluate(self.inbox, "test:a", training_through_epoch=cut)
+        self.assertEqual(record.call_count, 3)
+        self.assertTrue(all(call.kwargs["net_return"] == 0.02 for call in record.call_args_list))
+        self.assertEqual(report["recommendation_basis"], "training_samples_only")
+        chronology = report["chronological_review"]
+        self.assertEqual(chronology["status"], "separate_samples")
+        self.assertEqual(chronology["holdout_sample_count"], 1)
+        self.assertEqual(chronology["observed_holdout_metrics"]["net_realized_pnl_usd"], "20")
+        self.assertEqual(chronology["candidate_comparison_status"], "not_evaluated")
+        self.assertIsNone(chronology["candidate_comparison"])
+        self.assertFalse(report["authorizes_orders"])
+
+        decision = OwnerDecision("test:a", "decision-for-cutoff", "fixture-owner",
+                                 report["snapshot_sha256"], "retain_for_review", 110)
+        self.assertEqual(self.inbox.record_owner_decision(decision, authenticate=lambda _: True), "recorded")
+        changed = evaluate(self.inbox, "test:a", training_through_epoch=cut - 1)
+        self.assertNotEqual(report["snapshot_sha256"], changed["snapshot_sha256"])
+        self.assertEqual(changed["owner_decisions"], [])
+        same = evaluate(self.inbox, "test:a", training_through_epoch=cut)
+        self.assertEqual(len(same["owner_decisions"]), 1)
+
+    def test_offline_cutoff_is_explicit_and_empty_samples_remain_uncertified(self):
+        from bot.kraken_offline_strategy_review import evaluate
+
+        default = evaluate(self.inbox, "test:a")
+        self.assertEqual(default["recommendation_basis"], "in_sample_shadow_only")
+        self.assertEqual(default["chronological_review"]["status"], "cutoff_not_set")
+        report = evaluate(self.inbox, "test:a", training_through_epoch=100)
+        self.assertEqual(report["chronological_review"]["status"], "insufficient_dated_samples")
+        self.assertIsNone(report["chronological_review"]["observed_holdout_metrics"])
+        self.assertIsNone(report["chronological_review"]["candidate_comparison"])
+        self.assertFalse(report["authorizes_orders"])
+        for invalid in (True, 0, -1, "100", 100.5, 253402300800):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "training cutoff"):
+                evaluate(self.inbox, "test:a", training_through_epoch=invalid)
+
     def test_reject_wrong_or_missing_cost_reconciliation(self):
         from bot.kraken_shadow_outcomes import CloseEconomics
 
