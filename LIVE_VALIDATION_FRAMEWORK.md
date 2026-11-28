@@ -140,7 +140,7 @@ from bot.live_validation_framework import get_validation_framework
 
 def execute_trade(symbol, side, size, price):
     framework = get_validation_framework()
-    
+
     # Pre-trade validation
     ctx = ValidationContext(
         symbol=symbol,
@@ -149,22 +149,22 @@ def execute_trade(symbol, side, size, price):
         price=price,
         broker="coinbase"
     )
-    
+
     results = framework.validate_pre_trade(
         ctx=ctx,
         current_price=price,
         account_balance=get_account_balance(),
         open_positions=count_open_positions()
     )
-    
+
     # Check for blocking issues
     if framework.has_blocking_results(results):
         logger.error("Trade blocked by validation")
         return None
-    
+
     # Submit order
     order_id = submit_order(symbol, side, size)
-    
+
     # Record for tracking
     framework.record_order_submission(
         order_id=order_id,
@@ -175,17 +175,17 @@ def execute_trade(symbol, side, size, price):
         account_id="main",
         broker="coinbase"
     )
-    
+
     # Get broker response
     response = wait_for_order_confirmation(order_id)
-    
+
     # Validate execution
     exec_results = framework.validate_order_execution(
         order_id=order_id,
         broker_response=response,
         broker="coinbase"
     )
-    
+
     return order_id
 ```
 
@@ -199,28 +199,28 @@ framework = LiveValidationFramework(
     max_price_age_seconds=60,      # Max age for price data
     max_spread_pct=2.0,            # Max bid-ask spread %
     max_price_change_pct=10.0,     # Max price movement %
-    
+
     # Order Validator
     order_timeout_seconds=300,     # Max time for order execution
     enable_idempotency=True,       # Prevent double-execution
-    
+
     # Position Validator
     max_position_size_pct=50.0,    # Max position as % of account
     max_position_drift_pct=5.0,    # Max drift between local/broker
-    
+
     # Risk Validator
     max_daily_loss_pct=5.0,        # Max daily loss %
     max_drawdown_pct=15.0,         # Max drawdown from peak %
     max_open_positions=10,         # Max concurrent positions
     max_leverage=3.0,              # Max portfolio leverage
-    
+
     # Fee Validator
     custom_fee_rates={             # Custom fee rates by broker
         'coinbase': 0.60,
         'kraken': 0.26
     },
     min_profit_over_fees_ratio=2.0, # Min profit/fees ratio
-    
+
     # Framework Settings
     enable_validation=True,        # Enable/disable all validation
     fail_fast=False               # Stop on first error vs collect all
@@ -379,7 +379,7 @@ framework.cleanup()  # Run daily
 def pre_trade_gate(symbol, side, size, price, account_balance):
     """Gate check before allowing trade"""
     framework = get_validation_framework()
-    
+
     ctx = ValidationContext(
         symbol=symbol,
         side=side,
@@ -387,25 +387,25 @@ def pre_trade_gate(symbol, side, size, price, account_balance):
         price=price,
         broker="coinbase"
     )
-    
+
     results = framework.validate_pre_trade(
         ctx=ctx,
         current_price=price,
         account_balance=account_balance,
         open_positions=get_position_count()
     )
-    
+
     # Log all results
     for result in results:
         logger.info(str(result))
-    
+
     # Block if any errors
     if framework.has_blocking_results(results):
         blocking = framework.get_blocking_results(results)
         reasons = [r.message for r in blocking]
         logger.error(f"Trade blocked: {'; '.join(reasons)}")
         return False, reasons
-    
+
     return True, None
 ```
 
@@ -415,9 +415,9 @@ def pre_trade_gate(symbol, side, size, price, account_balance):
 def monitor_risk_limits(account_id, broker):
     """Monitor risk limits in real-time"""
     framework = get_validation_framework()
-    
+
     account_data = get_account_data(account_id)
-    
+
     results = framework.validate_risk_limits(
         account_id=account_id,
         broker=broker,
@@ -428,7 +428,7 @@ def monitor_risk_limits(account_id, broker):
         open_positions=account_data['open_positions'],
         total_position_value=account_data['total_position_value']
     )
-    
+
     # Check for circuit breakers
     for result in results:
         if result.level == ValidationLevel.CRITICAL:
@@ -436,7 +436,7 @@ def monitor_risk_limits(account_id, broker):
             halt_trading(account_id)
             send_emergency_alert(result.message)
             return True  # Trading halted
-    
+
     return False  # All clear
 ```
 
@@ -446,10 +446,10 @@ def monitor_risk_limits(account_id, broker):
 def reconcile_positions(symbol, account_id, broker):
     """Reconcile local position with broker"""
     framework = get_validation_framework()
-    
+
     local_position = get_local_position(symbol)
     broker_position = fetch_broker_position(symbol, broker)
-    
+
     result = framework.position_validator.validate_position_reconciliation(
         symbol=symbol,
         local_size=local_position['size'],
@@ -457,14 +457,14 @@ def reconcile_positions(symbol, account_id, broker):
         broker=broker,
         account_id=account_id
     )
-    
+
     if result.is_blocking():
         logger.error(f"Position mismatch: {result.message}")
         logger.info(f"Local: {local_position}, Broker: {broker_position}")
-        
+
         # Sync with broker (broker is source of truth)
         sync_position_with_broker(symbol, broker_position)
-    
+
     return result
 ```
 

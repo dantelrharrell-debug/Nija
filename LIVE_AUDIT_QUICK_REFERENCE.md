@@ -84,7 +84,7 @@ Account: PLATFORM
    Held in Positions:    $20.00    ← Single position
    Held in Orders:       $0.00     ← No pending orders
    Total Held:           $20.00    ← 20% of balance
-   
+
    Open Positions:       1         ← One position
    Open Orders:          0         ← No fragmentation
 
@@ -98,7 +98,7 @@ Account: PLATFORM
    Held in Positions:    $5.00     ← Many small positions
    Held in Orders:       $35.00    ← Multiple pending orders
    Total Held:           $40.00    ← 40% of balance locked up
-   
+
    Open Positions:       3         ← Multiple positions
    Open Orders:          7         ← Fragmentation!
 

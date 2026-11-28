@@ -236,10 +236,10 @@ result = trader.validate_trade(
 if result.approved:
     # Adjust position size based on regime and liquidity
     adjusted_value = trader.adjust_position_size(1000, result)
-    
+
     # Get regime-adjusted entry score
     min_score = trader.get_regime_adjusted_entry_score(3, result)
-    
+
     # Execute with adjusted parameters
     print(f"Executing: ${adjusted_value} (min score: {min_score})")
 else:
@@ -262,26 +262,26 @@ from bot.nija_apex_strategy_v72_upgrade import NIJAApexStrategyV72
 
 class CrashResilientApexStrategy(NIJAApexStrategyV72):
     """APEX strategy with crash-resilient infrastructure"""
-    
+
     def __init__(self, broker_client=None, config=None):
         super().__init__(broker_client, config)
-        
+
         # Initialize crash-resilient trader
         self.resilient_trader = get_crash_resilient_trader(broker_client, config)
-        
+
     def can_enter_long(self, symbol, df, indicators, portfolio_state):
         """Check long entry with institutional validation"""
-        
+
         # 1. Run standard APEX entry checks
         can_enter, score, reason = self.check_long_entry_v72(df, indicators)
         if not can_enter:
             return False, score, reason
-        
+
         # 2. Calculate position value
         position_value = self.calculate_position_value(
             portfolio_state.get('account_balance', 0)
         )
-        
+
         # 3. Validate through institutional infrastructure
         validation = self.resilient_trader.validate_trade(
             symbol=symbol,
@@ -291,10 +291,10 @@ class CrashResilientApexStrategy(NIJAApexStrategyV72):
             indicators=indicators,
             portfolio_state=portfolio_state
         )
-        
+
         if not validation.approved:
             return False, score, validation.reason
-        
+
         # 4. Apply regime-adjusted parameters
         adjusted_value = self.resilient_trader.adjust_position_size(
             position_value, validation
@@ -302,11 +302,11 @@ class CrashResilientApexStrategy(NIJAApexStrategyV72):
         min_score = self.resilient_trader.get_regime_adjusted_entry_score(
             self.min_signal_score, validation
         )
-        
+
         # 5. Check if score meets regime-adjusted threshold
         if score < min_score:
             return False, score, f"Score {score} below regime minimum {min_score}"
-        
+
         # All checks passed
         return True, score, f"Approved (regime: {validation.regime})"
 ```
@@ -342,7 +342,7 @@ if trader.should_run_crash_validation():
         portfolio_state=current_portfolio,
         stress_level='moderate'  # or 'mild' or 'severe'
     )
-    
+
     if passed:
         print("✅ Crash validation PASSED")
     else:
@@ -370,15 +370,15 @@ trader.deactivate_emergency_mode()
 config = {
     'enabled': True,  # Master switch
     'crash_validation_interval_hours': 24,  # Run crash sim every 24h
-    
+
     # Regime detector config
     'trending_adx_min': 25,
     'ranging_adx_max': 20,
-    
+
     # Sector caps config
     'sector_soft_limit_pct': 15,
     'sector_hard_limit_pct': 20,
-    
+
     # Liquidity config
     'min_liquidity_score': 0.3,
     'liquidity_throttle_threshold': 0.6,

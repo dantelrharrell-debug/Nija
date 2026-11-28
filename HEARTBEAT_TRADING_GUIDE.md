@@ -168,13 +168,13 @@ Every time a trade is vetoed (blocked), the bot logs:
 ```
 🚫 TRADE VETO: KRAKEN not connected
    Reason: Exchange API connection failed
-   
+
 🚫 TRADE VETO: KRAKEN in EXIT-ONLY mode
    Reason: No new positions allowed (exit only)
-   
+
 🚫 TRADE VETO: KRAKEN balance $8.50 < $10.00 minimum
    Reason: Insufficient balance for minimum trade size
-   
+
 🚫 TRADE VETO: KRAKEN balance fetch failed: timeout or error
    Reason: Could not verify account balance
 ```
