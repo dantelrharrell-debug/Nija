@@ -64,6 +64,29 @@ def test_invalid_storage_and_account_fail_closed(tmp_path: Path):
         KrakenSubmissionJournal(other, SCOPE).reserve("first")
 
 
+def test_orphaned_terminal_record_cannot_pre_resolve_a_new_reservation(tmp_path: Path):
+    path = tmp_path / "submission.db"
+    initialize_journal(path, SCOPE)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute(
+            "INSERT INTO submission_resolution VALUES (?, ?, ?, ?, ?)",
+            ("orphaned-intent", 1.0, "closed", "a" * 64, "b" * 64),
+        )
+
+    journal = KrakenSubmissionJournal(path, SCOPE)
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a reservation"):
+        journal.reserve("orphaned-intent")
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a reservation"):
+        journal.reserve("different-intent")
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a reservation"):
+        journal.unresolved_count()
+
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("SELECT count(*) FROM submission").fetchone() == (0,)
+        assert db.execute("SELECT count(*) FROM submission_resolution").fetchone() == (1,)
+
+
 def reconciliation(scope, intent_id, broker_order_id, reserved_at):
     return {
         "account_scope": scope,

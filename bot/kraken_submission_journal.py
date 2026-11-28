@@ -76,6 +76,13 @@ class KrakenSubmissionJournal:
         if db.execute("SELECT scope FROM account").fetchall() != [(self.account_scope,)]:
             raise SubmissionDenied("submission journal account scope mismatch")
 
+    def _check_resolution_links(self, db: sqlite3.Connection) -> None:
+        if db.execute(
+            """SELECT 1 FROM submission_resolution AS r WHERE NOT EXISTS
+               (SELECT 1 FROM submission AS s WHERE s.intent_id=r.intent_id) LIMIT 1"""
+        ).fetchone():
+            raise SubmissionDenied("submission journal contains terminal evidence without a reservation")
+
     def _client_order_id(self, intent_id: str) -> str:
         namespace = uuid.uuid5(uuid.NAMESPACE_URL, f"nija:kraken:{self.account_scope}")
         return uuid.uuid5(namespace, intent_id).hex
@@ -89,6 +96,7 @@ class KrakenSubmissionJournal:
                 db.execute("PRAGMA synchronous=FULL")
                 db.execute("BEGIN IMMEDIATE")
                 self._check_scope(db)
+                self._check_resolution_links(db)
                 if db.execute("SELECT 1 FROM submission WHERE intent_id=?", (intent_id,)).fetchone():
                     raise SubmissionDenied("intent already reserved")
                 if db.execute(
@@ -199,6 +207,7 @@ class KrakenSubmissionJournal:
         with closing(self._connect(readonly=True)) as db, db:
             db.execute("BEGIN")
             self._check_scope(db)
+            self._check_resolution_links(db)
             return db.execute(
                 """SELECT COUNT(*) FROM submission AS s WHERE NOT EXISTS
                    (SELECT 1 FROM submission_resolution WHERE intent_id=s.intent_id)"""
