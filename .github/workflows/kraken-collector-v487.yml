@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - release/justcall-handoff-only-20261017
+      - fix/kraken-release-gates-20261127
     paths:
       - '.github/workflows/render-recovery-access.yml'
       - '.github/workflows/kraken-recovery-gate-diagnostics.yml'
