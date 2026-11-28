@@ -218,16 +218,16 @@ size, details = manager.calculate_tier_aware_position_size(
 
 ```
 1. Get current balance → Determine tier (STARTER, SAVER, etc.)
-   
+
 2. Get tier position limit → STARTER: max 2 positions
 
 3. Rank signals by quality → [BTC: 85, ETH: 78, SOL: 72, ...]
 
 4. Apply exposure compression → Allocate: 80% to BTC, 20% to ETH
-   
+
 5. Calculate tier target size → BTC: $60 (80% of $75)
 
-6. Apply risk containment → 
+6. Apply risk containment →
    - Max risk: 3% = $2.25
    - Stop loss: 10%
    - Max position: $2.25 / 10% = $22.50
@@ -373,7 +373,7 @@ Layer 4 (Validation):
   - Size: $22.50 > $15 minimum ✅
   - Capital: $75 > $22.50 ✅
   - Quality: 85 > 60 ✅
-  
+
 Result: APPROVED - Position $22.50 with 3% max risk
 ```
 
@@ -416,7 +416,7 @@ All modules include:
 
 ```
 $50 Account Performance:
-- Positions: 50-60 
+- Positions: 50-60
 - Average size: $1
 - Rejections: ~80% (unknown reason)
 - Fee drag: 15%

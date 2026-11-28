@@ -59,7 +59,7 @@ None → Beginner → Intermediate → Advanced → Expert → Certified
 **Requirements:**
 - ✅ Complete all 8 Getting Started lessons
 - ✅ Minimum quiz score: 70% on each lesson
-- ✅ Total points earned: 100+ 
+- ✅ Total points earned: 100+
 - ✅ Acknowledge compliance disclaimers
 
 **Unlocks:**
@@ -293,27 +293,27 @@ def check_user_tier(user_id: str) -> GraduationTier:
     status = get_graduation_status(user_id)
     completed = status.completed_lessons
     scores = status.lesson_scores
-    
+
     # Check Certified (highest tier)
     if check_tier_requirements(GraduationTier.CERTIFIED, completed, scores):
         return GraduationTier.CERTIFIED
-    
+
     # Check Expert
     if check_tier_requirements(GraduationTier.EXPERT, completed, scores):
         return GraduationTier.EXPERT
-    
+
     # Check Advanced
     if check_tier_requirements(GraduationTier.ADVANCED, completed, scores):
         return GraduationTier.ADVANCED
-    
+
     # Check Intermediate
     if check_tier_requirements(GraduationTier.INTERMEDIATE, completed, scores):
         return GraduationTier.INTERMEDIATE
-    
+
     # Check Beginner
     if check_tier_requirements(GraduationTier.BEGINNER, completed, scores):
         return GraduationTier.BEGINNER
-    
+
     return GraduationTier.NONE
 ```
 
@@ -326,30 +326,30 @@ def can_enable_live_trading(user_id: str) -> tuple[bool, str]:
     Returns: (allowed, reason)
     """
     status = get_graduation_status(user_id)
-    
+
     # Must be at least Beginner tier
     if status.current_tier < GraduationTier.BEGINNER:
         return False, "Complete Getting Started lessons first"
-    
+
     # Check mandatory lessons
-    required = ["gs_001", "gs_002", "gs_003", "gs_004", "gs_006", 
+    required = ["gs_001", "gs_002", "gs_003", "gs_004", "gs_006",
                 "rm_001", "rm_002", "rm_003", "cp_001"]
-    
+
     for lesson_id in required:
         if lesson_id not in status.completed_lessons:
             lesson = get_lesson(lesson_id)
             return False, f"Must complete: {lesson.title}"
-    
+
     # Check quiz scores on risk management
     risk_lessons = ["rm_001", "rm_002", "rm_003"]
     for lesson_id in risk_lessons:
         if status.lesson_scores.get(lesson_id, 0) < 70:
             return False, f"Must pass quiz for {lesson_id} with 70%+"
-    
+
     # Check compliance acknowledgments
     if not all_disclaimers_acknowledged(user_id):
         return False, "Must acknowledge all compliance disclaimers"
-    
+
     return True, "Eligible for live trading"
 ```
 

@@ -53,7 +53,7 @@ This guide helps you quickly test NIJA's core functionality without any setup.
 ║                   Welcome to NIJA                         ║
 ╚═══════════════════════════════════════════════════════════╝
 
-NIJA is a user-directed trading tool that executes trades 
+NIJA is a user-directed trading tool that executes trades
 based on YOUR strategy and YOUR decisions.
 
 🔐 Your API credentials stay on your device
@@ -157,20 +157,20 @@ Options:
 ║              ⚠️  RISK ACKNOWLEDGMENT REQUIRED              ║
 ╚═══════════════════════════════════════════════════════════╝
 
-Before enabling Independent Trading Mode, you must 
+Before enabling Independent Trading Mode, you must
 acknowledge and accept the following:
 
-□ I understand that trading cryptocurrencies and other 
+□ I understand that trading cryptocurrencies and other
   financial instruments involves substantial risk of loss.
 
-□ I understand that NIJA is a tool for executing MY OWN 
-  trading strategy, and I am solely responsible for all 
+□ I understand that NIJA is a tool for executing MY OWN
+  trading strategy, and I am solely responsible for all
   trading decisions.
 
-□ I understand that past performance does not guarantee 
+□ I understand that past performance does not guarantee
   future results and that I may lose all invested capital.
 
-□ I understand that NIJA does not provide financial advice, 
+□ I understand that NIJA does not provide financial advice,
   investment recommendations, or promised returns.
 
 □ I understand that I am responsible for:
@@ -179,7 +179,7 @@ acknowledge and accept the following:
   • Understanding exchange fees and costs
   • Compliance with applicable laws and regulations
 
-□ I have read and agree to the Terms of Service and 
+□ I have read and agree to the Terms of Service and
   Privacy Policy.
 
 [Cancel]  [I Acknowledge the Risks and Wish to Proceed]
@@ -330,7 +330,7 @@ When LIVE (if configured):
 ```
 Historical Performance (Simulation)
 
-This data reflects simulated or past performance of your 
+This data reflects simulated or past performance of your
 configured strategy and does not guarantee future results.
 
 Period: Last 30 Days (Simulation)
