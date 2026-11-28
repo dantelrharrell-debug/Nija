@@ -72,3 +72,32 @@ No ledger schema or state migration is involved. Source rollback removes this
 adapter through the normal reviewed deployment process. Preserve external audit
 records and existing recovery claims. First live orders and autonomous trading
 retain their separate approval requirements.
+
+## Owner release approval
+
+A protected manifest can pin one Ed25519 public key under `trust.public_keys.owner_release` and carry one signed
+envelope under `receipts.owner_release`. Choose this form when the owner is the sole release approver. Provision the
+key through the protected deployment process. The signer verifies the actual release and evidence before signing.
+
+Use contract `nija.kraken-owner-release-certification.v1`. The payload has the same release, image, account,
+provider, evidence ID, status and time fields as a legacy receipt. Replace `kind` and `artifact_sha256` with
+`artifacts`, a map of three distinct SHA-256 digests for `protected_source`, `backup_restore`, and
+`broker_ledger_exits`. The protected source digest must match the complete Python bytes. Retain the actual backup
+restore and broker reconciliation records privately so the owner can verify them against the signed digests.
+
+The verifier accepts the signature format selected by the provisioned pins. Existing manifests with three
+role-pinned keys continue to use three receipts. Switching formats requires an explicit update of the protected
+trust manifest. The owner release signature approves startup evidence only. Live order authorization still goes
+through the existing operator and execution checks.
+
+### Read-only evidence collection during recovery
+
+For optional recovery diagnostics before the backup and broker reports are ready, use the same owner key and
+payload schema with `status: "diagnostic"` and only the `protected_source` digest in `artifacts`. The runtime loads
+that exact source, checks the canonical provider bindings, and samples the read-only providers at startup. It logs
+the individual outcomes using fixed field names and reasons. No raw exchange response is logged. A field with
+no specific failure reported is not certified by itself.
+
+The diagnostic signature never satisfies the release verifier. Even when all 13 samples validate, diagnostics do
+not publish an admission collector or authorize orders. To commission the release, replace the diagnostic
+envelope with a `certified` envelope that binds the complete evidence.

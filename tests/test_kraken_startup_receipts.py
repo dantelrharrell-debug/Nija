@@ -230,3 +230,54 @@ def test_trust_inputs_are_frozen_and_diagnostics_never_log_receipts(fixture, cap
     broken = replace(fixture.binding, receipts={**fixture.binding.receipts, "independent_review": canary})
     assert make_startup_receipt_verifier(fixture.trust, clock=lambda: fixture.now)(broken) is False
     assert canary not in caplog.text
+
+
+@pytest.fixture
+def owner_approval(fixture, monkeypatch):
+    kind = startup.OWNER_RELEASE
+    key = Ed25519PrivateKey.generate()
+    monkeypatch.setitem(fixture.keys, kind, key)
+    trust = replace(fixture.trust, public_keys={kind: key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw,
+    )})
+    payload = {
+        field: value for field, value in fixture.payloads["independent_review"].items()
+        if field not in {"kind", "artifact_sha256"}
+    }
+    payload.update(
+        contract="nija.kraken-owner-release-certification.v1",
+        artifacts={"protected_source": "e" * 64, "backup_restore": "f" * 64, "broker_ledger_exits": "0" * 64},
+    )
+    return trust, payload
+
+
+def test_one_owner_signature_with_all_artifacts_uses_existing_installer(fixture, owner_approval):
+    trust, payload = owner_approval
+    kind = startup.OWNER_RELEASE
+    binding = replace(fixture.binding, receipts={kind: fixture.sign(kind, payload)})
+    register_signed_kraken_startup(lambda **kwargs: binding, trust, clock=lambda: fixture.now)
+    assert startup.install_from_canonical_startup(binding.manager, binding.strategy) == (
+        "diagnostic_collector_installed"
+    )
+    assert attestation.inspect_authenticated_attestations("platform:kraken")["authorizes_orders"] is False
+
+
+@pytest.mark.parametrize("change", [
+    {"artifacts": {"protected_source": "e" * 64, "backup_restore": "f" * 64}},
+    {"artifacts": {"protected_source": "e" * 64, "backup_restore": "e" * 64, "broker_ledger_exits": "0" * 64}},
+    {"release_id": "f" * 40},
+    {"expires_at_epoch": 1},
+])
+def test_owner_signature_cannot_approve_incomplete_wrong_scope_or_expired_evidence(fixture, owner_approval, change):
+    trust, payload = owner_approval
+    kind = startup.OWNER_RELEASE
+    binding = replace(fixture.binding, receipts={kind: fixture.sign(kind, {**payload, **change})})
+    assert make_startup_receipt_verifier(trust, clock=lambda: fixture.now)(binding) is False
+
+
+def test_owner_signature_requires_provisioned_owner_trust(fixture, owner_approval):
+    trust, payload = owner_approval
+    kind = startup.OWNER_RELEASE
+    binding = replace(fixture.binding, receipts={kind: fixture.sign(kind, payload)})
+    assert make_startup_receipt_verifier(fixture.trust, clock=lambda: fixture.now)(binding) is False
+    assert make_startup_receipt_verifier(trust, clock=lambda: fixture.now)(fixture.binding) is False
