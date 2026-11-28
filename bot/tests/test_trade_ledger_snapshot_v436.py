@@ -304,7 +304,7 @@ def test_journal_required_for_strict_capture_and_restore(tmp_path, monkeypatch):
         journal_backup.restore(archive, expected_sha256=report["sha256"])
 
 
-@pytest.mark.parametrize("problem", ["wrong_scope", "orphan_resolution"])
+@pytest.mark.parametrize("problem", ["wrong_scope", "orphan_resolution", "missing_order_id", "blank_order_id"])
 def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch, problem):
     from bot.kraken_submission_journal import initialize_journal
 
@@ -313,12 +313,21 @@ def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch
     journal = tmp_path / "writer.db"
     scope = "platform:other" if problem == "wrong_scope" else "platform:kraken"
     initialize_journal(journal, scope)
-    if problem == "orphan_resolution":
+    if problem != "wrong_scope":
         with sqlite3.connect(journal) as db:
+            if problem == "missing_order_id":
+                db.execute("INSERT INTO submission VALUES (?, ?, ?)", ("intent", 1, None))
+            elif problem == "blank_order_id":
+                db.execute("INSERT INTO submission VALUES (?, ?, ?)", ("intent", 1, " \t"))
             db.execute("INSERT INTO submission_resolution VALUES (?, ?, ?, ?, ?)",
-                       ("missing-intent", 1, "closed", "a" * 64, "b" * 64))
+                       ("intent", 1, "closed", "a" * 64, "b" * 64))
     monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal))
-    expected = "account scope mismatch" if problem == "wrong_scope" else "invalid references"
+    expected = {
+        "wrong_scope": "account scope mismatch",
+        "orphan_resolution": "invalid references",
+        "missing_order_id": "terminal evidence without a broker order reference",
+        "blank_order_id": "terminal evidence without a broker order reference",
+    }[problem]
     with pytest.raises(ValueError, match=expected):
         journal_backup.capture(source, tmp_path / "strict")
     assert not list((tmp_path / "strict").glob("*.tar.gz"))

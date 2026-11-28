@@ -49,6 +49,16 @@ def _verify_account_journal(archive: Path, *, expected_sha256: str, exercise_res
                 raise ValueError("submission journal account scope mismatch")
             if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
                 raise ValueError("submission journal contains invalid references")
+            # A structurally valid backup must also satisfy the runtime journal's
+            # requirement that terminal evidence names the reserved broker order.
+            if db.execute(
+                """SELECT 1 FROM submission_resolution AS r
+                   JOIN submission AS s ON s.intent_id=r.intent_id
+                   WHERE typeof(s.broker_order_id) != 'text'
+                      OR trim(s.broker_order_id, char(9,10,11,12,13,32)) = ''
+                   LIMIT 1"""
+            ).fetchone() is not None:
+                raise ValueError("submission journal contains terminal evidence without a broker order reference")
 
 
 def capture(source: Path, output_dir: Path) -> dict:
