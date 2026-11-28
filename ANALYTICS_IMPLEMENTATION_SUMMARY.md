@@ -39,7 +39,7 @@ PnL ATTRIBUTION BY SIGNAL TYPE
   - TradingView signals
   - Market conditions
   - Manual/heartbeat
-  
+
 - **ExitReason** enum: 19 standardized reasons
   - Profit targets (4 levels)
   - Stop losses (3 types)
