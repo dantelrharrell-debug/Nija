@@ -124,7 +124,7 @@ def verify_video_inventory(root, catalog):
 
 
 def video_response(root, entry):
-    from course_video_object import ObjectSource
+    from course_video_object import ObjectSource, video_range_header
 
     if isinstance(root, ObjectSource):
         return root.response(entry)
@@ -135,7 +135,13 @@ def video_response(root, entry):
     response.headers["Accept-Ranges"] = "bytes"
     response.headers["Content-Disposition"] = "inline"
     try:
-        return response.make_conditional(request.environ, accept_ranges=True,
+        environ = request.environ.copy()
+        value = video_range_header(entry["size_bytes"])
+        if value is None:
+            environ.pop("HTTP_RANGE", None)
+        else:
+            environ["HTTP_RANGE"] = value
+        return response.make_conditional(environ, accept_ranges=True,
                                          complete_length=entry["size_bytes"])
     except BaseException:
         media.close()

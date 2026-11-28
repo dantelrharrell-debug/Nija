@@ -161,6 +161,9 @@ def test_claim_token_survives_disabled_and_unverified_payment(tmp_path, monkeypa
     monkeypatch.setattr(portal, "_valid_paid",
                         lambda query_sid: {"customer_email": "buyer@example.com"}
                         if query_sid == sid else None)
+    probe = client.head(claim_url, base_url="https://localhost")
+    assert probe.status_code == 204 and not probe.data
+    assert "Set-Cookie" not in probe.headers and tokens.inspect_unconsumed(token) == sid
     accepted = client.get(claim_url, base_url="https://localhost")
     assert accepted.status_code == 303
     assert accepted.headers["Location"] == "/course-portal/library"
@@ -535,3 +538,26 @@ def test_sandbox_course_email_never_leaves_resend_simulated_recipient(monkeypatc
     assert calls[0][1]["headers"]["Idempotency-Key"] == (
         "nija-foundations-delivery-v1-cs_test_paid"
     )
+
+def test_simultaneous_recovery_requests_consume_only_three_slots(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    import course_portal as portal
+
+    monkeypatch.setattr(portal.time, "time", lambda: 1800000000)
+    store = PortalStore(create_engine(f"sqlite:///{tmp_path / 'recovery.db'}"))
+    barrier = Barrier(8)
+
+    def recover(_):
+        barrier.wait(timeout=10)
+        return store.allow_recovery("buyer@example.test", "127.0.0.1")
+
+    with ThreadPoolExecutor(8) as pool:
+        assert sum(pool.map(recover, range(8))) == 3
+    assert not store.allow_recovery("buyer@example.test", "127.0.0.1")
+
+
+def test_expired_course_token_cannot_be_consumed(tmp_path):
+    store = PortalStore(create_engine(f"sqlite:///{tmp_path / 'expired.db'}"))
+    token = store.mint("cs_expired", expiry_hours=-1)
+    assert store.consume(token) is None
