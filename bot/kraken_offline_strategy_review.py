@@ -48,6 +48,37 @@ def _realized_metrics(rows: list[dict]) -> dict:
         }
 
 
+def _observed_cost_by_regime(rows: list[dict]) -> list[dict]:
+    # The existing admission contract proves the amounts, not an ex-ante
+    # benchmark price or an independent reconstruction of market regimes.
+    totals: dict[str, dict] = {}
+    with localcontext() as ctx:
+        ctx.prec = 256
+        for row in rows:
+            amounts = row["economics"]
+            gross = Decimal(amounts["gross_pnl_usd"])
+            cost = Decimal(amounts["execution_cost_usd"])
+            entry = totals.setdefault(row["regime"], {
+                "gross_realized_pnl_usd": Decimal(0),
+                "recorded_execution_cost_usd": Decimal(0),
+                "net_realized_pnl_usd": Decimal(0),
+                "sample_count": 0,
+                "gross_winner_lots_erased_by_cost": 0,
+            })
+            entry["gross_realized_pnl_usd"] += gross
+            entry["recorded_execution_cost_usd"] += cost
+            entry["net_realized_pnl_usd"] += gross - cost
+            entry["sample_count"] += 1
+            entry["gross_winner_lots_erased_by_cost"] += int(gross > 0 and gross - cost <= 0)
+    return [
+        {"admitted_regime_label": label, **{
+            field: _canonical(value) if isinstance(value, Decimal) else value
+            for field, value in totals[label].items()
+        }}
+        for label in sorted(totals)
+    ]
+
+
 def evaluate(
     inbox: KrakenShadowOutcomes, scope: str, *, training_through_epoch: int | None = None,
 ) -> dict:
@@ -74,6 +105,8 @@ def evaluate(
         "holdout_sample_count": 0,
         "lots_without_economics": len(rows) - len(dated),
         "observed_holdout_metrics": None,
+        "observed_holdout_cost_by_regime": None,
+        "slippage_status": "unavailable_no_benchmark_evidence",
         "candidate_comparison_status": "not_evaluated",
         "candidate_comparison": None,
     }
@@ -81,7 +114,7 @@ def evaluate(
         training = dated[-200:]
         recommendation_basis = "in_sample_shadow_only"
     else:
-        evidence.update(evaluation_schema=2, training_through_epoch=training_through_epoch)
+        evidence.update(evaluation_schema=3, training_through_epoch=training_through_epoch)
         training = [
             row for row in dated if row["economics"]["closed_at_epoch"] <= training_through_epoch
         ][-200:]
@@ -92,6 +125,7 @@ def evaluate(
             status="separate_samples" if training and holdout else "insufficient_dated_samples",
             holdout_sample_count=len(holdout),
             observed_holdout_metrics=_realized_metrics(holdout) if holdout else None,
+            observed_holdout_cost_by_regime=_observed_cost_by_regime(holdout) if holdout else None,
         )
         recommendation_basis = "training_samples_only"
     digest = _evidence_digest(evidence)

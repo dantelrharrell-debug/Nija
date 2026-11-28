@@ -202,11 +202,52 @@ class ShadowOutcomesTest(unittest.TestCase):
         report = evaluate(self.inbox, "test:a", training_through_epoch=100)
         self.assertEqual(report["chronological_review"]["status"], "insufficient_dated_samples")
         self.assertIsNone(report["chronological_review"]["observed_holdout_metrics"])
+        self.assertIsNone(report["chronological_review"]["observed_holdout_cost_by_regime"])
         self.assertIsNone(report["chronological_review"]["candidate_comparison"])
         self.assertFalse(report["authorizes_orders"])
         for invalid in (True, 0, -1, "100", 100.5, 253402300800):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "training cutoff"):
                 evaluate(self.inbox, "test:a", training_through_epoch=invalid)
+
+    def test_cost_attribution_uses_only_admitted_dated_holdout_economics(self):
+        from bot.kraken_offline_strategy_review import evaluate
+        from bot.kraken_shadow_outcomes import CloseEconomics
+
+        cases = (
+            ("training", "trending", 100, "40", "0"),
+            ("turns-negative", "trending", 101, "1.2", "2.5"),
+            ("break-even", "trending", 102, "1", "1"),
+            ("gross-loss", "ranging", 103, "-2", "0.5"),
+            ("still-positive", "ranging", 104, "5", "1"),
+        )
+        for lot, regime, stamp, gross, cost in cases:
+            gross, cost = Decimal(gross), Decimal(cost)
+            self.assertEqual(self.put(close(
+                lot=lot, regime=regime, closing_fill_ids=(lot + "-fill",),
+                net_return=(gross - cost) / 100,
+                economics=CloseEconomics(Decimal("100"), gross, cost, stamp),
+            )), "accepted")
+        self.assertEqual(self.put(close(lot="undated", regime="trending")), "accepted")
+        # A different account must have no influence on this report.
+        self.assertEqual(self.put(close(
+            "test:b", economics=CloseEconomics(Decimal("100"), Decimal("3"), Decimal("1"), 105),
+        )), "accepted")
+        report = evaluate(self.reopen(), "test:a", training_through_epoch=100)
+        chronology = report["chronological_review"]
+        self.assertEqual(chronology["holdout_sample_count"], 4)
+        self.assertEqual(chronology["lots_without_economics"], 1)
+        self.assertIsNone(report["metrics"]["net_realized_pnl_usd"])
+        self.assertEqual(chronology["observed_holdout_cost_by_regime"], [
+            {"admitted_regime_label": "ranging", "gross_realized_pnl_usd": "3",
+             "recorded_execution_cost_usd": "1.5", "net_realized_pnl_usd": "1.5",
+             "sample_count": 2, "gross_winner_lots_erased_by_cost": 0},
+            {"admitted_regime_label": "trending", "gross_realized_pnl_usd": "2.2",
+             "recorded_execution_cost_usd": "3.5", "net_realized_pnl_usd": "-1.3",
+             "sample_count": 2, "gross_winner_lots_erased_by_cost": 2},
+        ])
+        self.assertEqual(chronology["slippage_status"], "unavailable_no_benchmark_evidence")
+        self.assertIsNone(chronology["candidate_comparison"])
+        self.assertFalse(report["authorizes_orders"])
 
     def test_reject_wrong_or_missing_cost_reconciliation(self):
         from bot.kraken_shadow_outcomes import CloseEconomics
