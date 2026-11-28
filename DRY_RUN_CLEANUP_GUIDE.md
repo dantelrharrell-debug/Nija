@@ -113,7 +113,7 @@ import re
 
 with open('cleanup-dryrun.log', 'r') as f:
     log_content = f.read()
-    
+
 # Extract positions that would be closed
 would_close = re.findall(r'\[DRY RUN\]\[WOULD_CLOSE\].*?Symbol: (\S+)', log_content)
 print(f"Would close {len(would_close)} positions: {would_close}")

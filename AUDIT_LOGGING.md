@@ -300,10 +300,10 @@ Integrate with execution engine:
 class ExecutionEngine:
     def __init__(self):
         self.audit_logger = get_audit_logger()
-    
+
     def execute_entry(self, signal):
         # ... execute trade ...
-        
+
         # Log to audit
         self.audit_logger.log_trade_entry(
             user_id=signal.user_id,
@@ -318,10 +318,10 @@ class ExecutionEngine:
             broker=self.broker_name,
             **signal.metadata  # Include signal metadata
         )
-    
+
     def execute_exit(self, trade, exit_reason):
         # ... execute exit ...
-        
+
         # Log to audit
         self.audit_logger.log_trade_exit(
             user_id=trade.user_id,
@@ -346,16 +346,16 @@ Generate daily audit reports:
 def generate_daily_audit_report(date: datetime):
     """Generate comprehensive audit report for a specific date"""
     audit_logger = get_audit_logger()
-    
+
     # Query all events for the day
     start_of_day = date.replace(hour=0, minute=0, second=0, microsecond=0)
     events = audit_logger.query_events(since=start_of_day, limit=10000)
-    
+
     # Categorize events
     trades_entered = [e for e in events if e.event_type == "trade_entry"]
     trades_exited = [e for e in events if e.event_type in ["trade_full_exit", "trade_stop_loss", "trade_take_profit"]]
     validations_failed = [e for e in events if e.event_type == "position_size_rejected"]
-    
+
     # Generate report
     report = {
         'date': date.isoformat(),
@@ -372,7 +372,7 @@ def generate_daily_audit_report(date: datetime):
         },
         'events': [e.to_dict() for e in events]
     }
-    
+
     return report
 ```
 
@@ -420,18 +420,18 @@ def verify_audit_integrity():
     """Verify integrity of audit logs"""
     audit_logger = get_audit_logger()
     events = audit_logger.query_events(limit=1000)
-    
+
     invalid_count = 0
     for event in events:
         if not event.verify_checksum():
             invalid_count += 1
             logger.error(f"Invalid checksum: {event.event_id}")
-    
+
     if invalid_count > 0:
         logger.critical(f"🚨 {invalid_count} log entries have invalid checksums!")
     else:
         logger.info("✅ All audit log checksums valid")
-    
+
     return invalid_count == 0
 ```
 
@@ -446,9 +446,9 @@ def archive_old_logs(days_old=30):
     log_dir = Path("./data/audit_logs")
     archive_dir = Path("./data/audit_logs/archive")
     archive_dir.mkdir(exist_ok=True)
-    
+
     cutoff_date = datetime.now() - timedelta(days=days_old)
-    
+
     # Process each log file
     for log_file in log_dir.glob("*.jsonl"):
         if should_archive(log_file, cutoff_date):

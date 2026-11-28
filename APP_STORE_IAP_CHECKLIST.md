@@ -229,14 +229,14 @@
 - [ ] **Subscription Testing Instructions**
   ```
   Testing In-App Purchases:
-  
+
   1. Open app and navigate to Settings
   2. Tap "Upgrade Plan" button
   3. Review all three subscription tiers (Basic, Pro, Enterprise)
   4. Note: Actual purchase flow will work in production
   5. Education mode is available without subscription
   6. Pro features require active subscription
-  
+
   Important Notes:
   - All subscriptions include 14-day free trial
   - Subscriptions managed through App Store/Google Play

@@ -60,7 +60,7 @@ User accounts allow multiple people to trade independently using NIJA's strategy
    # User: Daivon Frazier
    KRAKEN_USER_DAIVON_API_KEY=daivon_api_key_here
    KRAKEN_USER_DAIVON_API_SECRET=daivon_api_secret_here
-   
+
    # User: Tania Gilbert
    KRAKEN_USER_TANIA_API_KEY=tania_api_key_here
    KRAKEN_USER_TANIA_API_SECRET=tania_api_secret_here
@@ -213,7 +213,7 @@ Monitor these metrics every hour:
 ### 3. Broker Health Check
 **Purpose:** Validates all brokers are operational  
 **Critical:** Yes (failed brokers), Warning (degraded brokers)  
-**Remediation:** 
+**Remediation:**
 - Check broker status pages (Kraken, Coinbase, etc.)
 - Verify API credentials
 - Test connectivity manually

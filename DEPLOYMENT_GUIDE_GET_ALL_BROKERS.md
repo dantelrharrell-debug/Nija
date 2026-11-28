@@ -68,12 +68,12 @@ The fix has been implemented in this PR. The `get_all_brokers()` method has been
    ```bash
    # If using systemd
    sudo systemctl restart nija-bot
-   
+
    # If using screen/tmux
    # Kill existing process and restart
    pkill -f "python.*bot.py"
    python bot.py &
-   
+
    # If using start script
    ./start.sh
    ```

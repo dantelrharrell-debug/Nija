@@ -27,12 +27,12 @@ The NIJA Institutional Trading System is a three-tier enhancement that transform
 
 ```python
 class EntryTrigger(Enum):
-    RSI_OVERSOLD, RSI_OVERBOUGHT, VWAP_PULLBACK, MACD_CROSS, 
-    EMA_PULLBACK, VOLUME_SPIKE, BOLLINGER_BOUNCE, ADX_TREND, 
+    RSI_OVERSOLD, RSI_OVERBOUGHT, VWAP_PULLBACK, MACD_CROSS,
+    EMA_PULLBACK, VOLUME_SPIKE, BOLLINGER_BOUNCE, ADX_TREND,
     MULTI_FACTOR, UNKNOWN
 
 class EntryQuality(Enum):
-    EXCELLENT (90-100%), GOOD (75-89%), ACCEPTABLE (60-74%), 
+    EXCELLENT (90-100%), GOOD (75-89%), ACCEPTABLE (60-74%),
     MARGINAL (50-59%), POOR (<50%)
 
 class EntryAuditSystem:
@@ -237,17 +237,17 @@ should_accept, reason = tier_system.should_accept_signal(
 ```python
 class InstitutionalIntegration:
     def __init__(self, initial_balance, broker_name)
-    
+
     def validate_entry_comprehensive(
         symbol, signal_type, entry_score, confidence,
         signal_contributions, primary_trigger, price,
         proposed_size_usd, stop_loss_price, ...
     ) -> (allowed, reason, audit_id)
-    
+
     def register_position_opened(symbol, size_usd, entry_price, ...)
     def update_position_price(symbol, current_price)
     def register_position_closed(symbol, exit_price, pnl_usd, ...)
-    
+
     def get_positions_to_force_close() -> List[str]
     def should_reduce_positions() -> (bool, target_count)
     def calculate_position_size(signal_confidence) -> float
@@ -279,15 +279,15 @@ allowed, reason, audit_id = integration.validate_entry_comprehensive(
 if allowed:
     # Execute trade
     execution_price = execute_trade(...)
-    
+
     # Register position
     integration.register_position_opened(
         "BTC-USD", 100.0, execution_price, "LONG", 95000.0, audit_id
     )
-    
+
     # Later: Update position
     integration.update_position_price("BTC-USD", 97000.0)
-    
+
     # Later: Close position
     integration.register_position_closed("BTC-USD", 97000.0, 10.0, audit_id)
 else:

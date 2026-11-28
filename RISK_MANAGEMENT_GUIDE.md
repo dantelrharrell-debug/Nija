@@ -468,16 +468,16 @@ from bot.kill_switch import get_kill_switch
 
 def validate_order(size, price, symbol, balance, broker):
     """Complete order validation"""
-    
+
     # 1. Check kill switch
     kill_switch = get_kill_switch()
     if kill_switch.is_active():
         return False, "Kill switch active - no new entries"
-    
+
     # 2. Check minimum notional
     if should_block_order(size, price, broker, balance, symbol):
         return False, "Below minimum notional"
-    
+
     # 3. Check fee ratio
     validator = FeeValidator()
     result = validator.validate_fee_to_position_ratio(
@@ -485,12 +485,12 @@ def validate_order(size, price, symbol, balance, broker):
     )
     if result.level == ValidationLevel.ERROR:
         return False, f"Fee check failed: {result.message}"
-    
+
     # 4. Check capital reservation
     can_open, msg, details = can_open_position(balance, size * price)
     if not can_open:
         return False, msg
-    
+
     return True, "Validation passed"
 ```
 
@@ -506,13 +506,13 @@ class PositionManager:
         reserved = reserve_capital(position_id, size_usd, symbol)
         if not reserved:
             raise ValueError("Could not reserve capital")
-        
+
         # ... open position logic ...
-    
+
     def close_position(self, position_id):
         """Close position and release capital"""
         # ... close position logic ...
-        
+
         # Release reserved capital
         released = release_capital(position_id)
         logger.info(f"Released ${released:.2f} capital")
@@ -528,13 +528,13 @@ auto_trigger = get_auto_trigger()
 # After every trade
 def after_trade(pnl_usd, balance):
     is_winner = pnl_usd > 0
-    
+
     # Check auto-triggers
     triggered = auto_trigger.auto_trigger_if_needed(
         current_balance=balance,
         last_trade_result=is_winner
     )
-    
+
     if triggered:
         logger.critical("Auto-trigger activated kill switch")
 
@@ -557,16 +557,16 @@ watchdog = get_reconciliation_watchdog()
 def periodic_reconciliation(broker):
     if not watchdog.should_reconcile():
         return
-    
+
     # Get balances from exchange
     exchange_balances = broker.get_balances()
-    
+
     # Get internal positions
     internal_positions = position_manager.get_all_positions()
-    
+
     # Get prices
     prices = broker.get_prices()
-    
+
     # Reconcile
     discrepancies = watchdog.reconcile_balances(
         exchange_balances,
@@ -574,7 +574,7 @@ def periodic_reconciliation(broker):
         prices,
         broker=broker.name
     )
-    
+
     # Alert if issues found
     if discrepancies:
         monitor.trigger_alert(
@@ -694,41 +694,41 @@ from bot.kill_switch import get_kill_switch, get_auto_trigger
 
 def test_full_risk_management_flow():
     """Test complete risk management flow"""
-    
+
     # Setup
     balance = 100.0
     position_size = 30.0
-    
+
     # Test 1: Notional guard
     guard = get_notional_guard()
     is_valid, error, details = guard.validate_order_notional(
         size=0.006, price=5000.0, balance=balance
     )
     assert is_valid, "Should pass notional check"
-    
+
     # Test 2: Capital reservation
     manager = get_capital_reservation_manager()
     can_open, msg, details = manager.can_open_position(
         balance, position_size
     )
     assert can_open, "Should have enough capital"
-    
+
     # Reserve capital
     reserved = manager.reserve_capital("pos1", position_size, "BTC-USD")
     assert reserved, "Should reserve successfully"
-    
+
     # Test 3: Kill switch (should allow initially)
     kill_switch = get_kill_switch()
     assert not kill_switch.is_active(), "Kill switch should be inactive"
-    
+
     # Test 4: Auto-trigger (simulate losses)
     auto_trigger = get_auto_trigger()
     for i in range(5):
         reason = auto_trigger.record_trade_result(is_winner=False)
-    
+
     # Should trigger after 5 consecutive losses
     assert kill_switch.is_active(), "Kill switch should activate"
-    
+
     # Cleanup
     kill_switch.deactivate("Test complete")
 ```

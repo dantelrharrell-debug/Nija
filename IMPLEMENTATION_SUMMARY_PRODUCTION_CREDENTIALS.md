@@ -86,7 +86,7 @@ def get_individual_user_config_loader(hard_fail: bool = None, require_api_keys: 
 
 **Example Production Error:**
 ```
-❌ HARD FAIL: Invalid users: daivon_frazier (Missing API keys in environment), 
+❌ HARD FAIL: Invalid users: daivon_frazier (Missing API keys in environment),
               tania_gilbert (Missing API keys in environment)
 
 REQUIRED ACTIONS:
@@ -116,7 +116,7 @@ REQUIRED ACTIONS:
 1. **`config/yaml_user_loader.py`** (+11 lines)
    - Import environment detection
    - Auto-detect production in singleton function
-   
+
 2. **`config/individual_user_loader.py`** (+11 lines)
    - Import environment detection
    - Auto-detect production in singleton function

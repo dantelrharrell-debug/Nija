@@ -52,21 +52,21 @@ class YourStrategy:
     def __init__(self, balance):
         self.throttle = AutomatedCapitalThrottle(balance)
         self.risk_mgr = AdaptiveRiskManager()
-    
+
     def execute_trade(self, signal):
         # Check throttle
         if self.throttle.state.is_throttled:
             logger.warning(f"Throttled: {self.throttle.state.throttle_reason}")
             return None
-        
+
         # Get position size (use minimum of both limits)
         throttle_limit = self.throttle.get_max_position_size()
         risk_limit = self.risk_mgr.calculate_position_size(...)
         position_pct = min(throttle_limit, risk_limit)
-        
+
         # Execute
         order = self.place_order(signal, position_pct)
-        
+
         # Record outcome
         if order.filled:
             self.throttle.record_trade(
@@ -74,7 +74,7 @@ class YourStrategy:
                 profit_loss=order.profit
             )
             self.throttle.update_capital(self.get_balance())
-        
+
         return order
 ```
 

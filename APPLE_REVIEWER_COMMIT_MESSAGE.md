@@ -49,15 +49,15 @@ Implement comprehensive profitability validation system that prevents deployment
 ```
 For each profit target:
   net_profit = profit_target - (exchange_fees × 2)
-  
+
   IF net_profit < minimum_profit_threshold (0.5%):
     REJECT configuration
-    
+
 For primary profit target and stop loss:
   net_reward = profit_target - fees
   net_risk = stop_loss + fees
   risk_reward_ratio = net_reward / net_risk
-  
+
   IF risk_reward_ratio < minimum_rr_ratio (1.5:1):
     REJECT configuration
 ```

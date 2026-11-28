@@ -344,7 +344,7 @@ Before you trade with real money, please read carefully:
 
 ⚠️ RISK WARNING ⚠️
 
-Trading cryptocurrencies carries high risk. You may lose your 
+Trading cryptocurrencies carries high risk. You may lose your
 entire investment. Key risks include:
 
 • Market volatility (prices can swing 20%+ in a day)
@@ -367,7 +367,7 @@ Your Understanding:
 ```
 ⏳ Cooling-Off Period (Required)
 
-Your verification is complete! However, regulations require 
+Your verification is complete! However, regulations require
 a 7-day waiting period before you can start live trading.
 
 Days remaining: 7 days, 0 hours
@@ -412,7 +412,7 @@ Safety Features Enabled:
 
 [Start Live Trading] [Learn More About Limits]
 
-Remember: Start small. Test your strategy with real market 
+Remember: Start small. Test your strategy with real market
 conditions before increasing position sizes.
 ```
 
@@ -451,7 +451,7 @@ Requirements:
 
 [Apply for Level 3] [Stay at Level 2]
 
-Note: Level 3 requires more documentation and has a 
+Note: Level 3 requires more documentation and has a
 14-day processing time.
 ```
 
@@ -539,7 +539,7 @@ Your limits will increase automatically based on performance:
 
 [Start Trading at Level 3] [View Full Features]
 
-Remember: With greater access comes greater responsibility. 
+Remember: With greater access comes greater responsibility.
 Continue practicing strong risk management.
 ```
 
@@ -620,17 +620,17 @@ class Level2CircuitBreakers:
     if consecutive_losses >= 3:
         halt_trading(duration="24 hours", reason="Consecutive losses")
         notify_user("Circuit breaker triggered: 3 losses in a row")
-    
+
     # 10% drawdown in 24 hours
     if account_drawdown_24h >= 0.10:
         halt_trading(duration="48 hours", reason="Rapid drawdown")
         notify_user("Account protection: 10% loss in 24 hours")
-    
+
     # Daily loss limit
     if daily_loss >= 250:  # $250 USD
         halt_trading(duration="24 hours", reason="Daily limit")
         notify_user("Daily loss limit reached: $250")
-    
+
     # Weekly loss limit
     if weekly_loss >= 500:  # $500 USD
         halt_trading(duration="7 days", reason="Weekly limit")
@@ -644,13 +644,13 @@ class Level3CircuitBreakers:
     if monthly_loss_pct >= 0.15:
         reduce_limits(factor=0.5, duration="30 days")
         notify_user("Monthly loss threshold: Limits reduced by 50%")
-    
+
     # 25% monthly loss (severe)
     if monthly_loss_pct >= 0.25:
         downgrade_to_level2(duration="90 days")
         require_compliance_review()
         notify_user("Downgraded to Level 2 due to excessive losses")
-    
+
     # Rapid loss (5% in 1 hour)
     if hourly_loss_pct >= 0.05:
         halt_trading(duration="1 hour", reason="Rapid loss protection")
@@ -663,19 +663,19 @@ class Level3CircuitBreakers:
 class CoolingOffPeriods:
     # After signup to Level 1
     paper_trading_cooloff = 0  # Can start immediately
-    
+
     # After KYC completion to Level 2 activation
     level2_cooloff = 7 * 24 * 3600  # 7 days in seconds
-    
+
     # After Level 3 application to approval
     level3_cooloff = 14 * 24 * 3600  # 14 days
-    
+
     # After large loss (>20% account value)
     large_loss_cooloff = 3 * 24 * 3600  # 3 days mandatory break
-    
+
     # After 5 consecutive losses
     streak_loss_cooloff = 24 * 3600  # 24 hours
-    
+
     # After manual kill switch activation
     kill_switch_cooloff = 7 * 24 * 3600  # 7 days
 ```
@@ -687,10 +687,10 @@ class PositionSizeLimits:
     def get_max_position_size(user_level, account_value, months_trading):
         if user_level == 1:  # Paper
             return account_value * 0.20  # 20% per trade (learning)
-        
+
         elif user_level == 2:  # Limited Live
             return min(500, account_value * 0.10)  # $500 or 10%
-        
+
         elif user_level == 3:  # Full Live
             if months_trading < 3:
                 return min(10000, account_value * 0.20)
@@ -716,7 +716,7 @@ GraduationRecord:
     from_level: int
     to_level: int
     timestamp: datetime
-    
+
     # Performance metrics at time of graduation
     performance_snapshot: {
         win_rate: float
@@ -727,18 +727,18 @@ GraduationRecord:
         risk_reward_ratio: float
         trading_days: int
     }
-    
+
     # Assessment results
     knowledge_test_score: float  # Percentage
     suitability_assessment: dict
     risk_education_completed: bool
-    
+
     # Approval
     status: "pending" | "approved" | "denied"
     approval_timestamp: datetime
     approved_by: str  # Admin user ID if manual review
     denial_reason: str  # If denied
-    
+
     # Compliance
     kyc_level: "none" | "basic" | "enhanced"
     kyc_verified_at: datetime
@@ -755,20 +755,20 @@ DowngradeRecord:
     from_level: int
     to_level: int
     timestamp: datetime
-    
+
     # Reason
     reason: "performance" | "compliance" | "risk_violation" | "user_request"
     trigger: str  # Specific trigger (e.g., "25% monthly loss")
-    
+
     # Automatic vs Manual
     automatic: bool
     triggered_by_system: str  # Which circuit breaker
     manual_override_by: str  # Admin user if manual
-    
+
     # Impact
     duration: int  # Seconds until can reapply
     limits_reduced: dict  # New limits applied
-    
+
     # User notification
     user_notified: bool
     notification_sent_at: datetime
@@ -882,7 +882,7 @@ class GraduationSystem:
     Manages user progression through trading levels with institutional-grade
     safety controls and regulatory compliance.
     """
-    
+
     LEVEL_1_LIMITS = LevelLimits(
         max_account_value=10000.0,  # Virtual money
         max_position_size=2000.0,
@@ -894,7 +894,7 @@ class GraduationSystem:
         leverage_allowed=False,
         max_leverage=1.0
     )
-    
+
     LEVEL_2_LIMITS = LevelLimits(
         max_account_value=5000.0,
         max_position_size=500.0,
@@ -906,15 +906,15 @@ class GraduationSystem:
         leverage_allowed=False,
         max_leverage=1.0
     )
-    
+
     def check_level1_graduation_eligibility(
-        self, 
+        self,
         user_id: str,
         performance_data: Dict
     ) -> tuple[bool, str, Dict]:
         """
         Check if user meets Level 1 → Level 2 graduation criteria.
-        
+
         Returns:
             (eligible, reason, missing_criteria)
         """
@@ -929,16 +929,16 @@ class GraduationSystem:
             "risk_education": performance_data.get("risk_education_completed", False),
             "trading_days": performance_data.get("trading_days", 0) >= 30
         }
-        
+
         all_met = all(criteria.values())
-        
+
         if all_met:
             return True, "All criteria met", {}
         else:
             missing = {k: v for k, v in criteria.items() if not v}
             reason = f"Missing {len(missing)} criteria: {', '.join(missing.keys())}"
             return False, reason, missing
-    
+
     def check_level2_graduation_eligibility(
         self,
         user_id: str,
@@ -946,7 +946,7 @@ class GraduationSystem:
     ) -> tuple[bool, str, Dict]:
         """
         Check if user meets Level 2 → Level 3 graduation criteria.
-        
+
         Returns:
             (eligible, reason, missing_criteria)
         """
@@ -962,16 +962,16 @@ class GraduationSystem:
             "risk_essay": performance_data.get("risk_essay_submitted", False),
             "trading_days": performance_data.get("level2_trading_days", 0) >= 90
         }
-        
+
         all_met = all(criteria.values())
-        
+
         if all_met:
             return True, "All criteria met", {}
         else:
             missing = {k: v for k, v in criteria.items() if not v}
             reason = f"Missing {len(missing)} criteria: {', '.join(missing.keys())}"
             return False, reason, missing
-    
+
     def apply_circuit_breaker(
         self,
         user_id: str,
@@ -983,7 +983,7 @@ class GraduationSystem:
         """
         # Implementation to halt trading and notify user
         pass
-    
+
     def progressive_limit_unlock(
         self,
         user_id: str,
@@ -1032,7 +1032,7 @@ class GraduationSystem:
                     leverage_allowed=True,
                     max_leverage=3.0
                 )
-        
+
         # Return default for other levels
         return self.LEVEL_2_LIMITS if level == TradingLevel.LIMITED_LIVE else self.LEVEL_1_LIMITS
 ```

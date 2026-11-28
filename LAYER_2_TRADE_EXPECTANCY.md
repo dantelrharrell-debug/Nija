@@ -80,10 +80,10 @@ if self.quality_gate:
 if self.profit_protection:
     # Check partial exits
     exit_action = self.profit_protection.check_partial_exit(...)
-    
+
     # Check break-even move
     new_stop = self.profit_protection.check_breakeven_move(...)
-    
+
     # Check stagnation
     stagnation_reason = self.profit_protection.check_stagnation_exit(...)
 ```

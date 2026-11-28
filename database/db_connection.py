@@ -14,6 +14,7 @@ import os
 from typing import Optional, Dict, Any
 from contextlib import contextmanager
 from sqlalchemy import create_engine, event, pool, text
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, Session, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import QueuePool
@@ -45,19 +46,22 @@ def get_database_url() -> str:
         db_port = os.getenv('POSTGRES_PORT', '5432')
         db_name = os.getenv('POSTGRES_DB', 'nija')
         db_user = os.getenv('POSTGRES_USER', 'nija_user')
-        db_password = os.getenv('POSTGRES_PASSWORD')
-
-        if not db_password:
+        if not (db_password := os.getenv('POSTGRES_PASSWORD')):
             raise ValueError(
                 "POSTGRES_PASSWORD environment variable is required for database connection. "
                 "Please set POSTGRES_PASSWORD or provide a complete DATABASE_URL with credentials."
             )
 
-        db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+        db_url = URL.create(
+            "postgresql",
+            username=db_user,
+            password=db_password,
+            host=db_host,
+            port=db_port,
+            database=db_name,
+        ).render_as_string(hide_password=False)
     else:
-        # Validate that DATABASE_URL contains a password
-        # Format: postgresql://user:password@host:port/database
-        # Check for empty password (e.g., user:@host or user@host)
+        # A PostgreSQL URL with user information must include a password.
         if '://' in db_url:
             # Extract the credentials portion between :// and @
             try:
@@ -66,7 +70,6 @@ def get_database_url() -> str:
                     rest = scheme_and_rest[1]
                     if '@' in rest:
                         credentials = rest.split('@', 1)[0]
-                        # Check if password is present (format: user:password)
                         if ':' in credentials:
                             password = credentials.split(':', 1)[1]
                             if not password:
@@ -78,14 +81,14 @@ def get_database_url() -> str:
                             # No password separator found
                             raise ValueError(
                                 "DATABASE_URL missing password. "
-                                "Format must be: postgresql://user:password@host:port/database"
+                                "Provide a PostgreSQL URL with a username and password."
                             )
             except (IndexError, ValueError) as e:
                 if "DATABASE_URL" in str(e):
                     raise
                 # Re-raise with more context if it's a parsing error
                 raise ValueError(
-                    f"Invalid DATABASE_URL format. Expected: postgresql://user:password@host:port/database"
+                    "Invalid DATABASE_URL format. Provide a PostgreSQL URL with credentials."
                 ) from e
 
     # Handle postgres:// prefix (some platforms use this instead of postgresql://)

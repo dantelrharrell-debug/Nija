@@ -14,14 +14,16 @@ This is a non-secret, non-executing release handoff. **Merging this document doe
 - [ ] Record exact deployed commit and immutable image digest, approved account/key fingerprints and 13 reviewed provider IDs.
 - [ ] Review genuine canonical runtime objects and six source owners: ledger reconciliation, complete durable duplicate-order inventory, operator authorization/revocation, kill-switch state, atomic account risk, and position synchronization.
 - [ ] Reconcile authenticated Kraken history, open orders, positions, fills, margin/rollover fees, pending closes and protective exits against independently persisted records.
-- [ ] Independently verify backup restore and exact release security findings; obtain three genuine role-signed, current receipts: `independent_review`, `backup_restore`, `broker_ledger_exits`. Verify public key custody and receipt scopes.
+- [ ] Verify the backup restore and exact release security findings. For an owner-only release, obtain the owner's current `certified` signature over the exact protected source, verified backup restore, and verified broker, ledger, and exit reconciliation artifact digests. For an existing role-pinned manifest, verify the three current receipts `independent_review`, `backup_restore`, and `broker_ledger_exits`. Use the format selected by the protected trust manifest and verify custody and scope of the signing keys.
 - [ ] Privately review the complete Python resolver `resolve_sources(*, manager, strategy, broker, trust, receipts)` and reviewer `review_sources(sources, *, trust)`. Ensure they bind existing real sources; never create a second Kraken client/nonce writer or return unconditional approval.
-- [ ] Confirm manifest trust pins and signed `independent_review.payload.artifact_sha256` match the exact approved source bytes.
+- [ ] Confirm the signed source digest matches the exact approved source bytes. Use the owner envelope's `payload.artifacts.protected_source` or the role-pinned `independent_review.payload.artifact_sha256` as applicable.
+
+The optional owner `diagnostic` envelope supports a separately approved read-only startup sample. It binds only the protected source. Collector installation requires certified evidence, and order admission uses its separate execution controls.
 
 ## Private Render provisioning — separate owner approval required
 
 - [ ] Owner approves the exact reviewed artifact hashes, target service and release.
-- [ ] Add **both** private Secret Files in Render Environment > Secret Files (not GitHub):
+- [ ] Add **both** private files in the [Render Environment > Secret Files](https://render.com/docs/configure-environment-variables#secret-files) settings. Render mounts them at these runtime paths:
   - `/etc/secrets/.render-kraken-startup-root.py`
   - `/etc/secrets/.render-kraken-startup-binding.json`
 - [ ] Keep the three existing ledger/recovery Secret Files and startup command unchanged.

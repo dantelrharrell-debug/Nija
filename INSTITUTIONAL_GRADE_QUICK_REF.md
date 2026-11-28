@@ -317,4 +317,3 @@ grad_system = GraduationSystem()
 **Questions?** Review the detailed documentation or contact the project lead.
 
 **Last Updated**: January 31, 2026 | **Maintainer**: Engineering Leadership
-

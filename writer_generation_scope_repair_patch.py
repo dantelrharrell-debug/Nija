@@ -70,6 +70,8 @@ def _nonce_generation_key() -> str:
     )
     process_key = _process_generation_key()
     if requested == process_key:
+        if _NONCE_GENERATION_REDIS_KEY_DEFAULT == process_key:
+            raise RuntimeError("Kraken nonce and process writer generation keys collide")
         logger.critical(
             "NONCE_GENERATION_DOMAIN_COLLISION_REJECTED marker=%s requested=%s process_key=%s fallback=%s",
             MARKER,

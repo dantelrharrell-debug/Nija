@@ -118,7 +118,7 @@ FORCED_CLEANUP_AFTER_N_TRADES=20
 > Do a final App Store reviewer threat-model
 > - Tighten store description language to match enforcement
 > - Or simulate a worst-case crash/restart scenario to prove caps still hold
-> 
+>
 > But you're no longer chasing bugs — you're polishing a launch.
 
 ### Solution Implemented

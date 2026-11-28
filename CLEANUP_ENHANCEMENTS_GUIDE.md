@@ -324,26 +324,26 @@ from bot.symbol_freeze_manager import get_symbol_freeze_manager
 class TradingStrategy:
     def __init__(self, broker):
         self.broker = broker
-        
+
         # Initialize cleanup utilities
         self.dust_cleanup = get_broker_dust_cleanup(dry_run=False)
         self.balance_fetcher = get_enhanced_balance_fetcher()
         self.freeze_manager = get_symbol_freeze_manager()
-    
+
     def get_balance(self):
         """Get balance with retry logic"""
         return self.balance_fetcher.get_balance_with_fallback(
-            self.broker, 
+            self.broker,
             verbose=True
         )
-    
+
     def get_price(self, symbol):
         """Get price with freeze check"""
         # Check if symbol is frozen
         if self.freeze_manager.is_frozen(symbol):
             logging.warning(f"Symbol {symbol} is frozen - skipping")
             return None
-        
+
         try:
             price = self.broker.get_current_price(symbol)
             # Record success
@@ -353,7 +353,7 @@ class TradingStrategy:
             # Record failure
             self.freeze_manager.record_price_fetch_failure(symbol, str(e))
             return None
-    
+
     def cleanup_dust_positions(self):
         """Periodic dust cleanup"""
         result = self.dust_cleanup.cleanup_all_dust(self.broker)
@@ -367,18 +367,18 @@ Run cleanup on startup:
 ```python
 def startup_routine(broker):
     """Run on bot startup"""
-    
+
     # 1. Run normalization pass (dry run first)
     from bot.user_account_normalization import run_normalization_pass
     result = run_normalization_pass(broker, dry_run=True)
     logging.info(f"Normalization: {result['actions_required']} actions needed")
-    
+
     # 2. Clean up dust positions
     from bot.broker_dust_cleanup import get_broker_dust_cleanup
     cleanup = get_broker_dust_cleanup()
     result = cleanup.cleanup_all_dust(broker)
     logging.info(f"Dust cleanup: closed {result['closed']} positions")
-    
+
     # 3. Load frozen symbols
     from bot.symbol_freeze_manager import get_symbol_freeze_manager
     manager = get_symbol_freeze_manager()
@@ -399,15 +399,15 @@ CLEANUP_INTERVAL_HOURS = 24
 
 def trading_loop(broker, strategy):
     global last_cleanup
-    
+
     while True:
         # ... normal trading logic ...
-        
+
         # Periodic dust cleanup
         if datetime.now() - last_cleanup > timedelta(hours=CLEANUP_INTERVAL_HOURS):
             strategy.cleanup_dust_positions()
             last_cleanup = datetime.now()
-        
+
         time.sleep(60)  # Check every minute
 ```
 
@@ -487,13 +487,13 @@ def monitor_cleanup_health():
     """Monitor cleanup module health"""
     from bot.symbol_freeze_manager import get_symbol_freeze_manager
     from bot.enhanced_balance_fetcher import get_enhanced_balance_fetcher
-    
+
     # Check frozen symbols
     manager = get_symbol_freeze_manager()
     stats = manager.get_stats()
     if stats['frozen_count'] > 5:
         alert(f"High number of frozen symbols: {stats['frozen_count']}")
-    
+
     # Check balance fetch health
     fetcher = get_enhanced_balance_fetcher()
     info = fetcher.get_last_known_balance()
@@ -556,7 +556,7 @@ def monitor_cleanup_health():
 ## Additional Resources
 
 - **Tests**: See `bot/test_cleanup_enhancements.py` for usage examples
-- **Source Code**: 
+- **Source Code**:
   - `bot/broker_dust_cleanup.py`
   - `bot/enhanced_balance_fetcher.py`
   - `bot/symbol_freeze_manager.py`

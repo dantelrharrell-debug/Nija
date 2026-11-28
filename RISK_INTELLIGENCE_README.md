@@ -198,7 +198,7 @@ else:
 def execute_trade(self, symbol, signal, df):
     # Calculate position size
     position_size = self.calculate_position_size(symbol, df)
-    
+
     # ✅ NEW: Pre-trade risk check
     approved, assessment = self.risk_gate.pre_trade_risk_assessment(
         symbol=symbol,
@@ -207,13 +207,13 @@ def execute_trade(self, symbol, signal, df):
         current_positions=self.broker.get_open_positions(),
         account_balance=self.broker.get_account_balance()
     )
-    
+
     if not approved:
         logger.warning(f"Trade rejected by risk gate: {symbol}")
         for reason in assessment['rejection_reasons']:
             logger.warning(f"  - {reason}")
         return None  # Don't execute
-    
+
     # Risk checks passed - proceed with trade
     return self.broker.place_order(symbol, 'buy', position_size)
 ```
@@ -234,29 +234,29 @@ def bot_startup():
     # 1. Initialize components
     position_tracker = PositionTracker()
     broker = get_broker_integration('coinbase')
-    
+
     # 2. Run legacy cleanup with high-exposure monitoring
     protocol = LegacyPositionExitProtocol(
         position_tracker=position_tracker,
         broker_integration=broker,
         monitor_high_exposure=True
     )
-    
+
     state, diagnostics = protocol.verify_clean_state()
-    
+
     if state != AccountState.CLEAN:
         logger.warning("Account needs cleanup - running protocol...")
         results = protocol.run_full_protocol()
-        
+
         if not results['success']:
             logger.error("Cleanup failed - manual intervention needed")
             return False
-    
+
     logger.info("✅ Account is CLEAN")
-    
+
     # 3. Initialize risk intelligence gate
     risk_gate = create_risk_intelligence_gate()
-    
+
     logger.info("✅ Bot startup complete")
     return True
 ```
@@ -268,16 +268,16 @@ def trading_loop():
     while True:
         # Scan for signals
         signals = strategy.scan_markets()
-        
+
         for signal in signals:
             symbol = signal['symbol']
-            
+
             # Get market data
             df = broker.get_market_data(symbol, timeframe='1h', limit=100)
-            
+
             # Calculate position size
             position_size = risk_manager.calculate_position_size(df, account_balance)
-            
+
             # ✅ Pre-trade risk assessment
             approved, assessment = risk_gate.pre_trade_risk_assessment(
                 symbol=symbol,
@@ -286,11 +286,11 @@ def trading_loop():
                 current_positions=broker.get_open_positions(),
                 account_balance=account_balance
             )
-            
+
             if not approved:
                 logger.warning(f"Trade rejected: {symbol}")
                 continue  # Skip this trade
-            
+
             # Execute trade
             broker.place_order(symbol, 'buy', position_size)
 ```

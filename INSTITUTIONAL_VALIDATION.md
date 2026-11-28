@@ -366,7 +366,7 @@ Rejection Breakdown:
 
 ### Q: How often should I re-validate?
 
-**A:** 
+**A:**
 - Monthly: Quick check with `prove_edge.py`
 - Quarterly: Full analysis with regime segmentation
 - After any strategy changes: Mandatory re-validation

@@ -34,7 +34,7 @@ def place_market_order(...):
     app_store_mode = get_app_store_mode()
     if app_store_mode.is_enabled():
         return app_store_mode.block_execution_with_log(...)
-    
+
     # ... rest of execution logic
 ```
 
@@ -223,7 +223,7 @@ def place_market_order(self, symbol, side, quantity, ...):
             )
     except ImportError:
         pass
-    
+
     # ... rest of execution logic (only reached if APP_STORE_MODE=false)
 
 # Step 3: Expose read-only APIs

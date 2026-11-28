@@ -1,8 +1,28 @@
 # CI may override this registry without changing the production base image.
 ARG PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+
+# Git is needed only for the source-checkout fallback when baking release metadata.
+FROM ${PYTHON_BASE} AS release-metadata
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY . .
+ARG GIT_BRANCH=""
+ARG GIT_COMMIT=""
+ARG RENDER_GIT_BRANCH=""
+ARG RENDER_GIT_COMMIT=""
+ARG RENDER_SERVICE_ID=""
+ARG RENDER_SERVICE_NAME=""
+ARG RAILWAY_GIT_BRANCH=""
+ARG RAILWAY_GIT_COMMIT_SHA=""
+ARG RAILWAY_DEPLOYMENT_ID=""
+ARG RAILWAY_ENVIRONMENT_NAME=""
+ARG BUILD_TIMESTAMP=""
+RUN ./inject_git_metadata.sh
+
 FROM ${PYTHON_BASE}
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends git redis-tools && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends redis-tools && \
+    rm -rf /var/lib/apt/lists/* && ! command -v git
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
 # Render runtime Secret Files are mounted with group 1000 access. Keep the
 # non-root trading process and grant only that supplementary group.
@@ -158,19 +178,12 @@ RUN if [ -d /app/scripts ]; then chmod +x /app/scripts/*.sh || true; fi
 
 ARG GIT_BRANCH=""
 ARG GIT_COMMIT=""
-ARG RENDER_GIT_BRANCH=""
-ARG RENDER_GIT_COMMIT=""
-ARG RENDER_SERVICE_ID=""
-ARG RENDER_SERVICE_NAME=""
-ARG RAILWAY_GIT_BRANCH=""
-ARG RAILWAY_GIT_COMMIT_SHA=""
-ARG RAILWAY_DEPLOYMENT_ID=""
-ARG RAILWAY_ENVIRONMENT_NAME=""
 ARG BUILD_TIMESTAMP=""
 ENV GIT_BRANCH=${GIT_BRANCH}
 ENV GIT_COMMIT=${GIT_COMMIT}
 ENV BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
-RUN ./inject_git_metadata.sh
+COPY --from=release-metadata /app/.env.build /app/.env.build
+COPY --from=release-metadata /app/bot/version_info.py /app/bot/version_info.py
 ENV CANDLELITE_CONFIG_DIR=/tmp/candlelite
 RUN mkdir -p /app/cache /app/data /app/logs /tmp/candlelite && \
     chown -R nija:nija /app /tmp/candlelite

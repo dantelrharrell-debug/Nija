@@ -207,7 +207,7 @@ Ranked 30 positions for liquidation:
   1. DUST1-USD: $0.50 (LIQUIDATE)
   ...
   25. MED5-USD: $20.00 (LIQUIDATE)
-  
+
   📌 Positions to KEEP (largest 5):
   1. BTC-USD: $1000.00 (KEEP)
   2. ETH-USD: $900.00 (KEEP)

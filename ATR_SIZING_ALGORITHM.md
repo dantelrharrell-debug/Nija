@@ -169,28 +169,28 @@ def calculate_position_size(
 ) -> Tuple[float, Dict]:
     """
     Calculate volatility-adjusted position size.
-    
+
     Returns:
         (position_size_usd, details_dict)
     """
-    
+
     # 1. Calculate ATR
     atr = calculate_atr(df, period=14)
     atr_value = atr.iloc[-1]
-    
+
     # 2. Normalize to percentage
     atr_pct = (atr_value / current_price) * 100
-    
+
     # 3. Calculate multiplier
     target_volatility = 2.0  # 2% target ATR
     volatility_multiplier = target_volatility / atr_pct if atr_pct > 0 else 1.0
-    
+
     # 4. Apply multiplier
     adjusted_pct = base_size_pct * volatility_multiplier
-    
+
     # 5. Detect regime
     regime = detect_volatility_regime(df, atr_pct)
-    
+
     # 6. Apply regime adjustment
     if regime == 'EXTREME':
         adjusted_pct *= 0.8
@@ -198,15 +198,15 @@ def calculate_position_size(
         adjusted_pct *= 0.9
     elif regime == 'LOW':
         adjusted_pct *= 1.1
-    
+
     # 7. Clamp to bounds
     min_pct = 0.02  # 2% minimum
     max_pct = 0.15  # 15% maximum
     final_pct = max(min_pct, min(max_pct, adjusted_pct))
-    
+
     # 8. Calculate USD size
     position_size_usd = account_balance * final_pct
-    
+
     # 9. Return with details
     details = {
         'method': 'volatility_adaptive',
@@ -218,7 +218,7 @@ def calculate_position_size(
         'position_size_usd': position_size_usd,
         'atr_value': atr_value
     }
-    
+
     return position_size_usd, details
 ```
 
@@ -309,27 +309,27 @@ def calculate_stop_distance(
 ) -> Tuple[float, Dict]:
     """
     Calculate volatility-adjusted stop loss distance.
-    
+
     Args:
         df: OHLCV dataframe
         current_price: Current market price
         base_stop_multiplier: ATR multiplier for stop (default 2.0)
-        
+
     Returns:
         (stop_distance_pct, details)
     """
-    
+
     # Calculate ATR
     atr = calculate_atr(df, period=14)
     atr_value = atr.iloc[-1]
-    
+
     # Stop distance = ATR × multiplier
     stop_distance = atr_value * base_stop_multiplier
     stop_distance_pct = (stop_distance / current_price) * 100
-    
+
     # Clamp to reasonable range
     stop_distance_pct = max(0.5, min(10.0, stop_distance_pct))
-    
+
     return stop_distance_pct, {
         'method': 'atr_based',
         'atr_value': atr_value,
@@ -357,26 +357,26 @@ def calculate_portfolio_heat(
 ) -> Dict:
     """
     Calculate volatility-weighted portfolio exposure.
-    
+
     Args:
         open_positions: List of positions with 'size' and 'atr_pct'
         account_balance: Current account balance
-        
+
     Returns:
         Portfolio heat metrics
     """
-    
+
     total_notional = sum(pos['size'] for pos in open_positions)
-    
+
     # Weight each position by its volatility
     volatility_weighted_notional = sum(
         pos['size'] * (pos['atr_pct'] / 2.0)
         for pos in open_positions
     )
-    
+
     total_exposure_pct = (total_notional / account_balance) * 100
     vol_weighted_exposure = (volatility_weighted_notional / account_balance) * 100
-    
+
     return {
         'total_exposure_pct': total_exposure_pct,
         'volatility_weighted_exposure': vol_weighted_exposure,

@@ -12,6 +12,9 @@ This example shows a complete user journey from invitation to active trading.
 
 import logging
 from datetime import datetime
+from secrets import token_urlsafe
+
+from argon2 import PasswordHasher
 
 # Import NIJA components
 from alpha_onboarding import get_onboarding_system
@@ -40,15 +43,16 @@ def demo_alpha_user_onboarding():
     print("="*60 + "\n")
 
     onboarding = get_onboarding_system()
+    demo_email = "alice@example.com"
 
     # 1. Founder generates invitation code
     print("Step 1: Generate invitation code")
     invitation = onboarding.generate_invitation_code(
-        email="alice@trader.com",
+        email=demo_email,
         tier="alpha",
         validity_days=7
     )
-    print(f"✅ Invitation code generated: {invitation.code}")
+    print("✅ Invitation code generated")
     print(f"   Expires: {invitation.expires_at.strftime('%Y-%m-%d %H:%M:%S')}")
     print()
 
@@ -56,8 +60,8 @@ def demo_alpha_user_onboarding():
     print("Step 2: User registration")
     success, error, user_id = onboarding.register_user(
         invitation_code=invitation.code,
-        email="alice@trader.com",
-        password_hash="hashed_password_here"
+        email=demo_email,
+        password_hash=PasswordHasher().hash(token_urlsafe(32))
     )
 
     if success:
@@ -69,7 +73,7 @@ def demo_alpha_user_onboarding():
 
     # 3. Email verification
     print("Step 3: Email verification")
-    success, error = onboarding.verify_email(user_id, "verification_code_123")
+    success, error = onboarding.verify_email(user_id, token_urlsafe(12))
     if success:
         print("✅ Email verified")
     print()
@@ -79,8 +83,8 @@ def demo_alpha_user_onboarding():
     success, error = onboarding.setup_broker_credentials(
         user_id=user_id,
         broker="coinbase",
-        api_key="user_coinbase_api_key",
-        api_secret="user_coinbase_api_secret"
+        api_key=token_urlsafe(24),
+        api_secret=token_urlsafe(32)
     )
     if success:
         print("✅ Broker credentials configured")

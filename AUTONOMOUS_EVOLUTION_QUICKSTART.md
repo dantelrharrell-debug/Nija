@@ -41,14 +41,14 @@ system.initialize()
 while trading:
     # Classify regime
     classification = system.classify_market_regime(df, indicators)
-    
+
     # Update performance
     system.update_strategy_performance(strategy_id, metrics)
-    
+
     # Evolve (if needed)
     if system.should_evolve():
         system.run_evolution_cycle()
-    
+
     # Rebalance (if needed)
     if system.should_rebalance():
         system.rebalance_capital()

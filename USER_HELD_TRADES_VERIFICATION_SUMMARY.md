@@ -63,7 +63,7 @@ The issue was clarified to mean: **Users have open orders (pending), not held po
 ```
 🔄 ADOPTING EXISTING POSITIONS
    Account: USER_user1_KRAKEN
-   
+
 📡 STEP 1/4: Querying exchange for open positions...
    ✅ Exchange query complete: 1 position(s) found
 

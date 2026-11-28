@@ -170,7 +170,7 @@ Problem:     Redis cannot be reached
 Symptom:     Timeout errors + lock acquisition failure
 Urgency:     🔴 CRITICAL - Trading blocked
 Time to fix: 5-10 minutes
-Success rate: 
+Success rate:
   - Fix #1: 80% (redis crash/restart)
   - Fix #2: 15% (tcp proxy/config)
   - Fix #3: 5% (emergency bypass)

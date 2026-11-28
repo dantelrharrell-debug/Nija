@@ -39,7 +39,7 @@ spec:
         - containerPort: 8080
           name: http
           protocol: TCP
-        
+
         # Liveness Probe - Detects deadlocked processes
         livenessProbe:
           httpGet:
@@ -51,7 +51,7 @@ spec:
           timeoutSeconds: 5             # 5s timeout
           successThreshold: 1           # 1 success = healthy
           failureThreshold: 3           # 3 failures = restart (30s total)
-        
+
         # Readiness Probe - Detects if service can handle traffic
         readinessProbe:
           httpGet:
@@ -63,7 +63,7 @@ spec:
           timeoutSeconds: 3             # Faster timeout
           successThreshold: 1           # 1 success = ready
           failureThreshold: 3           # 3 failures = not ready (15s total)
-        
+
         # Startup Probe - For slow-starting containers (optional)
         startupProbe:
           httpGet:
@@ -75,7 +75,7 @@ spec:
           timeoutSeconds: 3
           successThreshold: 1
           failureThreshold: 30          # 5 minutes for startup (30 * 10s)
-        
+
         resources:
           requests:
             cpu: 500m
@@ -137,7 +137,7 @@ nija_configuration_valid{} gauge
 # Time spent in configuration error state (seconds)
 nija_configuration_error_duration_seconds{} gauge
   Tracks how long service has been blocked by configuration errors
-  
+
 # State transition count
 nija_readiness_state_changes_total{} counter
   Number of times readiness state has changed
@@ -253,7 +253,7 @@ spec:
   - name: nija-trading-bot.rules
     interval: 30s
     rules:
-    
+
     # CRITICAL: Service is down
     - alert: NijaTradingBotDown
       expr: up{job="nija-trading-bot"} == 0
@@ -265,7 +265,7 @@ spec:
         summary: "NIJA Trading Bot is down"
         description: "NIJA Trading Bot has been down for more than 2 minutes. Pod: {{ $labels.pod }}"
         runbook_url: "https://docs.nija.io/runbooks/service-down"
-    
+
     # CRITICAL: Configuration error blocking trading
     - alert: NijaBlo ckedByConfigurationError
       expr: nija_configuration_error_duration_seconds > 300
@@ -278,7 +278,7 @@ spec:
         summary: "NIJA blocked by configuration error for {{ $value | humanizeDuration }}"
         description: "NIJA has been in configuration error state for {{ $value | humanizeDuration }}. This impacts availability SLO. Immediate action required."
         runbook_url: "https://docs.nija.io/runbooks/configuration-error"
-    
+
     # WARNING: Configuration error detected
     - alert: NijaConfigurationError
       expr: nija_configuration_valid == 0
@@ -290,7 +290,7 @@ spec:
         summary: "NIJA configuration is invalid"
         description: "NIJA configuration validation failed. Check credentials and environment variables. Pod: {{ $labels.pod }}"
         runbook_url: "https://docs.nija.io/runbooks/configuration-validation"
-    
+
     # CRITICAL: Not ready for extended period
     - alert: NijaNotReady
       expr: nija_ready == 0
@@ -303,7 +303,7 @@ spec:
         summary: "NIJA not ready for {{ $value | humanizeDuration }}"
         description: "NIJA has been not ready for over 10 minutes. Check readiness probe and exchange connectivity. Pod: {{ $labels.pod }}"
         runbook_url: "https://docs.nija.io/runbooks/not-ready"
-    
+
     # WARNING: Exchange connectivity degraded
     - alert: NijaExchangeConnectivityDegraded
       expr: (nija_exchanges_connected / nija_exchanges_expected) < 0.5
@@ -315,7 +315,7 @@ spec:
         summary: "NIJA exchange connectivity degraded ({{ $value | humanizePercentage }})"
         description: "Less than 50% of expected exchanges are connected. Connected: {{ $labels.connected }}, Expected: {{ $labels.expected }}. Pod: {{ $labels.pod }}"
         runbook_url: "https://docs.nija.io/runbooks/exchange-connectivity"
-    
+
     # CRITICAL: No exchanges connected
     - alert: NijaNoExchangesConnected
       expr: nija_exchanges_connected == 0 and nija_exchanges_expected > 0
@@ -327,7 +327,7 @@ spec:
         summary: "NIJA has no exchanges connected"
         description: "All exchange connections have failed. Trading cannot occur. Pod: {{ $labels.pod }}"
         runbook_url: "https://docs.nija.io/runbooks/no-exchanges"
-    
+
     # WARNING: High error rate
     - alert: NijaHighErrorRate
       expr: rate(nija_error_count_total[5m]) > 0.1
@@ -339,7 +339,7 @@ spec:
         summary: "NIJA experiencing high error rate ({{ $value | humanize }} errors/sec)"
         description: "Error rate is elevated. Investigate logs for root cause. Pod: {{ $labels.pod }}"
         runbook_url: "https://docs.nija.io/runbooks/high-error-rate"
-    
+
     # WARNING: Readiness state flapping
     - alert: NijaReadinessStateFlapping
       expr: rate(nija_readiness_state_changes_total[10m]) > 0.1
@@ -351,7 +351,7 @@ spec:
         summary: "NIJA readiness state is flapping"
         description: "Readiness state is changing frequently ({{ $value | humanize }} changes/sec). This may indicate instability. Pod: {{ $labels.pod }}"
         runbook_url: "https://docs.nija.io/runbooks/state-flapping"
-    
+
     # INFO: Trading disabled
     - alert: NijaTradingDisabled
       expr: nija_trading_enabled == 0

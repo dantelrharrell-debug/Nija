@@ -193,18 +193,18 @@ print(f"Total gain: +{metrics.total_gain_pct:.2f}%")
 class MyStrategy:
     def __init__(self):
         self.stack = create_optimization_stack(enable_all=True)
-    
+
     def execute_trade(self, symbol, account_balance):
         # Get optimized parameters
         market_data = self.get_market_data(symbol)
         entry_params = self.stack.optimize_entry_timing(market_data)
-        
+
         # Calculate optimized position size
         base_size = account_balance * 0.05
         optimized_size = self.stack.optimize_position_size(
             symbol, market_data, base_size
         )
-        
+
         # Execute with optimized parameters
         return self.place_order(symbol, optimized_size, entry_params)
 ```

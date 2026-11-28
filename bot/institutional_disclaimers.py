@@ -119,7 +119,7 @@ class InstitutionalLogger:
     with time-based throttling configurable via NIJA_DISCLOSURE_INTERVAL_HOURS,
     so multiple logger instances share the same timing rules.
     """
-    
+
     def __init__(self, name: str, base_logger: Optional[logging.Logger] = None):
         """
         Initialize institutional logger.
@@ -130,30 +130,30 @@ class InstitutionalLogger:
         """
         self.name = name
         self.logger = base_logger or logging.getLogger(name)
-    
+
     def show_validation_disclaimer(self):
         """Display the primary validation disclaimer"""
         if _should_emit_disclosure():
             self.logger.info(VALIDATION_DISCLAIMER)
-    
+
     def info(self, msg: str, *args, show_disclaimer: bool = False, **kwargs):
         """Log info message with optional disclaimer"""
         if show_disclaimer:
             self.show_validation_disclaimer()
         self.logger.info(msg, *args, **kwargs)
-    
+
     def warning(self, msg: str, *args, **kwargs):
         """Log warning message"""
         self.logger.warning(msg, *args, **kwargs)
-    
+
     def error(self, msg: str, *args, **kwargs):
         """Log error message"""
         self.logger.error(msg, *args, **kwargs)
-    
+
     def debug(self, msg: str, *args, **kwargs):
         """Log debug message"""
         self.logger.debug(msg, *args, **kwargs)
-    
+
     def critical(self, msg: str, *args, **kwargs):
         """Log critical message"""
         self.logger.critical(msg, *args, **kwargs)

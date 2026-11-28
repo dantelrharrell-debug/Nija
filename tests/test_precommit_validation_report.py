@@ -8,7 +8,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.run_precommit_validation import COMMAND, run, summarize
+from scripts.run_precommit_validation import (
+    COMMAND, finding_paths, formatting_paths, run, summarize, tracked_finding_candidates,
+)
 
 
 class PrecommitReportTests(unittest.TestCase):
@@ -20,11 +22,15 @@ class PrecommitReportTests(unittest.TestCase):
                 if failure is not None:
                     execute.side_effect = failure
                 else:
-                    execute.return_value = subprocess.CompletedProcess(COMMAND, code, output, stderr)
+                    execute.side_effect = [
+                        subprocess.CompletedProcess(COMMAND, code, output, stderr),
+                        subprocess.CompletedProcess([], 0, b"", b""),
+                        subprocess.CompletedProcess([], 0, b"", b""),
+                    ]
                 with contextlib.redirect_stdout(stream):
                     status = run(path)
-                kwargs = execute.call_args.kwargs
-                self.assertEqual(execute.call_args.args[0], COMMAND)
+                kwargs = execute.call_args_list[0].kwargs
+                self.assertEqual(execute.call_args_list[0].args[0], COMMAND)
                 self.assertEqual(COMMAND, ["pre-commit", "run", "--all-files", "--show-diff-on-failure"])
                 self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
                 self.assertEqual(kwargs["timeout"], 1200)
@@ -69,6 +75,91 @@ class PrecommitReportTests(unittest.TestCase):
         status, report, _ = self.invoke(code=1, output="- files were modified by this hook")
         self.assertEqual(status, 1)
         self.assertEqual(report["categories"], ["hook_modified_files"])
+
+    def test_formatting_report_locates_tracked_edits_without_printing_paths(self):
+        with patch("scripts.run_precommit_validation.formatting_paths",
+                   return_value=["tests/example.py"]):
+            status, report, output = self.invoke(code=1, output=(
+                "Trim trailing whitespace...Failed\n"
+                "- files were modified by this hook\n"
+                "All changes made by hooks:\n+PRIVATE_SOURCE\n"))
+        self.assertEqual(status, 1)
+        self.assertEqual(report["tracked_hook_edits"], ["tests/example.py"])
+        self.assertNotIn("example.py", output)
+        self.assertNotIn("PRIVATE_SOURCE", json.dumps(report) + output)
+
+    def test_git_reads_names_only_and_ignores_unusual_or_sensitive_paths(self):
+        output = b"docs/sample.md\0tests/unit.py\0.env.json\0private.pem\0strange\nname.py\0"
+        with patch("scripts.run_precommit_validation.subprocess.run") as execute:
+            execute.return_value = subprocess.CompletedProcess([], 0, output, b"PRIVATE_DETAIL")
+            self.assertEqual(formatting_paths(), ["docs/sample.md", "tests/unit.py"])
+            self.assertEqual(execute.call_args.args[0],
+                             ["git", "diff", "--name-only", "--no-renames", "-z", "--"])
+            self.assertFalse(execute.call_args.kwargs["shell"])
+            execute.return_value = subprocess.CompletedProcess([], 1, output, b"PRIVATE_DETAIL")
+            self.assertEqual(formatting_paths(), [])
+
+    def test_large_hook_patch_still_reports_a_bounded_sample(self):
+        paths = b"".join(f"docs/file-{i:04}.md".encode() + b"\0" for i in range(300))
+        with patch("scripts.run_precommit_validation.subprocess.run") as execute:
+            execute.return_value = subprocess.CompletedProcess([], 0, paths, b"")
+            actual = formatting_paths()
+        self.assertEqual(len(actual), 250)
+        self.assertEqual(actual[0], "docs/file-0000.md")
+        self.assertEqual(actual[-1], "docs/file-0249.md")
+
+    def test_finding_paths_only_from_known_failed_hook_and_tracked_files(self):
+        sample = (
+            "Bandit security check...Failed\n"
+            "Location: ./bot/sample.py:3:4\n"
+            "Location: /tmp/untracked.py:2\n"
+            "PRIVATE_DETAIL\n"
+            "Detect secrets...Failed\n"
+            "Location: config/sample.json:7\n"
+            "Gitleaks secret scanner...Failed\n"
+            "File: bot/sample.py\n"
+            "File: private-value.py\n"
+            "Unknown hook...Failed\n"
+            "File: config/sample.json\n"
+            "All changes made by hooks:\n"
+            "Bandit security check...Failed\n"
+            "Location: ignored.py:1\n"
+        )
+        tracked = {"bot/sample.py", "config/sample.json", "ignored.py"}
+        self.assertEqual(finding_paths(sample, "", tracked), {
+            "bandit": ["bot/sample.py"],
+            "detect-secrets": ["config/sample.json"],
+            "gitleaks": ["bot/sample.py"],
+        })
+
+    def test_finding_paths_do_not_change_failure_or_print_artifact_paths(self):
+        with patch("scripts.run_precommit_validation.tracked_finding_candidates",
+                   return_value={"bot/sample.py"}):
+            status, report, output = self.invoke(code=1, output=(
+                "Detect private keys...Failed\nPrivate key found: bot/sample.py\nPRIVATE_DETAIL\n"
+            ))
+        self.assertEqual(status, 1)
+        self.assertEqual(report["tracked_finding_paths"], {"detect-private-key": ["bot/sample.py"]})
+        self.assertNotIn("bot/sample.py", output)
+        self.assertNotIn("PRIVATE_DETAIL", json.dumps(report) + output)
+
+    def test_tracked_finding_candidates_rejects_sensitive_and_unusual_names(self):
+        sample = b"bot/sample.py\0private.pem\0.env.json\0strange\nname.py\0"
+        with patch("scripts.run_precommit_validation.subprocess.run") as execute:
+            execute.return_value = subprocess.CompletedProcess([], 0, sample, b"PRIVATE_DETAIL")
+            self.assertEqual(tracked_finding_candidates(), {"bot/sample.py"})
+            self.assertEqual(execute.call_args.args[0], ["git", "ls-files", "-z", "--"])
+            self.assertFalse(execute.call_args.kwargs["shell"])
+            execute.return_value = subprocess.CompletedProcess([], 1, sample, b"PRIVATE_DETAIL")
+            self.assertEqual(tracked_finding_candidates(), set())
+
+    def test_finding_paths_are_bounded_and_deduplicated(self):
+        tracked = {f"bot/file-{i:03}.py" for i in range(120)}
+        lines = "Gitleaks secret scanner...Failed\n" + "\n".join(
+            f"File: {path}" for path in sorted(tracked)
+        )
+        self.assertEqual(finding_paths(lines, "", tracked)["gitleaks"],
+                         sorted(tracked)[:100])
 
     def test_reported_failure_with_zero_exit_is_rejected(self):
         status, _, _ = self.invoke(output="Detect secrets...Failed\n")

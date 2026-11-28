@@ -409,7 +409,7 @@ import { graduationApi } from './api/graduation';
 // Check graduation status
 const checkGraduation = async (userId: string) => {
   const status = await graduationApi.getStatus(userId);
-  
+
   if (status.eligible_for_graduation) {
     // Show graduation celebration screen
     navigation.navigate('GraduationCelebration');
@@ -424,7 +424,7 @@ const graduateUser = async (userId: string) => {
   const result = await graduationApi.graduate(userId, {
     acknowledge_risks: true
   });
-  
+
   if (result.success) {
     // Show success message and new limits
     showSuccessModal(result);
@@ -533,10 +533,10 @@ from bot.paper_trading_graduation import PaperTradingGraduationSystem
 def create_new_user(user_id: str):
     # Create graduation tracking
     graduation = PaperTradingGraduationSystem(user_id)
-    
+
     # User starts in paper trading mode
     assert graduation.progress.trading_mode == TradingMode.PAPER
-    
+
     # Show onboarding tutorial
     show_tutorial(user_id)
 ```
@@ -552,11 +552,11 @@ def update_user_graduation_progress(user_id: str):
     # Get paper account stats
     paper_account = get_paper_account()
     stats = paper_account.get_stats()
-    
+
     # Update graduation progress
     graduation = PaperTradingGraduationSystem(user_id)
     graduation.update_from_paper_account(stats)
-    
+
     # Check if newly eligible
     if graduation.is_eligible_for_graduation():
         send_notification(user_id, "You're ready to graduate!")
@@ -569,19 +569,19 @@ def update_user_graduation_progress(user_id: str):
 def execute_trade(user_id: str, symbol: str, size: float):
     graduation = PaperTradingGraduationSystem(user_id)
     limits = graduation.get_current_limits()
-    
+
     if limits['mode'] == 'paper':
         # Execute in paper account only
         execute_paper_trade(symbol, size)
-    
+
     elif limits['mode'] == 'live_restricted':
         # Enforce capital limits
         if size > limits['max_position_size']:
             raise ValueError(f"Position exceeds limit: ${limits['max_position_size']}")
-        
+
         # Execute real trade
         execute_live_trade(symbol, size)
-    
+
     elif limits['mode'] == 'live_full':
         # Full access - normal risk management
         execute_live_trade(symbol, size)
@@ -596,31 +596,31 @@ import { graduationApi } from './api/graduation';
 
 export const GraduationProgressScreen = ({ userId }) => {
   const [status, setStatus] = useState(null);
-  
+
   useEffect(() => {
     loadGraduationStatus();
   }, []);
-  
+
   const loadGraduationStatus = async () => {
     const result = await graduationApi.getStatus(userId);
     setStatus(result);
   };
-  
+
   const handleGraduate = async () => {
     const confirmed = await showRiskAcknowledgment();
     if (confirmed) {
       const result = await graduationApi.graduate(userId, {
         acknowledge_risks: true
       });
-      
+
       if (result.success) {
         showCelebration();
       }
     }
   };
-  
+
   return (
-    <GraduationProgressUI 
+    <GraduationProgressUI
       status={status}
       onGraduate={handleGraduate}
     />

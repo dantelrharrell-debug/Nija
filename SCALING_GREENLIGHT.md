@@ -277,21 +277,21 @@ def can_use_position_size(user_id: str, position_size_usd: float) -> bool:
     """Check if user can use requested position size based on tier"""
     from bot.scaling_greenlight import get_greenlight_system, ScalingTier
     from bot.user_tier_tracker import get_user_tier  # Hypothetical
-    
+
     greenlight = get_greenlight_system()
     user_tier = get_user_tier(user_id)
-    
+
     # Get tier limits
     limits = greenlight.get_tier_limits(user_tier)
-    
+
     if position_size_usd < limits['min']:
         logger.warning(f"Position too small for tier: ${position_size_usd} < ${limits['min']}")
         return False
-    
+
     if position_size_usd > limits['max']:
         logger.warning(f"Position too large for tier: ${position_size_usd} > ${limits['max']}")
         return False
-    
+
     return True
 ```
 
@@ -303,18 +303,18 @@ def check_tier_progression(user_id: str):
     from bot.scaling_greenlight import get_greenlight_system, ScalingTier
     from bot.profit_proven_rule import get_profit_proven_tracker
     from controls import get_hard_controls
-    
+
     # Get current tier
     current_tier = get_user_tier(user_id)
-    
+
     # Don't check if already at max tier
     if current_tier == ScalingTier.LARGE:
         return
-    
+
     # Get metrics
     tracker = get_profit_proven_tracker()
     _, _, perf_metrics = tracker.check_profit_proven()
-    
+
     controls = get_hard_controls()
     risk_stats = controls.get_rejection_stats(user_id)
     risk_metrics = {
@@ -323,7 +323,7 @@ def check_tier_progression(user_id: str):
         'position_rejections': risk_stats['rejected'],
         'total_validations': risk_stats['total_validations'],
     }
-    
+
     # Generate report
     greenlight = get_greenlight_system()
     report = greenlight.generate_greenlight_report(
@@ -332,15 +332,15 @@ def check_tier_progression(user_id: str):
         performance_metrics=perf_metrics,
         risk_metrics=risk_metrics
     )
-    
+
     # Check if approved for higher tier
     if report.all_criteria_met and report.approved_tier.value > current_tier.value:
         logger.info(f"🎉 User {user_id} approved for tier {report.approved_tier.name}!")
         logger.info(report.to_text_report())
-        
+
         # Send notification
         send_tier_progression_notification(user_id, report)
-        
+
         # Auto-upgrade (or require manual confirmation)
         # upgrade_user_tier(user_id, report.approved_tier)
 ```
@@ -353,17 +353,17 @@ import schedule
 def scheduled_greenlight_check():
     """Run greenlight checks for all active users"""
     from bot.scaling_greenlight import get_greenlight_system, ScalingTier
-    
+
     active_users = get_active_users()
-    
+
     for user in active_users:
         # Skip users at max tier
         if user.tier == ScalingTier.LARGE:
             continue
-        
+
         # Generate report
         report = generate_user_greenlight_report(user.id, user.tier)
-        
+
         # Log if ready for progression
         if report.all_criteria_met:
             logger.info(f"User {user.id} ready for tier progression!")
@@ -392,20 +392,20 @@ Share greenlight reports with users:
 def share_progress_with_user(user_id: str):
     """Send progress report to user"""
     report = generate_greenlight_report(user_id)
-    
+
     email_body = f"""
     Hi {user_id},
-    
+
     Here's your progress toward scaling approval:
-    
+
     {report.to_text_report()}
-    
+
     Questions? Contact support.
-    
+
     Happy trading!
     NIJA Team
     """
-    
+
     send_email(user_id, "Your Scaling Progress Report", email_body)
 ```
 
@@ -418,18 +418,18 @@ def save_greenlight_report(report):
     """Save report for historical tracking"""
     import os
     from pathlib import Path
-    
+
     # Create reports directory
     reports_dir = Path("./data/greenlight_reports")
     reports_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Save as JSON
     filename = f"{report.user_id}_{report.report_id}.json"
     filepath = reports_dir / filename
-    
+
     with open(filepath, 'w') as f:
         f.write(report.to_json())
-    
+
     logger.info(f"Greenlight report saved: {filepath}")
 ```
 
@@ -443,7 +443,7 @@ from bot.trading_audit_logger import get_audit_logger, AuditEventType
 def log_greenlight_decision(report):
     """Log greenlight report to audit trail"""
     audit_logger = get_audit_logger()
-    
+
     audit_logger.log_event(
         event_type=AuditEventType.PROFIT_PROVEN_CHECK,
         user_id=report.user_id,

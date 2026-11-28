@@ -181,4 +181,3 @@ def test_publication_monitor_accepts_safe_preactivation_states(monkeypatch) -> N
     ready, detail = module._ready()
     assert ready is False
     assert detail == "state_not_publishable:EMERGENCY_STOP"
-

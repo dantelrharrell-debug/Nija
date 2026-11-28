@@ -64,6 +64,29 @@ def test_invalid_storage_and_account_fail_closed(tmp_path: Path):
         KrakenSubmissionJournal(other, SCOPE).reserve("first")
 
 
+def test_orphaned_terminal_record_cannot_pre_resolve_a_new_reservation(tmp_path: Path):
+    path = tmp_path / "submission.db"
+    initialize_journal(path, SCOPE)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute(
+            "INSERT INTO submission_resolution VALUES (?, ?, ?, ?, ?)",
+            ("orphaned-intent", 1.0, "closed", "a" * 64, "b" * 64),
+        )
+
+    journal = KrakenSubmissionJournal(path, SCOPE)
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a reservation"):
+        journal.reserve("orphaned-intent")
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a reservation"):
+        journal.reserve("different-intent")
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a reservation"):
+        journal.unresolved_count()
+
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("SELECT count(*) FROM submission").fetchone() == (0,)
+        assert db.execute("SELECT count(*) FROM submission_resolution").fetchone() == (1,)
+
+
 def reconciliation(scope, intent_id, broker_order_id, reserved_at):
     return {
         "account_scope": scope,
@@ -89,6 +112,64 @@ def test_terminal_reconciliation_releases_fence_but_retains_replay_protection(tm
     with pytest.raises(SubmissionDenied, match="already reserved"):
         restarted.reserve("first")
     restarted.reserve("next")
+
+
+@pytest.mark.parametrize("stored_order_id", [None, "", "   "])
+def test_restored_terminal_record_requires_stored_order_reference(tmp_path, stored_order_id):
+    path = tmp_path / "submission.db"
+    initialize_journal(path, SCOPE)
+    journal = KrakenSubmissionJournal(path, SCOPE)
+    journal.reserve("existing")
+    journal.record_ack("existing", "order")
+    journal.reconcile_submission("existing", verify_terminal_order=reconciliation)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("UPDATE submission SET broker_order_id=?", (stored_order_id,))
+
+    restarted = KrakenSubmissionJournal(path, SCOPE)
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a broker order reference"):
+        restarted.unresolved_count()
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a broker order reference"):
+        restarted.reserve("next")
+
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("SELECT intent_id, broker_order_id FROM submission").fetchall() == [
+            ("existing", stored_order_id)
+        ]
+        assert db.execute("SELECT intent_id FROM submission_resolution").fetchall() == [("existing",)]
+
+
+@pytest.mark.parametrize("change", [
+    {"terminal_status": "open"},
+    {"observed_at": 0},
+    {"observed_at": 1e20},
+    {"observed_at": "unknown"},
+    {"broker_evidence_sha256": "g" * 64},
+    {"ledger_evidence_sha256": "b" * 64 + "\x00invalid"},
+])
+def test_restored_terminal_record_requires_valid_evidence_metadata(tmp_path, change):
+    path = tmp_path / "submission.db"
+    initialize_journal(path, SCOPE)
+    journal = KrakenSubmissionJournal(path, SCOPE)
+    journal.reserve("existing")
+    journal.record_ack("existing", "order")
+    with closing(sqlite3.connect(path)) as db, db:
+        reserved_at = db.execute("SELECT reserved_at FROM submission").fetchone()[0]
+        evidence = {**reconciliation(SCOPE, "existing", "order", reserved_at), **change}
+        db.execute(
+            """INSERT INTO submission_resolution VALUES (
+                   :intent_id, :observed_at, :terminal_status, :broker_evidence_sha256, :ledger_evidence_sha256
+               )""",
+            evidence,
+        )
+
+    restarted = KrakenSubmissionJournal(path, SCOPE)
+    with pytest.raises(SubmissionDenied, match="invalid terminal evidence metadata"):
+        restarted.unresolved_count()
+    with pytest.raises(SubmissionDenied, match="invalid terminal evidence metadata"):
+        restarted.reserve("next")
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("SELECT intent_id FROM submission").fetchall() == [("existing",)]
+        assert db.execute("SELECT intent_id FROM submission_resolution").fetchall() == [("existing",)]
 
 
 @pytest.mark.parametrize("change", [

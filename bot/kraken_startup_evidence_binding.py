@@ -9,11 +9,25 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
+import logging
 import threading
 from types import MappingProxyType
 from typing import Any
 
+LOGGER = logging.getLogger(__name__)
+OWNER_RELEASE = "owner_release"
 RECEIPTS = frozenset({"independent_review", "backup_restore", "broker_ledger_exits"})
+
+STARTUP_RECEIPT_SETS = (RECEIPTS, frozenset({OWNER_RELEASE}))
+
+
+class RecoveryDiagnosticResult(Enum):
+    """Status from a read-only sample, with no installable binding."""
+
+    SAMPLED = "recovery_diagnostics_sampled"
+    INCOMPLETE = "recovery_diagnostics_incomplete"
+    UNAVAILABLE = "recovery_diagnostics_unavailable"
 
 
 @dataclass(frozen=True)
@@ -73,7 +87,7 @@ def register_reviewed_startup_binding(
 ) -> None:
     """Called once by the independently reviewed protected composition root.
 
-    The verifier must authenticate all three receipts against this exact binding
+    The verifier must authenticate the configured receipt set against this exact binding
     and deployed release. Returning True is an approval, never evidence by itself.
     There is intentionally no default verifier or permissive fallback.
     """
@@ -86,6 +100,35 @@ def register_reviewed_startup_binding(
         if not callable(factory) or not callable(verify_receipts):
             raise TypeError("reviewed_factory_and_receipt_verifier_required")
         _factory, _verify_receipts = factory, verify_receipts
+
+
+def report_recovery_observations(binding: ReviewedStartupBinding) -> RecoveryDiagnosticResult:
+    """Sample authenticated providers for logs without publishing an admission registry."""
+    from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED
+    from bot.pretrade_composition_bridge_v465 import make_collector
+
+    try:
+        collect = make_collector(
+            {"platform:kraken": binding.providers},
+            trusted_provider_ids=binding.reviewed_provider_ids,
+        )
+        collect("platform:kraken")
+    except IndependentEvidenceRejected as exc:
+        for field in REQUIRED:
+            LOGGER.info(
+                "KRAKEN_RECOVERY_OBSERVATION field=%s status=%s authorizes_orders=false",
+                field, exc.failure_reasons.get(field) or "no_field_failure_reported",
+            )
+        return RecoveryDiagnosticResult.INCOMPLETE
+    except Exception:
+        LOGGER.warning("KRAKEN_RECOVERY_OBSERVATIONS status=observation_batch_unavailable authorizes_orders=false")
+        return RecoveryDiagnosticResult.UNAVAILABLE
+    else:
+        for field in REQUIRED:
+            LOGGER.info(
+                "KRAKEN_RECOVERY_OBSERVATION field=%s status=validated authorizes_orders=false", field,
+            )
+        return RecoveryDiagnosticResult.SAMPLED
 
 
 def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
@@ -106,6 +149,8 @@ def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
 
         failure_status = "startup_binding_factory_failed"
         binding = factory(manager=manager, strategy=strategy)
+        if type(binding) is RecoveryDiagnosticResult:
+            return binding.value
         failure_status = "reviewed_startup_binding_denied"
         if (type(binding) is not ReviewedStartupBinding
                 or binding.manager is not manager or binding.strategy is not strategy
@@ -125,7 +170,7 @@ def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
                 or _broker_account_scope(broker) != "platform:kraken"):
             return "canonical_kraken_binding_mismatch"
         failure_status = "release_receipt_verification_failed"
-        if (set(binding.receipts) != RECEIPTS
+        if (set(binding.receipts) not in STARTUP_RECEIPT_SETS
                 or any(value is None for value in binding.receipts.values())
                 or verifier(binding) is not True):
             return "authenticated_release_receipts_required"

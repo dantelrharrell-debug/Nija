@@ -40,7 +40,7 @@ class TradeRecord:
     entry_price: float
     exit_price: float
     # ... existing fields ...
-    
+
     # NEW: Analytics fields
     entry_reason: str          # EntryReason enum value
     exit_reason: str           # ExitReason enum value
@@ -117,11 +117,11 @@ with MarketScanTimer(total_markets=732, batch_size=30, batch_number=1) as timer:
     for symbol in markets_to_scan:
         # Scan market
         timer.add_market_scanned()
-        
+
         # If signal generated
         if signal_detected:
             timer.add_signal()
-        
+
         # If trade executed
         if trade_executed:
             timer.add_trade()
@@ -347,7 +347,7 @@ The analytics system helps answer:
 - **Capital Utilization %**: Ideal range 60-80%
   - < 60%: Too conservative, missing opportunities
   - > 80%: High risk, limited buffer for opportunities
-  
+
 - **Position Count**: Monitor against position cap
   - Track trend over time
   - Correlate with utilization %
@@ -357,7 +357,7 @@ The analytics system helps answer:
 - **PnL by Signal Type**: Identify best-performing signals
   - Focus capital on high-performing signal types
   - Reduce allocation to underperforming signals
-  
+
 - **Entry/Exit Reason Analysis**: Optimize entry and exit logic
   - High profit target hits = good entry timing
   - High stop loss hits = poor entry selection
@@ -369,7 +369,7 @@ The analytics system helps answer:
    ```bash
    # Daily report
    python generate_analytics_report.py --detailed
-   
+
    # Weekly CSV export for deeper analysis
    python generate_analytics_report.py --export-csv
    ```

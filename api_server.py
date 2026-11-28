@@ -302,12 +302,8 @@ def register():
     """
     Register a new user.
 
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password",
-            "subscription_tier": "basic"  // optional: basic, pro, enterprise
-        }
+    The JSON body requires an email and password. The optional
+    subscription_tier field accepts basic, pro, or enterprise.
     """
     data = request.get_json()
 
@@ -393,11 +389,7 @@ def login():
     """
     Login user and return JWT token.
 
-    Request body:
-        {
-            "email": "user@example.com",
-            "password": "secure_password"
-        }
+    The JSON body requires an email and password.
     """
     data = request.get_json()
 

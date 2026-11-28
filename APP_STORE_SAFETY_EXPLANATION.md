@@ -766,10 +766,10 @@ Users grant NIJA **limited API permissions** on their exchange:
    ```bash
    # Small accounts
    python simulate_live_trade.py --platform-balance 1000 --platform-trade-size 20
-   
+
    # Large accounts
    python simulate_live_trade.py --platform-balance 100000 --platform-trade-size 2000
-   
+
    # Kraken exchange (higher minimums)
    python simulate_live_trade.py --exchange kraken
    ```

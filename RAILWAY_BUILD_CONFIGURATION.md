@@ -45,7 +45,7 @@ If you need to manually set build arguments in Railway, you can do so in the `ra
 }
 ```
 
-**Note:** 
+**Note:**
 - Railway V3 build environment should automatically pass these values, so manual configuration is usually not needed.
 - `BUILD_TIMESTAMP` is generated at build time using the `date` command and does not need to be provided as a build argument.
 
@@ -123,7 +123,7 @@ Both files are auto-generated and should not be edited manually.
 
 **Cause:** Build arguments not passed to Docker build
 
-**Solution:** 
+**Solution:**
 1. Check that Railway is using build environment V3
 2. Verify `railway.json` has correct configuration
 3. Redeploy to trigger a fresh build

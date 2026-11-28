@@ -19,7 +19,7 @@ Subject: App Review - Additional Information Needed
 Guideline 2.3.8 - Accurate Metadata
 Guideline 3.1.1 - In-App Purchases and Financial Apps
 
-We noticed that your app facilitates cryptocurrency trading but does not 
+We noticed that your app facilitates cryptocurrency trading but does not
 adequately disclose the financial risks to users.
 
 Issues:
@@ -29,8 +29,8 @@ Issues:
 4. Missing disclaimer that app is not investment advice
 
 Next Steps:
-Please revise your app to include prominent risk disclosures in the user 
-interface before any trading can occur. Users must explicitly acknowledge 
+Please revise your app to include prominent risk disclosures in the user
+interface before any trading can occur. Users must explicitly acknowledge
 they understand the risks.
 ```
 
@@ -84,7 +84,7 @@ Subject: App Review - Rejection
 Guideline 2.5.1 - Software Requirements
 Guideline 4.2 - Minimum Functionality
 
-We found that your app performs automated trading operations without 
+We found that your app performs automated trading operations without
 sufficient user control or visibility into what actions are being taken.
 
 Issues:
@@ -94,7 +94,7 @@ Issues:
 4. User cannot easily stop automated trading
 
 Next Steps:
-Apps that perform automated actions must give users clear control and 
+Apps that perform automated actions must give users clear control and
 visibility. Please provide:
 - Clear indication of trading status (ON/OFF)
 - Ability to instantly stop automated trading
@@ -149,7 +149,7 @@ Subject: App Review - Rejection
 Guideline 4.2 - Minimum Functionality
 Guideline 2.1 - App Completeness
 
-We were unable to fully review your app as it appears to be primarily 
+We were unable to fully review your app as it appears to be primarily
 a command-line tool without a clear user interface.
 
 Issues:
@@ -159,7 +159,7 @@ Issues:
 4. Not accessible to average users
 
 Next Steps:
-Apps submitted to the App Store must have a functional user interface. 
+Apps submitted to the App Store must have a functional user interface.
 Please add a UI that allows users to:
 - Configure the app without editing files
 - View trading status and history
@@ -225,7 +225,7 @@ Subject: App Review - Metadata Issue
 Guideline 1.3 - Kids Category
 Age Rating Accuracy
 
-Your app involves financial trading but is not rated appropriately for 
+Your app involves financial trading but is not rated appropriately for
 mature audiences.
 
 Issues:
@@ -323,7 +323,7 @@ Subject: App Review - Privacy Policy Required
 
 Guideline 5.1.1 - Privacy - Data Collection and Storage
 
-Your app collects user data (API credentials, trading history) but does 
+Your app collects user data (API credentials, trading history) but does
 not have an adequate privacy policy.
 
 Issues:

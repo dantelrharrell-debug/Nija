@@ -159,4 +159,3 @@ Once all checkboxes are complete, your NIJA bot should be back online and tradin
 **Recovery Completed:** _________  
 **Total Time:** _________  
 **Result:** ✅ SUCCESS / ⚠️ PARTIAL / ❌ FAILED
-

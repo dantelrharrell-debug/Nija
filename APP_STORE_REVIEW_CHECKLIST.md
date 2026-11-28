@@ -215,11 +215,11 @@ Run: `python qa_app_store_mode.py`
    ```bash
    # Set environment
    export APP_STORE_MODE=true
-   
+
    # Build app
    python -m pip install -r requirements.txt
    python -m pytest test_app_store_mode.py
-   
+
    # Verify mode is active
    python -c "from bot.app_store_mode import is_app_store_mode_enabled; print('✅' if is_app_store_mode_enabled() else '❌')"
    ```
@@ -228,7 +228,7 @@ Run: `python qa_app_store_mode.py`
    ```bash
    # Run QA suite
    python qa_app_store_mode.py --full
-   
+
    # Expected: All tests pass
    ```
 
@@ -276,22 +276,22 @@ Run: `python qa_app_store_mode.py`
    - [ ] Provide review notes:
      ```
      For Apple Reviewers:
-     
+
      This app is in APP STORE REVIEW MODE.
-     
+
      What you'll see:
      - Full dashboard and UI
      - Simulated trading data
      - All risk disclosures
      - Account management features
-     
+
      What's blocked:
      - Live trading execution
      - Real money transactions
      - Exchange API order placement
-     
+
      This mode ensures safe review without financial risk.
-     
+
      After approval, users will enable live trading
      via their own exchange API credentials.
      ```

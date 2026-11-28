@@ -144,6 +144,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         manifests = workflow["jobs"]["python-package-scan"]["strategy"]["matrix"]["requirements"]
         self.assertEqual(set(manifests), {
             "requirements.txt", "requirements-billing.txt", "requirements-member-broker.txt",
+            "requirements-notebook.txt",
         })
         guarddog = next(step for step in workflow["jobs"]["python-package-scan"]["steps"]
                         if 'nija-guarddog/bin/guarddog" pypi verify' in step.get("run", ""))

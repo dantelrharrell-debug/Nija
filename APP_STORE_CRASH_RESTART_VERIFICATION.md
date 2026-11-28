@@ -30,11 +30,11 @@ This document simulates and verifies the worst-case crash/restart scenarios to d
 1. **Pre-entry validation** (line 4588 in trading_strategy.py)
    - Checks position count BEFORE attempting trade
    - Blocks if count >= 8
-   
+
 2. **Pre-scan check** (line 4801)
    - Double-checks count before market scanning
    - Exits early if at cap
-   
+
 3. **Pre-order check** (line 5177)
    - Final check immediately before order placement
    - Breaks loop if count >= 8
@@ -241,10 +241,10 @@ This document simulates and verifies the worst-case crash/restart scenarios to d
    ```bash
    # Verify pre-entry checks exist
    grep -n "len(current_positions) >= MAX_POSITIONS_ALLOWED" bot/trading_strategy.py
-   
+
    # Verify startup cleanup
    grep -n "cycle_count == 0" bot/trading_strategy.py
-   
+
    # Verify periodic cleanup
    grep -n "FORCED_CLEANUP_INTERVAL" bot/trading_strategy.py
    ```

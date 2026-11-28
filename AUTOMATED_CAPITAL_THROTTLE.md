@@ -226,33 +226,33 @@ class NIJATradingStrategy:
     def __init__(self, balance):
         self.throttle = AutomatedCapitalThrottle(initial_capital=balance)
         self.risk_mgr = AdaptiveRiskManager()
-    
+
     def execute_trade(self, signal, current_balance):
         # Update throttle with current balance
         self.throttle.update_capital(current_balance)
-        
+
         # Check if throttled
         if self.throttle.state.is_throttled:
             logger.warning(f"Trading throttled: {self.throttle.state.throttle_reason}")
             return None
-        
+
         # Get throttled position size
         max_pos_pct = self.throttle.get_max_position_size()
-        
+
         # Calculate position size with both risk manager and throttle
         risk_mgr_size = self.risk_mgr.calculate_position_size(...)
         final_size = min(risk_mgr_size, current_balance * max_pos_pct)
-        
+
         # Place trade
         order = self.place_order(signal, final_size)
-        
+
         # Record outcome
         if order.filled:
             is_winner = order.profit > 0
             self.throttle.record_trade(is_winner, order.profit)
-        
+
         return order
-    
+
     def check_scaling_readiness(self):
         """Check if ready to scale past $50k"""
         if self.throttle.state.current_capital >= 50000:

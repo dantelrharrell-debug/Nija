@@ -129,7 +129,7 @@ print(report)
 # PROFIT PROVEN STATUS REPORT
 # ================================================================================
 # Status: IN_PROGRESS
-# 
+#
 # Criteria vs. Current Performance:
 #   Time:       18.5h / 24.0h ⏳
 #   Trades:     42 / 50 ⏳
@@ -161,11 +161,11 @@ def should_allow_trade(user_id: str, capital_tier: str) -> bool:
     """
     tracker = get_profit_proven_tracker()
     is_proven, status, metrics = tracker.check_profit_proven()
-    
+
     # For small accounts, allow trading without proof
     if capital_tier in ['micro', 'saver']:
         return True
-    
+
     # For larger accounts, require proof
     if capital_tier in ['investor', 'baller']:
         if not is_proven:
@@ -173,7 +173,7 @@ def should_allow_trade(user_id: str, capital_tier: str) -> bool:
             logger.warning(f"   Status: {status.value}")
             logger.warning(f"   Progress: {metrics['trade_count']}/{tracker.criteria.min_trades} trades")
             return False
-    
+
     return True
 ```
 
@@ -185,7 +185,7 @@ def record_completed_trade(trade_data: Dict) -> None:
     Record trade in profit proven tracker.
     """
     tracker = get_profit_proven_tracker()
-    
+
     # Create trade record
     trade = TradeRecord(
         trade_id=trade_data['id'],
@@ -200,13 +200,13 @@ def record_completed_trade(trade_data: Dict) -> None:
         net_pnl_usd=trade_data['net_pnl'],
         is_win=trade_data['net_pnl'] > 0
     )
-    
+
     # Record trade
     tracker.record_trade(trade)
-    
+
     # Check status after each trade
     is_proven, status, metrics = tracker.check_profit_proven()
-    
+
     if status == ProfitProvenStatus.PROVEN and not tracker.status == ProfitProvenStatus.PROVEN:
         logger.info("=" * 80)
         logger.info("🎉 MILESTONE: Strategy is now PROFIT PROVEN!")
@@ -260,18 +260,18 @@ Alert when milestones are reached:
 ```python
 def check_milestones():
     is_proven, status, metrics = tracker.check_profit_proven()
-    
+
     # Check individual criteria
     checks = metrics['checks']
-    
+
     if checks['time_requirement'] and not hasattr(tracker, '_time_milestone_logged'):
         logger.info("✅ MILESTONE: Time requirement met!")
         tracker._time_milestone_logged = True
-    
+
     if checks['trade_count_requirement'] and not hasattr(tracker, '_trades_milestone_logged'):
         logger.info("✅ MILESTONE: Trade count requirement met!")
         tracker._trades_milestone_logged = True
-    
+
     # ... check other criteria
 ```
 
@@ -283,11 +283,11 @@ Reset tracker when strategy logic changes:
 def on_strategy_update():
     """Called when trading strategy is modified"""
     from bot.profit_proven_rule import ProfitProvenTracker
-    
+
     # Create fresh tracker
     global _global_tracker
     _global_tracker = ProfitProvenTracker()
-    
+
     logger.warning("⚠️ Strategy updated - Profit Proven status RESET")
     logger.warning("   Strategy must re-prove profitability")
 ```
@@ -374,7 +374,7 @@ with open('tracker_state.json', 'w') as f:
 import json
 with open('tracker_state.json', 'r') as f:
     state_data = json.load(f)
-    
+
 # Manually reconstruct tracker from state
 # (Auto-loading from saved state to be implemented)
 ```

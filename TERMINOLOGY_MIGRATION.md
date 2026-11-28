@@ -40,7 +40,7 @@ Align NIJA's terminology with Apple's requirements for transparency and user exp
    - One account controls others
    - Signal distribution service
    - Managed account arrangement
-   
+
 2. **Regulatory Classification Risks:**
    - May classify system as "signal service"
    - May trigger broker-dealer regulations
@@ -150,7 +150,7 @@ def get_platform_api_key():
     """Get platform API key with backward compatibility"""
     # Try new name first
     api_key = os.getenv('KRAKEN_PLATFORM_API_KEY')
-    
+
     # Fallback to old name with deprecation warning
     if not api_key:
         api_key = os.getenv('KRAKEN_PLATFORM_API_KEY')
@@ -159,7 +159,7 @@ def get_platform_api_key():
                 "⚠️  KRAKEN_PLATFORM_API_KEY is deprecated. "
                 "Please use KRAKEN_PLATFORM_API_KEY instead."
             )
-    
+
     return api_key
 ```
 
@@ -188,7 +188,7 @@ Hi [User],
 
 We're updating NIJA's terminology to better reflect how the system works:
 
-OLD: "Platform Account" 
+OLD: "Platform Account"
 NEW: "Platform Account"
 
 What this means:

@@ -98,18 +98,18 @@ config = {
 config = {
     # Master switch
     'enabled': True,
-    
+
     # Crash validation
     'crash_validation_interval_hours': 24,
-    
+
     # Market regime
     'trending_adx_min': 25,
     'ranging_adx_max': 20,
-    
+
     # Sector caps
     'sector_soft_limit_pct': 15,
     'sector_hard_limit_pct': 20,
-    
+
     # Liquidity
     'min_liquidity_score': 0.3,
     'liquidity_throttle_threshold': 0.6,
@@ -228,7 +228,7 @@ if trader.should_run_crash_validation():
         portfolio_state=current_portfolio,
         stress_level='moderate'  # mild, moderate, severe
     )
-    
+
     if not passed:
         print(f"⚠️ Failed crash simulation")
         print(f"Max drawdown: {results['max_drawdown']}%")

@@ -113,7 +113,7 @@ Location: Repository root (`/home/runner/work/Nija/Nija/FORCE_EXIT_ALL.json`)
 class ForceExitManager:
     """
     Manages FORCE_EXIT_ALL emergency switch.
-    
+
     Responsibilities:
     - Detect and parse FORCE_EXIT_ALL.json
     - Coordinate exit across all accounts/brokers
@@ -121,17 +121,17 @@ class ForceExitManager:
     - Generate detailed reports
     - Handle cleanup and post-exit actions
     """
-    
+
     def __init__(self, config_file: str = "FORCE_EXIT_ALL.json"):
         self.config_file = config_file
         self.execution_log = []
         self.start_time = None
         self.end_time = None
-        
+
     def check_and_execute(self, all_brokers: dict) -> dict:
         """
         Check if force exit is triggered and execute if needed.
-        
+
         Returns detailed execution report.
         """
         pass
@@ -205,7 +205,7 @@ class ForceExitManager:
 
 **Challenge**: Multiple trading threads (one per account) may detect the switch simultaneously.
 
-**Solution**: 
+**Solution**:
 - First thread to detect switch acquires global lock
 - Creates `FORCE_EXIT_ALL.lock` file
 - Other threads detect lock and wait
@@ -217,7 +217,7 @@ class ForceExitManager:
 def execute_with_lock(self):
     """Execute force exit with global lock to prevent race conditions."""
     lock_file = "FORCE_EXIT_ALL.lock"
-    
+
     # Try to acquire lock
     if os.path.exists(lock_file):
         logger.info("Another thread is handling force exit, waiting...")
@@ -227,11 +227,11 @@ def execute_with_lock(self):
                 return  # Exit already handled
             time.sleep(1)
         return
-    
+
     # Acquire lock
     with open(lock_file, 'w') as f:
         f.write(f"Locked by PID {os.getpid()} at {datetime.now().isoformat()}")
-    
+
     try:
         # Execute force exit
         self.execute_all()
@@ -320,16 +320,16 @@ def execute_with_lock(self):
 def is_config_stale(self, config: dict, max_age_minutes: int = 10) -> bool:
     """
     Prevent accidentally re-triggering old force exit configs.
-    
+
     Config is stale if initiated_at > max_age_minutes ago.
     """
     initiated_at = datetime.fromisoformat(config['initiated_at'])
     age = datetime.now() - initiated_at
-    
+
     if age.total_seconds() > max_age_minutes * 60:
         logger.warning(f"Config is {age.total_seconds()/60:.1f} min old (stale)")
         return True
-    
+
     return False
 ```
 
@@ -355,20 +355,20 @@ def place_sell_order(self, broker, symbol, quantity, dry_run: bool):
 def verify_all_closed(self, all_brokers: dict) -> tuple:
     """
     Verify all positions are actually closed.
-    
+
     Returns:
         (success: bool, remaining_positions: list)
     """
     remaining = []
-    
+
     for account_id, broker in all_brokers.items():
         positions = broker.get_positions()
         if positions:
             remaining.extend([
-                {'account': account_id, 'symbol': p['symbol']} 
+                {'account': account_id, 'symbol': p['symbol']}
                 for p in positions
             ])
-    
+
     return (len(remaining) == 0, remaining)
 ```
 
@@ -380,13 +380,13 @@ MAX_EXECUTION_TIME = 300  # 5 minutes
 def execute_all(self):
     """Execute with timeout protection."""
     start = time.time()
-    
+
     for account_id, broker in self.get_target_brokers():
         # Check timeout
         if time.time() - start > MAX_EXECUTION_TIME:
             logger.error("Force exit TIMEOUT - aborting remaining accounts")
             break
-        
+
         self.process_account(account_id, broker)
 ```
 
@@ -400,12 +400,12 @@ def should_continue(self) -> bool:
     if not os.path.exists(self.config_file):
         logger.warning("Config file removed - aborting force exit")
         return False
-    
+
     config = self.load_config()
     if not config.get('enabled', False):
         logger.warning("Config disabled - aborting force exit")
         return False
-    
+
     return True
 ```
 

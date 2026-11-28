@@ -183,13 +183,13 @@ python web_server.py
 2. **Risk Disclosure Content:**
    ```
    CRYPTOCURRENCY TRADING INVOLVES SUBSTANTIAL RISK OF LOSS
-   
+
    ⚠️ YOU CAN LOSE MONEY:
    • Cryptocurrency markets are highly volatile
    • Past performance does NOT indicate future results
    • You can lose some or ALL of your invested capital
    • Only trade with money you can afford to lose
-   
+
    [... full disclosure ...]
    ```
 
@@ -221,7 +221,7 @@ python web_server.py
        🚨 EMERGENCY STOP
    </button>
    ```
-   
+
    - Large red button
    - Prominent placement below trading controls
    - Clear labeling with emoji icon
@@ -491,7 +491,7 @@ Record user's risk acknowledgment.
    @app.route('/')
    def serve_frontend():
        return send_from_directory('frontend/templates', 'index.html')
-   
+
    @app.route('/static/<path:path>')
    def serve_static(path):
        return send_from_directory('frontend/static', path)

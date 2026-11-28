@@ -343,7 +343,7 @@ Exchange-Specific Limits:
   Kraken:
     - API tier-based limits
     - Penalty counter tracking
-  
+
 Implementation:
   - Token bucket algorithm
   - Per-endpoint rate tracking
@@ -445,7 +445,7 @@ Position Size = min(
 
 ATR-Based Sizing:
   Position Size = (Account Balance * Risk %) / (ATR * Stop Loss Multiplier)
-  
+
 Constraints:
   - Minimum: $5 (Coinbase minimum)
   - Maximum: Account tier-specific
@@ -517,7 +517,7 @@ Dynamic Adjustments:
 ```python
 Equal Risk Contribution:
   Each position contributes equal risk to portfolio
-  
+
 Risk Contribution = Position Size * Position Volatility
 
 Portfolio Risk = sqrt(sum(Correlation Matrix * Risk Contributions))
@@ -585,12 +585,12 @@ Daily Audit:
 Small (<1%):
   - Log for review
   - Continue trading
-  
+
 Medium (1-5%):
   - Alert operator
   - Reduce trading activity
   - Initiate investigation
-  
+
 Large (>5%):
   - Halt trading immediately
   - Activate kill switch
@@ -707,7 +707,7 @@ Error Budget: 43 minutes/month
 Measurement:
   Success: Service ready (nija_ready == 1)
   Failure: Service not ready or configuration error
-  
+
 Formula:
   Availability = (ready_time / uptime) * 100
 
@@ -724,7 +724,7 @@ Window: Per incident
 Measurement:
   Start: Configuration error detected
   End: Configuration marked valid
-  
+
 Formula:
   Recovery Time = configuration_error_duration_seconds
 
@@ -741,7 +741,7 @@ Window: Continuous
 Measurement:
   Connected = nija_exchanges_connected
   Expected = nija_exchanges_expected
-  
+
 Formula:
   Connectivity = (Connected / Expected) * 100
 
@@ -831,7 +831,7 @@ SEV-1 (Critical):
     - Capital loss >10%
   Response Time: Immediate
   Notification: Page on-call, notify management
-  
+
 SEV-2 (High):
   Definition: Significant degradation, SLO at risk
   Examples:
@@ -840,7 +840,7 @@ SEV-2 (High):
     - Availability SLO <99.9%
   Response Time: 15 minutes
   Notification: Alert on-call
-  
+
 SEV-3 (Medium):
   Definition: Minor degradation, SLO not at risk
   Examples:
@@ -849,7 +849,7 @@ SEV-3 (Medium):
     - High error rate
   Response Time: 1 hour
   Notification: Email/Slack
-  
+
 SEV-4 (Low):
   Definition: Informational, no service impact
   Examples:
@@ -916,13 +916,13 @@ Timeline:
   - Within 24 hours: Initial review meeting
   - Within 1 week: Full PIR document
   - Within 2 weeks: Remediation items prioritized
-  
+
 Required Attendees:
   - Incident commander
   - On-call engineer
   - Engineering manager
   - Product owner (if user-facing)
-  
+
 Document Sections:
   1. Incident Summary
   2. Timeline of Events
@@ -931,7 +931,7 @@ Document Sections:
   5. What Went Well
   6. What Went Wrong
   7. Action Items
-  
+
 Follow-up:
   - Action items tracked in Jira
   - Monthly review of open items
@@ -1009,7 +1009,7 @@ MiFID II (Market Abuse):
 **Framework Certification**:
 
 ```
-I hereby certify that the NIJA Trading Platform Operational Safety & 
+I hereby certify that the NIJA Trading Platform Operational Safety &
 Compliance Framework, as documented herein, has been:
 
 1. Fully implemented across all platform components
@@ -1018,12 +1018,12 @@ Compliance Framework, as documented herein, has been:
 4. Documented with runbooks and procedures
 5. Reviewed and approved by engineering leadership
 
-The framework provides comprehensive controls across infrastructure 
-health, application safety, trading safeguards, and observability, 
-ensuring production-grade reliability, regulatory compliance, and 
+The framework provides comprehensive controls across infrastructure
+health, application safety, trading safeguards, and observability,
+ensuring production-grade reliability, regulatory compliance, and
 operational excellence.
 
-All controls are operational, monitored, and maintained in accordance 
+All controls are operational, monitored, and maintained in accordance
 with industry best practices and regulatory requirements.
 
 Status: PRODUCTION-READY

@@ -69,7 +69,7 @@ optimizer.record_trade_result(
         'pnl': 150.00,
         'return_pct': 0.03,
         'fees': 3.00,
-        
+
         # Optional but recommended
         'duration_minutes': 45,
         'max_favorable_excursion': 0.05,  # Best price during trade
@@ -177,17 +177,17 @@ print("✅ Auto-Optimizer initialized")
 for i in range(200):
     # Your trading logic here...
     # When trade completes:
-    
+
     trade_result = {
         'pnl': 100.00 if i % 2 == 0 else -50.00,  # Win/loss
         'return_pct': 0.02 if i % 2 == 0 else -0.01,
         'fees': 2.00,
         'duration_minutes': 30
     }
-    
+
     # Record with optimizer
     optimizer.record_trade_result("apex_v72", trade_result)
-    
+
     # Every 50 trades, check status
     if (i + 1) % 50 == 0:
         status = optimizer.get_status()
@@ -281,17 +281,17 @@ from bot.auto_optimization_engine import get_auto_optimizer
 class TradingBot:
     def __init__(self):
         self.optimizer = get_auto_optimizer()
-        
+
     def execute_trade(self, signal):
         # Your trading logic
         entry_price = self.get_current_price()
         position = self.open_position(signal)
-        
+
         # ... wait for exit ...
-        
+
         exit_price = self.get_current_price()
         pnl = self.calculate_pnl(entry_price, exit_price, position)
-        
+
         # Record with optimizer
         self.optimizer.record_trade_result(
             strategy_name="my_strategy",
@@ -302,7 +302,7 @@ class TradingBot:
                 'duration_minutes': position['duration']
             }
         )
-    
+
     def get_status(self):
         return self.optimizer.get_status()
 ```
@@ -314,21 +314,21 @@ from bot.auto_optimization_engine import get_auto_optimizer
 
 def backtest_with_optimization(historical_data):
     optimizer = get_auto_optimizer()
-    
+
     for trade in historical_data:
         # Simulate trade
         result = execute_backtest_trade(trade)
-        
+
         # Record result
         optimizer.record_trade_result("backtest_strategy", result)
-    
+
     # Trigger optimization after backtest
     cycle_id = optimizer.trigger_optimization("backtest_complete")
-    
+
     # Get optimized parameters
     status = optimizer.get_status()
     optimized_params = status['active_parameters']
-    
+
     return optimized_params
 ```
 
@@ -437,7 +437,7 @@ print("=" * 60)
 
 for cycle in optimizer.optimization_cycles[-5:]:  # Last 5
     status_icon = "✅" if cycle.was_deployed else "❌"
-    
+
     print(f"\n{status_icon} {cycle.cycle_id}")
     print(f"   Trigger: {cycle.trigger_reason}")
     print(f"   Duration: {cycle.duration_minutes:.1f} minutes")

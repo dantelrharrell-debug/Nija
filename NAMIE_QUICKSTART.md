@@ -36,28 +36,28 @@ for symbol in trading_pairs:
     # Get your data
     df = get_price_data(symbol)
     indicators = calculate_indicators(df)
-    
+
     # Get NAMIE analysis
     signal = namie.analyze(df, indicators, symbol)
-    
+
     # Check if NAMIE approves
     if not signal.should_trade:
         print(f"❌ {symbol}: {signal.trade_reason}")
         continue
-    
+
     # Your existing entry logic
     if your_entry_logic(df, indicators):
         # Adjust position size with NAMIE
         base_size = calculate_position_size()
         adjusted_size = namie.adjust_position_size(signal, base_size)
-        
+
         # Execute trade
         result = execute_trade(symbol, adjusted_size)
-        
+
         # Record result for NAMIE learning
         if result:
             namie.record_trade_result(
-                signal, result.entry, result.exit, 
+                signal, result.entry, result.exit,
                 result.side, result.size, result.commission
             )
 ```
@@ -108,15 +108,15 @@ class YourExistingStrategy:
     def __init__(self):
         # Your existing code
         self.namie = NAMIEIntegration()  # ← Add this
-    
+
     def should_enter(self, symbol, df):
         # Your existing logic
         base_signal = self.check_your_conditions(df)
-        
+
         # Add NAMIE check ← Add this
         indicators = self.calculate_indicators(df)
         namie_signal = self.namie.analyze(df, indicators, symbol)
-        
+
         # Combine signals ← Add this
         return base_signal and namie_signal.should_trade
 ```
@@ -136,7 +136,7 @@ analysis = strategy.analyze_market(df, symbol, balance)
 if analysis['action'] != 'hold':
     # Get NAMIE opinion
     signal = namie.analyze(df, analysis['indicators'], symbol)
-    
+
     # Enhance with NAMIE
     if signal.should_trade:
         # Adjust position size

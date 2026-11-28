@@ -197,10 +197,10 @@ Scenarios:
    # Option A: Git merge
    git merge copilot/start-nija-trading-bot-f70d0839-20a3-48b5-9a61-0a4faf1940f7
    git push origin main
-   
+
    # Option B: Apply patch
    git apply PROFITABILITY_FIX_PATCH.diff
-   
+
    # Option C: Railway auto-deploy
    # (push to main, Railway deploys automatically)
    ```
@@ -211,7 +211,7 @@ Scenarios:
    # - Stop-loss triggers
    # - Profit targets hit
    # - Profitability guard alerts
-   
+
    # Check metrics:
    python3 check_profit_status.py
    ```

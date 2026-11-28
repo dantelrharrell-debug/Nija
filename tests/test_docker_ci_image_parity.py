@@ -54,12 +54,37 @@ class DockerCiImageParityTests(unittest.TestCase):
             (ROOT / BUILD_IMAGE).read_text(encoding="utf-8"),
         )
 
+    def test_each_sidecar_has_one_global_setuptools_install_and_keeps_guards(self) -> None:
+        for path in DOCKERFILES[1:]:
+            with self.subTest(path=path):
+                source = (ROOT / path).read_text(encoding="utf-8")
+                self.assertEqual(source.count("/usr/local/bin/python -m pip install"), 1)
+                self.assertIn("m.version('setuptools') == '84.1.0'", source)
+                self.assertIn("jaraco.context-5.3.0.dist-info/METADATA", source)
+                self.assertIn("wheel-0.45.1.dist-info/METADATA", source)
+
     def test_build_workflows_never_forward_unused_gh_token(self) -> None:
         for path in (ARTIFACT_SCAN, BUILD_IMAGE):
             with self.subTest(path=path):
                 source = (ROOT / path).read_text(encoding="utf-8")
                 self.assertNotIn("--build-arg GH_TOKEN", source)
                 self.assertNotIn("secrets.GH_TOKEN", source)
+
+    def test_trading_image_bakes_git_provenance_without_runtime_git(self) -> None:
+        source = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        metadata, runtime = source.split("FROM ${PYTHON_BASE}\n", maxsplit=1)
+        self.assertIn("AS release-metadata", metadata)
+        self.assertIn("install -y --no-install-recommends git", metadata)
+        self.assertIn("RUN ./inject_git_metadata.sh", metadata)
+        self.assertNotIn("RUN ./inject_git_metadata.sh", runtime)
+        self.assertNotRegex(runtime, r"apt-get install[^\n]*\bgit\b")
+        self.assertIn("! command -v git", runtime)
+        self.assertIn(
+            "COPY --from=release-metadata /app/.env.build /app/.env.build", runtime
+        )
+        self.assertIn(
+            "COPY --from=release-metadata /app/bot/version_info.py /app/bot/version_info.py", runtime
+        )
 
 
 if __name__ == "__main__":

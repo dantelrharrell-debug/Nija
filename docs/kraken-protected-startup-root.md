@@ -9,7 +9,7 @@ no new service, broker client, nonce owner, execution adapter or order authority
 
 ## Protected artifact contract
 
-The independently reviewed deployment owner must provision both fixed files:
+After separately approved recovery-only rollout, the deployment owner must provision both fixed files:
 
 - `/etc/secrets/.render-kraken-startup-binding.json`
 - `/etc/secrets/.render-kraken-startup-root.py`
@@ -23,10 +23,12 @@ The JSON object has exactly `contract`, `trust`, and `receipts`. Its contract is
 `nija.kraken-protected-startup-binding.v1`. `trust` contains the existing
 StartupReceiptTrust fields: service/release/image pins, independently approved
 account and credential fingerprints, thirteen distinct reviewed provider IDs,
-three role-pinned public keys encoded as lowercase hex, and the bounded maximum
-receipt age. `receipts` contains the existing three **serialized signed JSON
-envelopes**, one per required certification role. Private signing keys and
-credentials must never enter this manifest or the repository.
+role-pinned public keys encoded as lowercase hex, and the bounded maximum
+receipt age. Under the owner-only candidate, `trust.public_keys` and `receipts`
+each contain only `owner_release`; the legacy three-role format remains
+supported on its own, not mixed with the owner format. Each receipt value is a
+serialized signed JSON envelope. Private signing keys and credentials must never
+enter this manifest or the repository.
 
 **The manifest is a provisioned trust anchor, not evidence of its own approval.**
 Its keys and pins must come from independent review and controlled owner
@@ -34,15 +36,21 @@ provisioning. Generating new keys and signing unverified claims does not satisfy
 this requirement. File ownership/mode and valid signatures do not independently
 establish that the issuer actually performed the required review or tests.
 
-The existing receipt verifier authenticates all three signatures, distinct
-evidence IDs, role, exact runtime service/release, account/key/image/registry
-scope, approved time and expiry before any protected Python runs. The
-`independent_review` receipt's `artifact_sha256` must identify the exact complete
-protected Python source, including its source-owner review implementation.
-The backup/restore and broker-ledger/exits receipts still identify genuine
-verified artifacts. All three checks run again after source loading, and again
-against the constructed binding before the existing atomic installer samples
-the thirteen observations.
+The owner-only verifier authenticates one Ed25519 certification envelope with
+contract `nija.kraken-owner-release-certification.v1`, status `certified`, and
+three distinct genuine artifact digests: `protected_source`, `backup_restore`,
+and `broker_ledger_exits`. It binds the exact service/release, account/key/image,
+provider registry, evidence ID, approved time, expiry and maximum receipt age.
+The source digest must identify the exact reviewed protected Python bytes;
+the other digests identify an actual verified isolated restore and reconciled
+broker/ledger/exits evidence. The legacy verifier authenticates three separate
+role-pinned receipts. Both paths retain source and receipt revalidation before
+collector admission.
+
+A separate owner envelope with status `diagnostic` and only the protected-source
+artifact can permit separately approved read-only diagnostics; it cannot publish
+an admission collector, certify the release, or authorize orders. Do not run
+it without separately scoped permission for any provider reads.
 
 Runtime service/release metadata are checked against the existing Render
 variables. Image-hash agreement here compares signed pins; it is not an
@@ -103,8 +111,9 @@ The success status `protected_startup_factory_registered` means only that the
 factory and authenticated verifier were registered. It is not collector
 installation, a successful observation, completed certification, or order
 authorization. Actual installation still requires the existing canonical
-object checks, six independently owned sources, three genuine receipts and
-all thirteen valid fresh observations before replacing the collector.
+object checks, six independently owned sources, genuine verified startup certification (one
+owner envelope or the legacy three-receipt set), and all thirteen valid fresh
+observations before replacing the collector.
 
 ## Validation and unresolved production work
 
@@ -142,8 +151,9 @@ production certification. Existing failing release/security checks and exposed
 credential rotation verification remain unresolved by this change.
 
 This PR installs no protected files, changes no Render settings, deploys
-nothing, and enables no orders. Require independent human review and successful
-mandatory checks on the exact release/image before requesting approval to
-provision/deploy this protected connection. First live orders still require
+nothing, and enables no orders. The owner-only startup path does not replace
+separate exact-source review, mandatory security/recovery checks or independently
+verified running-image evidence. Complete these before requesting separate owner
+approval to provision/deploy this protected connection. First live orders still require
 separate pair, maximum amount and order-type approval; autonomous trading
 requires another explicit approval.

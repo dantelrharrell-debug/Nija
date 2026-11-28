@@ -128,11 +128,11 @@ if self.market_readiness_gate:
     mode, conditions, details = gate.check_market_readiness(...)
     if mode == MarketMode.IDLE:
         continue  # Skip this market
-    
+
     # Analyze market
     analysis = self.apex.analyze_market(df, symbol, balance)
     entry_score = analysis.get('score', 0)
-    
+
     # Post-check with score
     mode, conditions, details = gate.check_market_readiness(..., entry_score=entry_score)
     if mode == MarketMode.CAUTIOUS:

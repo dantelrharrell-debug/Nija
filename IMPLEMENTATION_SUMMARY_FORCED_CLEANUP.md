@@ -25,7 +25,7 @@ python3 run_forced_cleanup.py --include-open-orders --startup-only
 - After startup, reverts to conservative mode (no order cancellation)
 - Safe for one-time normalization
 
-### 2. Selective Mode (Option B - Best Practice) 
+### 2. Selective Mode (Option B - Best Practice)
 **Purpose:** Fine-grained control over which open orders get cancelled
 
 **Configuration:**

@@ -63,10 +63,10 @@ namie = NAMIEIntegration()
 for symbol in trading_pairs:
     df = get_price_data(symbol)
     indicators = calculate_indicators(df)
-    
+
     # Get NAMIE intelligence
     signal = namie.analyze(df, indicators, symbol)
-    
+
     # Check if should trade
     if signal.should_trade:
         print(f"✅ Trade {symbol}")
@@ -74,14 +74,14 @@ for symbol in trading_pairs:
         print(f"   Strategy: {signal.optimal_strategy.value}")
         print(f"   Trend Strength: {signal.trend_strength}/100")
         print(f"   Chop Score: {signal.chop_score:.0f}/100")
-        
+
         # Adjust position size based on NAMIE
         base_size = calculate_position_size(account_balance)
         adjusted_size = namie.adjust_position_size(signal, base_size)
-        
+
         # Get adaptive RSI ranges
         rsi_ranges = namie.get_adaptive_rsi_ranges(signal)
-        
+
         # Execute trade with NAMIE intelligence
         execute_trade(symbol, adjusted_size, rsi_ranges)
 ```
@@ -114,15 +114,15 @@ class ApexWithNAMIE(NIJAApexStrategyV71):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.namie = NAMIEIntegration()
-    
+
     def analyze_market(self, df, symbol, account_balance):
         # Get base APEX analysis
         analysis = super().analyze_market(df, symbol, account_balance)
-        
+
         # Get NAMIE intelligence
         indicators = self._calculate_indicators(df)
         signal = self.namie.analyze(df, indicators, symbol)
-        
+
         # Enhance with NAMIE
         if analysis['action'] != 'hold':
             # Check NAMIE approval
@@ -131,7 +131,7 @@ class ApexWithNAMIE(NIJAApexStrategyV71):
                 base_entry_score=analysis.get('entry_score', 3),
                 base_should_enter=True
             )
-            
+
             if not should_trade:
                 analysis['action'] = 'hold'
                 analysis['reason'] = reason
@@ -141,7 +141,7 @@ class ApexWithNAMIE(NIJAApexStrategyV71):
                     signal,
                     analysis['position_size']
                 )
-        
+
         return analysis
 ```
 
@@ -156,15 +156,15 @@ class YourStrategy(TradingStrategy):
     def __init__(self):
         super().__init__()
         self.namie = NAMIEIntegration()
-    
+
     def check_entry_signal(self, symbol, df):
         # Your existing entry logic
         base_signal = super().check_entry_signal(symbol, df)
-        
+
         # Add NAMIE intelligence
         indicators = self.calculate_indicators(df)
         namie_signal = self.namie.analyze(df, indicators, symbol)
-        
+
         # Combine signals
         if base_signal and namie_signal.should_trade:
             return True, namie_signal
@@ -201,14 +201,14 @@ config = {
     'min_regime_confidence': 0.6,  # Minimum confidence to trade (0-1)
     'min_trend_strength': 40,      # Minimum trend score to trade (0-100)
     'max_chop_score': 60,          # Maximum chop before blocking (0-100)
-    
+
     # Strategy switching
     'min_trades_for_switch': 10,           # Min trades before switching
     'switch_threshold_win_rate': 0.45,     # Switch if WR below this
     'switch_threshold_profit_factor': 0.8, # Switch if PF below this
     'max_strategy_drawdown': 0.15,         # 15% max strategy DD
     'min_switch_interval_hours': 4,        # Min hours between switches
-    
+
     # Integration settings
     'respect_namie_decisions': True,       # Let NAMIE block trades
     'override_position_sizing': True,      # Let NAMIE adjust sizes
@@ -347,37 +347,37 @@ Complete signal returned by NAMIE analysis:
 @dataclass
 class NAMIESignal:
     timestamp: datetime
-    
+
     # Regime
     regime: MarketRegime  # TRENDING/RANGING/VOLATILE
     regime_confidence: float  # 0-1
     regime_probabilities: RegimeProbabilities  # Bayesian distribution
-    
+
     # Volatility
     volatility_regime: VolatilityRegime
     volatility_cluster: str  # expanding/contracting/stable
     atr_pct: float
-    
+
     # Trend
     trend_strength: int  # 0-100
     trend_strength_category: TrendStrength
     trend_direction: str  # up/down/neutral
-    
+
     # Chop
     chop_condition: ChopCondition
     chop_score: float  # 0-100
-    
+
     # Strategy
     optimal_strategy: TradingStrategy
     strategy_confidence: float  # 0-1
     alternative_strategies: List[Tuple[Strategy, float]]
-    
+
     # Trading Decision
     should_trade: bool
     trade_reason: str
     position_size_multiplier: float
     min_entry_score_required: int
-    
+
     # Metrics
     metrics: Dict
 ```
@@ -561,15 +561,15 @@ namie = NAMIEIntegration(enable_switcher=True)
 for bar in historical_data:
     df = bar.df
     indicators = calculate_indicators(df)
-    
+
     signal = namie.analyze(df, indicators, bar.symbol)
-    
+
     if signal.should_trade and base_strategy.check_entry(bar):
         # Execute backtest trade
         size = base_size * signal.position_size_multiplier
-        
+
         # ... execute trade ...
-        
+
         # Record result
         namie.record_trade_result(signal, entry, exit, side, size)
 

@@ -1,10 +1,12 @@
 """Synthetic, strictly read-only NIJA recovery inventory tests."""
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
-from scripts.nija_ledger_evidence_v438 import inspect_ledger
+from scripts.nija_ledger_evidence_v438 import compare_archive, inspect_ledger
+from scripts.nija_trade_ledger_snapshot_v436 import create_snapshot
 
 
 def _fixture(path: Path, *, pending: bool = True) -> None:
@@ -66,3 +68,43 @@ def test_nonledger_sqlite_fails_closed(tmp_path):
         conn.execute("CREATE TABLE unrelated (id INT)")
     with pytest.raises(RuntimeError, match="missing required ledger tables"):
         inspect_ledger(source)
+
+
+def test_ledger_counts_share_one_wal_snapshot(tmp_path, monkeypatch):
+    from scripts import nija_ledger_evidence_v438 as evidence
+
+    source = tmp_path / "ledger.db"
+    _fixture(source)
+    count_tables = evidence._table_counts
+
+    with sqlite3.connect(source) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+
+        def count_then_commit(reader):
+            counts = count_tables(reader)
+            writer.execute("DELETE FROM pending_kraken_closes")
+            writer.commit()
+            return counts
+
+        monkeypatch.setattr(evidence, "_table_counts", count_then_commit)
+        report = inspect_ledger(source)
+        assert report["tables"]["pending_kraken_closes"] == 1
+        assert report["unmatched_kraken_closes"] == 1
+        assert writer.execute("SELECT COUNT(*) FROM pending_kraken_closes").fetchone() == (0,)
+
+
+
+def test_archive_comparison_reports_the_verified_digest(tmp_path, monkeypatch):
+    source = tmp_path / "ledger.db"
+    _fixture(source)
+    monkeypatch.chdir(tmp_path)
+    report = create_snapshot(source, tmp_path / "exports")
+    archive = Path(report["archive"])
+
+    comparison = compare_archive(archive, inspect_ledger(source)["tables"])
+
+    assert comparison["archive_sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert comparison["archive_sha256"] == report["sha256"]
+    assert comparison["archive_sqlite_and_member_hashes_verified"] is True
+    assert comparison["count_differences_from_live"] == {}
+    assert comparison["off_host_copy_independently_verified"] is False

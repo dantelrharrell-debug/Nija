@@ -5,7 +5,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 ## Example 1: Normal Startup and Trading
 
 ```
-2026-02-06 21:58:30 - nija - INFO - 
+2026-02-06 21:58:30 - nija - INFO -
 2026-02-06 21:58:30 - nija - INFO - ╔══════════════════════════════════════════════════════════════════════════════╗
 2026-02-06 21:58:30 - nija - INFO - ║                        🚀 NIJA TRADING BOT STARTUP                           ║
 2026-02-06 21:58:30 - nija - INFO - ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -14,11 +14,11 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 21:58:30 - nija - INFO - ║ Working Directory: /app                                                      ║
 2026-02-06 21:58:30 - nija - INFO - ║ Initializing lifecycle management...                                        ║
 2026-02-06 21:58:30 - nija - INFO - ╚══════════════════════════════════════════════════════════════════════════════╝
-2026-02-06 21:58:30 - nija - INFO - 
+2026-02-06 21:58:30 - nija - INFO -
 2026-02-06 21:58:30 - nija - INFO - ✅ Signal handlers registered (SIGTERM, SIGINT)
 2026-02-06 21:58:30 - nija - INFO - ✅ Health check manager initialized
 2026-02-06 21:58:30 - nija - INFO - 🧵 Heartbeat thread started (ID: 139876543210, Interval: 10s)
-2026-02-06 21:58:30 - nija - INFO - 
+2026-02-06 21:58:30 - nija - INFO -
 2026-02-06 21:58:30 - nija - INFO - ╔══════════════════════════════════════════════════════════════════════════════╗
 2026-02-06 21:58:30 - nija - INFO - ║                      ✅ BACKGROUND THREADS STARTED                            ║
 2026-02-06 21:58:30 - nija - INFO - ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -27,7 +27,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 21:58:30 - nija - INFO - ║ Thread is alive: True                                                        ║
 2026-02-06 21:58:30 - nija - INFO - ║ Health checks will be responsive to Railway (~30s check interval)            ║
 2026-02-06 21:58:30 - nija - INFO - ╚══════════════════════════════════════════════════════════════════════════════╝
-2026-02-06 21:58:30 - nija - INFO - 
+2026-02-06 21:58:30 - nija - INFO -
 
 ... (credential validation logs) ...
 
@@ -49,7 +49,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 
 ```
 2026-02-06 22:06:05 - nija - INFO - 🔁 Main trading loop iteration #4
-2026-02-06 22:08:12 - nija - INFO - 
+2026-02-06 22:08:12 - nija - INFO -
 2026-02-06 22:08:12 - nija - INFO - ╔══════════════════════════════════════════════════════════════════════════════╗
 2026-02-06 22:08:12 - nija - INFO - ║              ⚠️  TRADING LOOP INTERRUPTED - Single-Broker Mode                ║
 2026-02-06 22:08:12 - nija - INFO - ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -61,8 +61,8 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 22:08:12 - nija - INFO - ║   🔹 ✅ HeartbeatWorker (ID: 139876543210)                                    ║
 2026-02-06 22:08:12 - nija - INFO - ║   🔹 ✅ HealthServer (ID: 139876543220)                                       ║
 2026-02-06 22:08:12 - nija - INFO - ╚══════════════════════════════════════════════════════════════════════════════╝
-2026-02-06 22:08:12 - nija - INFO - 
-2026-02-06 22:08:12 - nija - INFO - 
+2026-02-06 22:08:12 - nija - INFO -
+2026-02-06 22:08:12 - nija - INFO -
 2026-02-06 22:08:12 - nija - INFO - ╔══════════════════════════════════════════════════════════════════════════════╗
 2026-02-06 22:08:12 - nija - INFO - ║                        🔒 ENTERING KEEP-ALIVE MODE                           ║
 2026-02-06 22:08:12 - nija - INFO - ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -76,7 +76,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 22:08:12 - nija - INFO - ║   🔹 ✅ HeartbeatWorker (ID: 139876543210)                                    ║
 2026-02-06 22:08:12 - nija - INFO - ║   🔹 ✅ HealthServer (ID: 139876543220)                                       ║
 2026-02-06 22:08:12 - nija - INFO - ╚══════════════════════════════════════════════════════════════════════════════╝
-2026-02-06 22:08:12 - nija - INFO - 
+2026-02-06 22:08:12 - nija - INFO -
 2026-02-06 22:13:12 - nija - INFO - 💓 Keep-alive status check #1 (heartbeat via background thread)
 2026-02-06 22:18:12 - nija - INFO - 💓 Keep-alive status check #2 (heartbeat via background thread)
 2026-02-06 22:23:12 - nija - INFO - 💓 Keep-alive status check #3 (heartbeat via background thread)
@@ -92,7 +92,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 ## Example 3: Configuration Error - No Credentials
 
 ```
-2026-02-06 21:58:30 - nija - INFO - 
+2026-02-06 21:58:30 - nija - INFO -
 2026-02-06 21:58:30 - nija - INFO - ╔══════════════════════════════════════════════════════════════════════════════╗
 2026-02-06 21:58:30 - nija - INFO - ║                        🚀 NIJA TRADING BOT STARTUP                           ║
 2026-02-06 21:58:30 - nija - INFO - ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -101,7 +101,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 21:58:30 - nija - INFO - ║ Working Directory: /app                                                      ║
 2026-02-06 21:58:30 - nija - INFO - ║ Initializing lifecycle management...                                        ║
 2026-02-06 21:58:30 - nija - INFO - ╚══════════════════════════════════════════════════════════════════════════════╝
-2026-02-06 21:58:30 - nija - INFO - 
+2026-02-06 21:58:30 - nija - INFO -
 
 ... (background threads start) ...
 
@@ -111,7 +111,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 21:58:31 - nija.broker_integration - ERROR - The bot cannot trade without exchange API credentials.
 2026-02-06 21:58:31 - nija.broker_integration - INFO - Starting health server to report configuration status...
 2026-02-06 21:58:31 - nija - INFO - 🌐 Health server listening on port 5000
-2026-02-06 21:58:31 - nija - INFO - 
+2026-02-06 21:58:31 - nija - INFO -
 2026-02-06 21:58:31 - nija - INFO - ╔══════════════════════════════════════════════════════════════════════════════╗
 2026-02-06 21:58:31 - nija - INFO - ║              ⚠️  ENTERING CONFIG ERROR KEEP-ALIVE MODE                        ║
 2026-02-06 21:58:31 - nija - INFO - ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -124,7 +124,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 21:58:31 - nija - INFO - ║   🔸 ✅ MainThread (ID: 139876543100)                                         ║
 2026-02-06 21:58:31 - nija - INFO - ║   🔹 ✅ HeartbeatWorker (ID: 139876543210)                                    ║
 2026-02-06 21:58:31 - nija - INFO - ╚══════════════════════════════════════════════════════════════════════════════╝
-2026-02-06 21:58:31 - nija - INFO - 
+2026-02-06 21:58:31 - nija - INFO -
 2026-02-06 22:08:31 - nija - INFO - ⏱️  Config error keep-alive: 600s elapsed
 2026-02-06 22:18:31 - nija - INFO - ⏱️  Config error keep-alive: 1200s elapsed
 ```
@@ -133,7 +133,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 
 ```
 2026-02-06 22:23:45 - nija - INFO - 💓 Keep-alive status check #3 (heartbeat via background thread)
-2026-02-06 22:24:10 - nija - INFO - 
+2026-02-06 22:24:10 - nija - INFO -
 2026-02-06 22:24:10 - nija - INFO - ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 2026-02-06 22:24:10 - nija - INFO - ┃ ✅ EXIT POINT - Signal SIGTERM received                                              ┃
 2026-02-06 22:24:10 - nija - INFO - ┃ Exit Code:                                                                 0 ┃
@@ -146,14 +146,14 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 22:24:10 - nija - INFO - ┃   🔹 ✅ HeartbeatWorker (ID: 139876543210)                                    ┃
 2026-02-06 22:24:10 - nija - INFO - ┃   🔹 ✅ HealthServer (ID: 139876543220)                                       ┃
 2026-02-06 22:24:10 - nija - INFO - ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-2026-02-06 22:24:10 - nija - INFO - 
+2026-02-06 22:24:10 - nija - INFO -
 ```
 
 ## Example 5: Fatal Error - Broker Connection Failed
 
 ```
 2026-02-06 21:58:35 - nija - ERROR - Failed to initialize Coinbase broker
-2026-02-06 21:58:35 - nija - INFO - 
+2026-02-06 21:58:35 - nija - INFO -
 2026-02-06 21:58:35 - nija - INFO - ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 2026-02-06 21:58:35 - nija - INFO - ┃ ❌ EXIT POINT - Broker Connection Failed                                            ┃
 2026-02-06 21:58:35 - nija - INFO - ┃ Exit Code:                                                                 1 ┃
@@ -172,7 +172,7 @@ This document shows what you'll see in the actual logs when NIJA runs with the n
 2026-02-06 21:58:35 - nija - INFO - ┃   🔸 ✅ MainThread (ID: 139876543100)                                         ┃
 2026-02-06 21:58:35 - nija - INFO - ┃   🔹 ✅ HeartbeatWorker (ID: 139876543210)                                    ┃
 2026-02-06 21:58:35 - nija - INFO - ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-2026-02-06 21:58:35 - nija - INFO - 
+2026-02-06 21:58:35 - nija - INFO -
 2026-02-06 21:58:35 - nija - ERROR - Fatal error initializing bot: Broker connection failed
 ... (Railway will restart the service) ...
 ```

@@ -10,12 +10,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
+import stat
 from pathlib import Path
 from typing import Any
 
+TABLE_COUNT_QUERIES = {
+    "trade_ledger": "SELECT COUNT(*) FROM trade_ledger",
+    "open_positions": "SELECT COUNT(*) FROM open_positions",
+    "completed_trades": "SELECT COUNT(*) FROM completed_trades",
+    "strategy_order_intents": "SELECT COUNT(*) FROM strategy_order_intents",
+    "pending_kraken_closes": "SELECT COUNT(*) FROM pending_kraken_closes",
+}
 REQUIRED_TABLES = ("trade_ledger", "open_positions", "completed_trades")
-OPTIONAL_TABLES = ("strategy_order_intents", "pending_kraken_closes")
 
 
 def _table_counts(conn: sqlite3.Connection) -> dict[str, int | None]:
@@ -24,15 +32,10 @@ def _table_counts(conn: sqlite3.Connection) -> dict[str, int | None]:
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
     }
-    output: dict[str, int | None] = {}
-    for table in REQUIRED_TABLES + OPTIONAL_TABLES:
-        if table not in existing:
-            output[table] = None
-        else:
-            output[table] = int(
-                conn.execute('SELECT COUNT(*) FROM "' + table + '"').fetchone()[0]
-            )
-    return output
+    return {
+        table: int(conn.execute(query).fetchone()[0]) if table in existing else None
+        for table, query in TABLE_COUNT_QUERIES.items()
+    }
 
 
 def inspect_ledger(db: Path) -> dict[str, Any]:
@@ -45,6 +48,8 @@ def inspect_ledger(db: Path) -> dict[str, Any]:
     conn = sqlite3.connect(uri, uri=True, timeout=15)
     try:
         conn.execute("PRAGMA query_only=ON")
+        # Keep schema, totals and pending states on the same SQLite snapshot.
+        conn.execute("BEGIN")
         integrity = conn.execute("PRAGMA integrity_check").fetchall()
         counts = _table_counts(conn)
         if integrity != [("ok",)]:
@@ -52,7 +57,6 @@ def inspect_ledger(db: Path) -> dict[str, Any]:
         absent = [t for t in REQUIRED_TABLES if counts[t] is None]
         if absent:
             raise RuntimeError("missing required ledger tables: " + ",".join(absent))
-        pending = counts.get("pending_kraken_closes") or 0
         unmatched = 0
         if counts.get("pending_kraken_closes") is not None:
             unmatched = int(conn.execute(
@@ -82,29 +86,48 @@ def compare_archive(archive: Path, live_counts: dict[str, int | None]) -> dict[s
     """Verify the supplied archive independently; never claim off-host proof."""
     # Same-directory import also works when the operator invokes this script
     # directly as python scripts/nija_ledger_evidence_v438.py.
-    from nija_trade_ledger_snapshot_v436 import verify_snapshot
-    import hashlib
+    if __package__:
+        from . import nija_trade_ledger_snapshot_v436 as snapshot
+    else:
+        import nija_trade_ledger_snapshot_v436 as snapshot
 
-    manifest = verify_snapshot(archive)
-    with archive.open("rb") as stream:
-        h = hashlib.sha256()
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(block)
+    limit = (
+        snapshot.MAX_SQLITE_BYTES + snapshot.MAX_MANIFEST_BYTES
+        + (len(snapshot.OPTIONAL_FILES) + 1) * snapshot.MAX_COMPANION_BYTES + 2 * 1024 * 1024
+    )
+    digest = hashlib.sha256()
+    fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("unsafe or oversized source archive")
+        remaining = info.st_size
+        while remaining:
+            block = stream.read(min(remaining, snapshot.CHUNK_SIZE))
+            if not block:
+                raise ValueError("source archive changed during inventory")
+            digest.update(block)
+            remaining -= len(block)
+        if stream.read(1):
+            raise ValueError("source archive changed during inventory")
+
+    archive_digest = digest.hexdigest()
+    manifest = snapshot.verify_snapshot(archive, expected_sha256=archive_digest)
     saved = manifest.get("sqlite_tables") or {}
     differences = {
         table: {
             "current_count": live_counts.get(table),
             "archive_count": saved.get(table),
         }
-        for table in REQUIRED_TABLES + OPTIONAL_TABLES
+        for table in TABLE_COUNT_QUERIES
         if live_counts.get(table) != saved.get(table)
     }
     return {
         "archive_path": str(archive),
-        "archive_sha256": h.hexdigest(),
+        "archive_sha256": archive_digest,
         "archive_sqlite_and_member_hashes_verified": True,
         "archive_table_counts": {
-            name: saved.get(name) for name in REQUIRED_TABLES + OPTIONAL_TABLES
+            name: saved.get(name) for name in TABLE_COUNT_QUERIES
         },
         "count_differences_from_live": differences,
         "off_host_copy_independently_verified": False,

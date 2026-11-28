@@ -134,7 +134,7 @@ config = GodModeConfig(
     enable_walk_forward=False,
     enable_risk_parity=True,
     enable_live_rl=False,
-    
+
     # Customize sub-configs
     bayesian_config={
         'prior_trending': 0.40,  # Expect more trending markets
@@ -155,25 +155,25 @@ config = GodModeConfig(
 class MyStrategy:
     def __init__(self, broker_client):
         self.broker = broker_client
-        
+
         # Add God Mode
         from bot.god_mode_engine import GodModeEngine, GodModeConfig
         from bot.god_mode_config import GOD_MODE_CONFIG
-        
+
         config = GodModeConfig(**GOD_MODE_CONFIG)
         self.god_mode = GodModeEngine(config)
-    
+
     def should_enter(self, symbol, df, indicators):
         # Get God Mode recommendation
         rec = self.god_mode.get_recommendation(df, indicators)
-        
+
         # Use recommended parameters
         params = rec.recommended_parameters
         min_score = params.get('min_signal_score', 3)
-        
+
         # Your existing logic with God Mode params
         signal_score = self.calculate_signal_score(df, indicators)
-        
+
         return signal_score >= min_score
 ```
 
@@ -182,26 +182,26 @@ class MyStrategy:
 ```python
 def main_trading_loop():
     god_mode = initialize_god_mode()
-    
+
     while True:
         # Get current market data
         df = fetch_market_data()
         indicators = calculate_indicators(df)
-        
+
         # Get God Mode recommendation
         rec = god_mode.get_recommendation(df, indicators)
-        
+
         # Execute based on recommendation
         if should_enter(rec):
             trade_id = execute_entry(rec)
             god_mode.record_trade_entry(...)
-        
+
         # Check exits
         for trade in open_trades:
             if should_exit(trade):
                 execute_exit(trade)
                 god_mode.record_trade_exit(...)
-        
+
         time.sleep(60)  # Check every minute
 ```
 

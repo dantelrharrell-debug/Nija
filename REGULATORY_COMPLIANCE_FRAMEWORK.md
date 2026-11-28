@@ -145,8 +145,8 @@ All users must acknowledge this warning before trading:
 ```
 ⚠️ RISK WARNING ⚠️
 
-Trading cryptocurrencies and other financial instruments carries a high level 
-of risk and may not be suitable for all investors. You could lose some or all 
+Trading cryptocurrencies and other financial instruments carries a high level
+of risk and may not be suitable for all investors. You could lose some or all
 of your invested capital. Key risks include:
 
 • Market Risk: Prices can be extremely volatile
@@ -155,11 +155,11 @@ of your invested capital. Key risks include:
 • Counterparty Risk: Exchange or broker may fail
 • Regulatory Risk: Laws may change affecting your positions
 
-Past performance is not indicative of future results. Automated trading systems 
-cannot guarantee profits and may incur losses. You should never invest money 
+Past performance is not indicative of future results. Automated trading systems
+cannot guarantee profits and may incur losses. You should never invest money
 you cannot afford to lose.
 
-By proceeding, you acknowledge that you understand these risks and accept full 
+By proceeding, you acknowledge that you understand these risks and accept full
 responsibility for your trading decisions.
 ```
 
@@ -169,21 +169,21 @@ responsibility for your trading decisions.
 ```
 HYPOTHETICAL PERFORMANCE DISCLAIMER
 
-The performance results shown are based on simulated or hypothetical performance 
-results that have certain inherent limitations. Unlike actual performance records, 
-simulated results do not represent actual trading and may not reflect the impact of 
-brokerage commissions and other fees. Also, since trades have not actually been 
-executed, results may have under-or over-compensated for the impact, if any, of 
-certain market factors, such as lack of liquidity. Simulated or hypothetical trading 
-programs in general are also subject to the fact that they are designed with the 
-benefit of hindsight. No representation is being made that any account will or is 
+The performance results shown are based on simulated or hypothetical performance
+results that have certain inherent limitations. Unlike actual performance records,
+simulated results do not represent actual trading and may not reflect the impact of
+brokerage commissions and other fees. Also, since trades have not actually been
+executed, results may have under-or over-compensated for the impact, if any, of
+certain market factors, such as lack of liquidity. Simulated or hypothetical trading
+programs in general are also subject to the fact that they are designed with the
+benefit of hindsight. No representation is being made that any account will or is
 likely to achieve profits or losses similar to these being shown.
 ```
 
 **Past Performance**:
 ```
-Past performance is not a guarantee of future results. Individual results may vary 
-significantly based on market conditions, capital allocated, risk settings, and 
+Past performance is not a guarantee of future results. Individual results may vary
+significantly based on market conditions, capital allocated, risk settings, and
 timing of entry.
 ```
 
@@ -201,7 +201,7 @@ Automated trading systems present unique risks:
 • Slippage: Actual execution prices may differ from expected prices
 • Latency: Delays in execution could impact performance
 
-You should fully understand how the algorithm works before using real funds. 
+You should fully understand how the algorithm works before using real funds.
 Start with paper trading to verify performance in current market conditions.
 ```
 
@@ -381,21 +381,21 @@ class PreTradeRiskControls:
         # 1. Size checks
         if order.size > self.max_order_size:
             return self.reject("Order size exceeds limit")
-        
+
         # 2. Price reasonableness
         market_price = self.get_market_price(order.symbol)
         if abs(order.price - market_price) / market_price > 0.05:
             return self.reject("Order price >5% from market")
-        
+
         # 3. Duplicate check
         if self.is_duplicate_order(order):
             return self.reject("Duplicate order detected")
-        
+
         # 4. Available capital
         required_capital = order.size * order.price
         if account.available_balance < required_capital:
             return self.reject("Insufficient funds")
-        
+
         return self.approve()
 ```
 
@@ -766,11 +766,11 @@ For questions, contact: support@nija.com
 ```
 TAX OBLIGATIONS NOTICE
 
-You are responsible for reporting and paying all applicable taxes on your 
-trading activities. NIJA does not provide tax advice. We recommend consulting 
+You are responsible for reporting and paying all applicable taxes on your
+trading activities. NIJA does not provide tax advice. We recommend consulting
 with a qualified tax professional.
 
-Trading cryptocurrencies and other instruments may result in taxable events, 
+Trading cryptocurrencies and other instruments may result in taxable events,
 including:
 - Capital gains/losses on sales
 - Income from trading profits

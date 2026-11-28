@@ -84,7 +84,7 @@ NIJA does not:
 
 ### Disclaimer (Footer - Always Visible)
 ```
-⚠️ Trading involves risk of loss. Past performance does not 
+⚠️ Trading involves risk of loss. Past performance does not
    guarantee future results.
 ```
 
@@ -119,8 +119,8 @@ Before you can use NIJA, you must confirm the following:
 ```
 □ I am at least 18 years old (or 21+ where required by law)
 
-□ I confirm that cryptocurrency trading is legal in my 
-  jurisdiction and I am responsible for compliance with 
+□ I confirm that cryptocurrency trading is legal in my
+  jurisdiction and I am responsible for compliance with
   all applicable laws and regulations
 ```
 
@@ -134,7 +134,7 @@ Why we ask:
 
 ### Disclaimer
 ```
-⚠️ NIJA does not provide legal advice. Consult a legal professional 
+⚠️ NIJA does not provide legal advice. Consult a legal professional
    if you are unsure about your jurisdiction's regulations.
 ```
 
@@ -236,7 +236,7 @@ You're Learning with Simulated Money
 
 ### Important Notice (Highlighted Box)
 ```
-ℹ️ This is not real money. All trades are simulated for 
+ℹ️ This is not real money. All trades are simulated for
    learning purposes.
 ```
 
@@ -315,8 +315,8 @@ Trading Control
 
 🔴 Trading: OFF
 
-When enabled, NIJA will execute trades based on your 
-configured strategy parameters. You maintain full control 
+When enabled, NIJA will execute trades based on your
+configured strategy parameters. You maintain full control
 and can modify or disable at any time.
 
 [Toggle: Enable User-Directed Trading]
@@ -373,7 +373,7 @@ Connect your broker account and start trading with real money.
 ║        ⚠️ RISK ACKNOWLEDGMENT REQUIRED                     ║
 ╚═══════════════════════════════════════════════════════════╝
 
-Before enabling Independent Trading Mode, you must 
+Before enabling Independent Trading Mode, you must
 acknowledge and accept the following:
 ```
 
@@ -381,15 +381,15 @@ acknowledge and accept the following:
 ```
 □ Cryptocurrency trading involves substantial risk of loss.
 
-□ NIJA is a software trading tool and does not provide 
+□ NIJA is a software trading tool and does not provide
   investment advice.
 
-□ I am solely responsible for my trading decisions and 
+□ I am solely responsible for my trading decisions and
   risk settings.
 
 □ No profit or performance guarantees are provided.
 
-□ Accounts execute independently without copy trading or 
+□ Accounts execute independently without copy trading or
   signal sharing.
 
 □ I understand that I am responsible for:
@@ -398,7 +398,7 @@ acknowledge and accept the following:
   • Understanding exchange fees and costs
   • Compliance with applicable laws and regulations
 
-□ I have read and agree to the Terms of Service and 
+□ I have read and agree to the Terms of Service and
   Privacy Policy.
 ```
 
@@ -550,7 +550,7 @@ Trading Control
 
 🟢 Trading: ON
 
-Independent Trading Mode is active. Trades are executing 
+Independent Trading Mode is active. Trades are executing
 on your connected broker account.
 
 [Toggle: ON]
@@ -568,7 +568,7 @@ on your connected broker account.
 
 ### Footer Disclaimer (Persistent)
 ```
-⚠️ Live Trading Active. Real money at risk. You are solely 
+⚠️ Live Trading Active. Real money at risk. You are solely
    responsible for all trading activity.
 ```
 
@@ -623,8 +623,8 @@ Current Status:
   • No new trades will be executed
   • Existing positions remain open (not automatically closed)
   • All background processing stopped
-  
-⚠️ You are responsible for managing any open positions 
+
+⚠️ You are responsible for managing any open positions
    through your exchange.
 
 Next Steps:
@@ -657,8 +657,8 @@ Possible causes:
   • Exchange API temporarily unavailable
   • Network connectivity issue
 
-Recommendation: Review your API settings and try 
-reconnecting. Trading will remain paused until 
+Recommendation: Review your API settings and try
+reconnecting. Trading will remain paused until
 connection is restored.
 
 [Review Settings]  [Retry Connection]  [Contact Support]
@@ -672,7 +672,7 @@ connection is restored.
 ```
 ⚠️ Failed to Close Position
 
-We encountered an error while attempting to close 
+We encountered an error while attempting to close
 your position.
 
 Position: BTC-USD Long
@@ -726,7 +726,7 @@ Your configured strategy has generated a signal:
   • Pair: BTC-USD
   • Signal: Entry (Long)
   • Confidence: Based on your RSI parameters
-  
+
 Action: [Depends on your settings]
   • If Independent Trading is enabled: Trade will execute
   • If Simulation Mode: Simulated trade recorded
@@ -748,7 +748,7 @@ Entry: $42,150.00
 Exit: $42,990.00
 P&L: +$84.00 (2.0%)
 
-This notification is informational only. Review your 
+This notification is informational only. Review your
 full trade history in the app.
 ```
 
@@ -765,7 +765,7 @@ Today's Trades: 3
 Win Rate: 66.7%
 Total P&L: +$45.00
 
-⚠️ Reminder: You are solely responsible for all trading 
+⚠️ Reminder: You are solely responsible for all trading
 activity. Past performance does not guarantee future results.
 
 [View Full Report]
@@ -782,7 +782,7 @@ activity. Past performance does not guarantee future results.
 TRADING CONTROL
 
 Trading Mode: [OFF / Simulation / Independent Trading]
-  
+
   ○ OFF - Monitoring only, no trades executed
   ○ Simulation - Paper trading with virtual money
   ○ Independent Trading - Real trades on connected broker
@@ -808,7 +808,7 @@ Daily Loss Limit: [Configure]
 Maximum Open Positions: [Configure]
   Limit simultaneous positions
 
-⚠️ You are responsible for configuring appropriate risk 
+⚠️ You are responsible for configuring appropriate risk
    limits for your account size and risk tolerance.
 ```
 
@@ -860,8 +860,8 @@ App Version: 1.0.0
 
 ### Short Version (Always Visible)
 ```
-⚠️ Trading involves risk of loss. Past performance does 
-   not indicate future results. You are solely responsible 
+⚠️ Trading involves risk of loss. Past performance does
+   not indicate future results. You are solely responsible
    for your trading decisions.
 ```
 
@@ -869,22 +869,22 @@ App Version: 1.0.0
 ```
 ⚠️ RISK DISCLOSURE
 
-Trading cryptocurrencies and other financial instruments 
-involves substantial risk of loss and may not be suitable 
-for all investors. You should carefully consider whether 
+Trading cryptocurrencies and other financial instruments
+involves substantial risk of loss and may not be suitable
+for all investors. You should carefully consider whether
 trading is appropriate for your financial situation.
 
-NIJA is a software tool for executing YOUR trading strategy. 
-NIJA does not provide investment advice or financial planning. 
-No profit or performance guarantees are provided. You are solely responsible for all 
+NIJA is a software tool for executing YOUR trading strategy.
+NIJA does not provide investment advice or financial planning.
+No profit or performance guarantees are provided. You are solely responsible for all
 trading decisions and outcomes.
 
-Past performance is not indicative of future results. 
-Simulated results do not reflect actual trading costs, 
-slippage, or market impact. Real trading may produce 
+Past performance is not indicative of future results.
+Simulated results do not reflect actual trading costs,
+slippage, or market impact. Real trading may produce
 different results.
 
-You may lose all or more than your invested capital. Only 
+You may lose all or more than your invested capital. Only
 invest what you can afford to lose.
 ```
 

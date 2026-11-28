@@ -85,7 +85,7 @@ Real-time monitoring:
 # After balance validation...
 if EXECUTION_HARDENING_AVAILABLE and side.lower() == 'buy' and not force_liquidate:
     hardening = get_execution_layer_hardening(broker_type='coinbase')
-    
+
     is_valid, error_reason, validation_details = hardening.validate_order_hardening(
         symbol=symbol,
         side=side,
@@ -95,7 +95,7 @@ if EXECUTION_HARDENING_AVAILABLE and side.lower() == 'buy' and not force_liquida
         user_id=user_id,
         force_liquidate=force_liquidate
     )
-    
+
     if not is_valid:
         # BLOCK ORDER - return error response
         return {

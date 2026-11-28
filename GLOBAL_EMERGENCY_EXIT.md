@@ -21,7 +21,7 @@ When the bot detects this file during its trading cycle:
 
 1. **Immediate Detection**: Checked at the start of every `run_cycle()` (every 2.5 minutes)
 2. **Emergency Mode**: All normal trading operations are suspended
-3. **Position Liquidation**: 
+3. **Position Liquidation**:
    - Fetches ALL open positions from the broker
    - Sells each position at market price
    - Processes positions sequentially with 1-second throttle
@@ -98,22 +98,22 @@ TIME: 14:32:30 - Next Trading Cycle (2.5 min later)
    SELLING ALL POSITIONS IMMEDIATELY
 
    Found 5 positions to liquidate
-   
+
    [1/5] FORCE SELLING 0.02 BTC...
    ✅ SOLD BTC
-   
+
    [2/5] FORCE SELLING 0.5 ETH...
    ✅ SOLD ETH
-   
+
    [3/5] FORCE SELLING 10 SOL...
    ✅ SOLD SOL
-   
+
    [4/5] FORCE SELLING 100 ADA...
    ✅ SOLD ADA
-   
+
    [5/5] FORCE SELLING 5000 XLM...
    ✅ SOLD XLM
-   
+
    Liquidation round complete: 5/5 sold
    ✅ Emergency liquidation cycle complete - removed LIQUIDATE_ALL_NOW.conf
 ═══════════════════════════════════════════════════════════════════
@@ -200,22 +200,22 @@ Use built-in safety modes:
 ```python
 def run_cycle(self, broker=None, user_mode=False):
     """Execute trading cycle with emergency exit check"""
-    
+
     # 1. FIRST check emergency file (before any other logic)
     liquidate_all_file = os.path.join(
-        os.path.dirname(__file__), 
-        '..', 
+        os.path.dirname(__file__),
+        '..',
         'LIQUIDATE_ALL_NOW.conf'
     )
-    
+
     if os.path.exists(liquidate_all_file):
         # 2. Enter emergency mode
         logger.error("🚨 EMERGENCY LIQUIDATION MODE ACTIVE")
-        
+
         try:
             # 3. Get all positions
             positions = broker.get_positions()
-            
+
             # 4. Sell each position
             for pos in positions:
                 broker.place_market_order(
@@ -224,14 +224,14 @@ def run_cycle(self, broker=None, user_mode=False):
                     quantity=pos['quantity']
                 )
                 time.sleep(1)  # Rate limit protection
-                
+
         finally:
             # 5. ALWAYS remove file (guaranteed cleanup)
             if os.path.exists(liquidate_all_file):
                 os.remove(liquidate_all_file)
-        
+
         return  # Exit cycle, skip normal trading
-    
+
     # 6. Normal trading continues if no emergency file
     # ... rest of trading logic ...
 ```

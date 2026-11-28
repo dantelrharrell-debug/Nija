@@ -177,18 +177,18 @@ brain.record_trade_completion({
 config = {
     # Optimization schedule
     'optimization_interval_hours': 168,  # How often to run scheduled optimization
-    
+
     # Data requirements
     'min_trades_before_optimization': 100,  # Minimum trades needed
-    
+
     # Performance monitoring
     'performance_check_interval_hours': 24,  # How often to check performance
     'degradation_threshold_pct': -10.0,  # Trigger optimization if this bad
-    
+
     # Deployment criteria
     'min_improvement_for_deployment': 5.0,  # Minimum % improvement to deploy
     'overfitting_threshold': 0.70,  # Out-sample / In-sample minimum ratio
-    
+
     # State management
     'state_dir': './data/optimization',  # Where to store state
     'save_history_length': 10  # How many cycles to keep in history
@@ -405,23 +405,23 @@ from bot.auto_optimization_engine import get_auto_optimizer
 class MyCustomStrategy:
     def __init__(self):
         self.optimizer = get_auto_optimizer()
-        
+
     def apply_parameters(self, params):
         """Apply optimized parameters to strategy"""
         for param_name, value in params.items():
             setattr(self, param_name, value)
-    
+
     def on_trade_complete(self, result):
         """Record trade with optimizer"""
         self.optimizer.record_trade_result(
             strategy_name="my_custom_strategy",
             trade_result=result
         )
-        
+
         # Check if new optimized parameters available
         status = self.optimizer.get_status()
         active_params = status['active_parameters'].get('my_custom_strategy')
-        
+
         if active_params and active_params != self.current_params:
             # New parameters deployed - update strategy
             new_params = self.optimizer.active_parameters['my_custom_strategy']
@@ -556,7 +556,7 @@ The engine should auto-rollback, but you can force it:
 
 ```python
 # Get previous parameters
-previous_params = [p for p in optimizer.parameter_history 
+previous_params = [p for p in optimizer.parameter_history
                    if p.retired_at is not None][-1]
 
 # Redeploy previous parameters

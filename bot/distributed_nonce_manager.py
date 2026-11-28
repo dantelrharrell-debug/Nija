@@ -1055,6 +1055,9 @@ class _PerKeyRedisBackend:
         counter_key = self._LEASE_VERSION_COUNTER_PREFIX + key_id
         fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
         generation_key = self._LEASE_GENERATION_KEY
+        process_generation_key = os.getenv("NIJA_LEASE_GENERATION_KEY", "").strip() or "nija:lease:generation"
+        if generation_key == process_generation_key:
+            raise RuntimeError("Kraken nonce and process writer generation keys collide")
         prev = self._lease_by_key.get(key_id)
         if prev is None:
             self._maybe_apply_startup_backoff(key_id)

@@ -212,7 +212,7 @@ changes:
     old_value: 0.10
     new_value: 0.08
     reason: Reduce exposure during high volatility period
-    
+
   - parameter: stop_loss_atr_multiplier
     old_value: 1.5
     new_value: 1.8
@@ -238,7 +238,7 @@ approvals:
     name: [Name]
     date: 2026-02-12
     signature: [Signature]
-    
+
   - role: Risk Manager
     name: [Name]
     date: 2026-02-12
@@ -432,7 +432,7 @@ By working on NIJA risk management, all team members acknowledge:
 > 2. ✅ Paper Trading (minimum 2 weeks)
 > 3. ✅ Version documentation
 > 4. ✅ Multi-stakeholder approval
-> 
+>
 > **This is how real trading systems stay profitable long-term.**
 
 ---

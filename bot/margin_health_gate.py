@@ -72,4 +72,3 @@ class MarginHealthGate:
             return MarginGateDecision(False, "invalid_leverage")
 
         return MarginGateDecision(True, "ok")
-

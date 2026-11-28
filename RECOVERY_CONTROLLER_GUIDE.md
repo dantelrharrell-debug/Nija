@@ -129,7 +129,7 @@ The RecoveryController is checked **FIRST** before any order execution:
 if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
     recovery_controller = get_recovery_controller()
     can_trade, reason = recovery_controller.can_trade("entry")
-    
+
     if not can_trade:
         logger.error("🛡️ RECOVERY CONTROLLER BLOCKED ENTRY")
         return None
@@ -138,7 +138,7 @@ if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
 if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
     recovery_controller = get_recovery_controller()
     can_trade, reason = recovery_controller.can_trade("exit")
-    
+
     if not can_trade:
         logger.error("🛡️ RECOVERY CONTROLLER BLOCKED EXIT")
         return False
@@ -152,13 +152,13 @@ The strategy consults the RecoveryController at the start of each cycle:
 # In run_cycle()
 if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
     recovery_controller = get_recovery_controller()
-    
+
     # Update capital safety with current balance
     recovery_controller.assess_capital_safety(
         current_balance=current_balance,
         position_count=position_count
     )
-    
+
     # Check if entries allowed
     can_trade_entry, reason = recovery_controller.can_trade("entry")
     if not can_trade_entry:
@@ -492,7 +492,7 @@ A: At the start of each trading cycle (every 2-5 minutes typically). The control
 A: No. The controller only provides permission checks. The execution engine and strategy still handle actual order placement.
 
 **Q: What's the difference between SAFE_MODE and EMERGENCY_HALT?**
-A: 
+A:
 - `SAFE_MODE`: Allows exits, blocks entries
 - `EMERGENCY_HALT`: Blocks everything, including exits
 

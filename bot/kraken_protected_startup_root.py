@@ -23,13 +23,16 @@ from types import MappingProxyType, ModuleType
 from typing import Any
 
 from bot.kraken_canonical_startup_factory import (
-    ReviewedCanonicalKrakenSources, register_canonical_kraken_collector_startup,
+    ReviewedCanonicalKrakenSources, make_canonical_kraken_startup_factory,
+    register_canonical_kraken_collector_startup,
 )
 from bot.kraken_startup_evidence_binding import (
-    protected_source_import_guard, startup_binding_registration_state,
+    RecoveryDiagnosticResult, protected_source_import_guard, report_recovery_observations,
+    startup_binding_registration_state,
 )
 from bot.kraken_startup_receipts import (
-    StartupReceiptTrust, _receipt, _unique_object, verify_startup_receipt_set,
+    StartupReceiptTrust, _unique_object, approved_source_digest, register_signed_kraken_startup,
+    verify_owner_diagnostic_receipt, verify_startup_receipt_set,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -173,13 +176,15 @@ def register_from_protected_root() -> str:
         stage = "manifest_parse"
         trust, receipts = _manifest(manifest_bytes)
         stage = "receipt_validation"
-        if not verify_startup_receipt_set(receipts, trust):
-            return "protected_startup_receipts_denied"
+        verify_receipts = verify_startup_receipt_set
+        if not verify_receipts(receipts, trust):
+            verify_receipts = verify_owner_diagnostic_receipt
+            if not verify_receipts(receipts, trust):
+                return "protected_startup_receipts_denied"
         stage = "source_read"
         source = _read_protected(SOURCE_NAME, 131072)
         stage = "source_digest"
-        review = _receipt(receipts["independent_review"])["payload"]
-        if review["artifact_sha256"] != hashlib.sha256(source).hexdigest():
+        if approved_source_digest(receipts) != hashlib.sha256(source).hexdigest():
             return "protected_startup_source_digest_denied"
         stage = "source_import"
         with protected_source_import_guard():
@@ -190,7 +195,7 @@ def register_from_protected_root() -> str:
         if not callable(resolver) or not callable(reviewer):
             return "protected_startup_source_interface_denied"
         stage = "receipt_revalidation"
-        if not verify_startup_receipt_set(receipts, trust):
+        if not verify_receipts(receipts, trust):
             return "protected_startup_receipts_denied"
 
         def resolve_sources(**canonical: Any) -> ReviewedCanonicalKrakenSources:
@@ -204,6 +209,23 @@ def register_from_protected_root() -> str:
             return reviewer(sources, trust=trust)
 
         stage = "canonical_registration"
+        if verify_receipts is verify_owner_diagnostic_receipt:
+            factory = make_canonical_kraken_startup_factory(
+                trust=trust, resolve_sources=resolve_sources, review_sources=review_sources,
+            )
+
+            def recovery_factory(**canonical: Any) -> RecoveryDiagnosticResult:
+                if not verify_owner_diagnostic_receipt(receipts, trust):
+                    raise ProtectedStartupDenied("protected_diagnostic_receipt_denied")
+                binding = factory(**canonical)
+                if not verify_owner_diagnostic_receipt(receipts, trust):
+                    raise ProtectedStartupDenied("protected_diagnostic_receipt_denied")
+                return report_recovery_observations(binding)
+
+            # Diagnostics return only a status. The release verifier also rejects the diagnostic receipt.
+            register_signed_kraken_startup(recovery_factory, trust)
+            registered_here = True
+            return "protected_startup_recovery_diagnostics_registered"
         register_canonical_kraken_collector_startup(
             trust=trust, resolve_sources=resolve_sources, review_sources=review_sources,
         )

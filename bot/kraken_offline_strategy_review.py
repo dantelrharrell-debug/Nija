@@ -16,6 +16,9 @@ def _realized_metrics(rows: list[dict]) -> dict:
         return {
             "status": "unavailable",
             "net_realized_pnl_usd": None,
+            "gross_realized_pnl_usd": None,
+            "net_win_fraction": None,
+            "mean_net_pnl_usd_per_closed_lot": None,
             "execution_cost_usd": None,
             "realized_drawdown_usd": None,
             "profit_factor": None,
@@ -23,6 +26,7 @@ def _realized_metrics(rows: list[dict]) -> dict:
     # Group simultaneous closes to avoid inventing a within-timestamp sequence.
     closes_by_time: dict[int, Decimal] = {}
     costs = wins = losses = Decimal(0)
+    winning_lots = 0
     with localcontext() as ctx:
         ctx.prec = 256
         for row in rows:
@@ -32,6 +36,7 @@ def _realized_metrics(rows: list[dict]) -> dict:
             stamp = amounts["closed_at_epoch"]
             closes_by_time[stamp] = closes_by_time.get(stamp, Decimal(0)) + pnl
             costs += execution_cost
+            winning_lots += int(pnl > 0)
             wins += max(pnl, Decimal(0))
             losses += max(-pnl, Decimal(0))
         cumulative = peak = drawdown = Decimal(0)
@@ -42,25 +47,118 @@ def _realized_metrics(rows: list[dict]) -> dict:
         return {
             "status": "reconciled_sample",
             "net_realized_pnl_usd": _canonical(cumulative),
+            "gross_realized_pnl_usd": _canonical(cumulative + costs),
+            "net_win_fraction": _canonical((Decimal(winning_lots) / len(rows)).quantize(Decimal("0.000001"))),
+            "mean_net_pnl_usd_per_closed_lot": _canonical(
+                (cumulative / len(rows)).quantize(Decimal("0.000001"))
+            ),
             "execution_cost_usd": _canonical(costs),
             "realized_drawdown_usd": _canonical(drawdown),
             "profit_factor": _canonical((wins / losses).quantize(Decimal("0.000001"))) if losses else None,
         }
 
 
-def evaluate(inbox: KrakenShadowOutcomes, scope: str) -> dict:
-    """Use only the latest 200 dated, cost-reconciled lots for shadow recommendations.
+def _observed_cost_by_regime(rows: list[dict]) -> list[dict]:
+    # The existing admission contract proves the amounts, not an ex-ante
+    # benchmark price or an independent reconstruction of market regimes.
+    totals: dict[str, dict] = {}
+    with localcontext() as ctx:
+        ctx.prec = 256
+        for row in rows:
+            amounts = row["economics"]
+            gross = Decimal(amounts["gross_pnl_usd"])
+            cost = Decimal(amounts["execution_cost_usd"])
+            entry = totals.setdefault(row["regime"], {
+                "gross_realized_pnl_usd": Decimal(0),
+                "recorded_execution_cost_usd": Decimal(0),
+                "net_realized_pnl_usd": Decimal(0),
+                "sample_count": 0,
+                "gross_winner_lots_erased_by_cost": 0,
+            })
+            entry["gross_realized_pnl_usd"] += gross
+            entry["recorded_execution_cost_usd"] += cost
+            entry["net_realized_pnl_usd"] += gross - cost
+            entry["sample_count"] += 1
+            entry["gross_winner_lots_erased_by_cost"] += int(gross > 0 and gross - cost <= 0)
+    return [
+        {"admitted_regime_label": label, **{
+            field: _canonical(value) if isinstance(value, Decimal) else value
+            for field, value in totals[label].items()
+        }}
+        for label in sorted(totals)
+    ]
 
-    An independent offline reader must have admitted each lot. Monetary metrics
-    describe the inbox sample only and are withheld when any lot lacks amounts.
+
+def _observed_performance_by_strategy(rows: list[dict]) -> list[dict]:
+    # These labels are admitted evidence, not a recommendation or causal comparison.
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["strategy"], []).append(row)
+    return [
+        {
+            "admitted_strategy_label": label,
+            "sample_count": len(groups[label]),
+            "observed_metrics": _realized_metrics(groups[label]),
+        }
+        for label in sorted(groups)
+    ]
+
+
+def evaluate(
+    inbox: KrakenShadowOutcomes, scope: str, *, training_through_epoch: int | None = None,
+) -> dict:
+    """Build an isolated report; an explicit cutoff prevents future outcomes entering training.
+
+    Unmeasured excursion and dependent recommendations are never published as zero.
+    The default report flags its statistics as in-sample. A chronological
+    review fits on at most 200 eligible lots through the supplied cutoff,
+    measures only realized historical outcomes afterward, and never interprets
+    them as counterfactual returns from either the candidate or baseline.
     """
+    if training_through_epoch is not None and (
+        type(training_through_epoch) is not int or not 0 < training_through_epoch < 253402300800
+    ):
+        raise ValueError("invalid offline training cutoff")
     rows = inbox.evaluation_snapshot(scope)
-    digest = _evidence_digest({"evaluation_schema": 1, "scope": scope, "rows": rows})
+    evidence = {"evaluation_schema": 2, "scope": scope, "rows": rows}
     dated = sorted(
         (row for row in rows if row["economics"] is not None),
         key=lambda row: (row["economics"]["closed_at_epoch"], row["lot_id"]),
     )
-    training = dated[-200:]
+    chronology = {
+        "status": "cutoff_not_set",
+        "training_through_epoch": training_through_epoch,
+        "holdout_sample_count": 0,
+        "lots_without_economics": len(rows) - len(dated),
+        "observed_holdout_metrics": None,
+        "observed_holdout_cost_by_regime": None,
+        "observed_holdout_performance_by_strategy": None,
+        "slippage_status": "unavailable_no_benchmark_evidence",
+        "candidate_comparison_status": "not_evaluated",
+        "candidate_comparison": None,
+    }
+    if training_through_epoch is None:
+        training = dated[-200:]
+        recommendation_basis = "in_sample_shadow_only"
+    else:
+        evidence.update(evaluation_schema=4, training_through_epoch=training_through_epoch)
+        training = [
+            row for row in dated if row["economics"]["closed_at_epoch"] <= training_through_epoch
+        ][-200:]
+        holdout = [
+            row for row in dated if row["economics"]["closed_at_epoch"] > training_through_epoch
+        ]
+        chronology.update(
+            status="separate_samples" if training and holdout else "insufficient_dated_samples",
+            holdout_sample_count=len(holdout),
+            observed_holdout_metrics=_realized_metrics(holdout) if holdout else None,
+            observed_holdout_cost_by_regime=_observed_cost_by_regime(holdout) if holdout else None,
+            observed_holdout_performance_by_strategy=(
+                _observed_performance_by_strategy(holdout) if holdout else None
+            ),
+        )
+        recommendation_basis = "training_samples_only"
+    digest = _evidence_digest(evidence)
     with TemporaryDirectory() as folder:
         engine = RegimePerformanceCalibrator(str(Path(folder) / "offline.json"), window=200)
         engine.selection_mode = "shadow"
@@ -80,7 +178,18 @@ def evaluate(inbox: KrakenShadowOutcomes, scope: str) -> dict:
             "sample_count": len(rows),
             "learning_sample_count": len(training),
             "metrics": _realized_metrics(rows),
-            "recommendations": engine.report_all(),
+            "recommendations": [
+                {
+                    **row, "avg_mfe": None, "mfe_capture": None,
+                    "calibration_score": None, "position_size_multiplier": None,
+                    "confidence_threshold_delta": None, "freeze_recommended": None,
+                    "eligible_for_review": False,
+                    "score_status": "unavailable_no_in_position_price_path",
+                }
+                for row in engine.report_all()
+            ],
+            "recommendation_basis": recommendation_basis,
+            "chronological_review": chronology,
             "owner_decisions": inbox.owner_decisions(scope, digest),
             "authorizes_orders": False,
         }

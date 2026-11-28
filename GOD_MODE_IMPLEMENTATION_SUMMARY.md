@@ -270,7 +270,7 @@ recommendation = god_mode.get_recommendation(df, indicators)
 class MyStrategy:
     def __init__(self):
         self.god_mode = GodModeEngine(config)
-    
+
     def trade(self):
         rec = self.god_mode.get_recommendation(...)
         params = rec.recommended_parameters

@@ -68,7 +68,7 @@ strategy = recommendation.recommended_strategy_id
 regime = recommendation.market_regime
 
 # Record trades for learning
-god_mode.record_trade_entry(trade_id, market_data, indicators, 
+god_mode.record_trade_entry(trade_id, market_data, indicators,
                              strategy, entry_price, params)
 god_mode.record_trade_exit(trade_id, market_data, indicators,
                             exit_price, profit_loss, params)
@@ -133,7 +133,7 @@ Works seamlessly with existing NIJA components:
 class MyStrategy:
     def __init__(self):
         self.god_mode = GodModeEngine(config)
-    
+
     def should_enter(self, df, indicators):
         rec = self.god_mode.get_recommendation(df, indicators)
         params = rec.recommended_parameters

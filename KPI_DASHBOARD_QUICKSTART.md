@@ -240,11 +240,11 @@ class MyTradingBot:
     def __init__(self):
         self.kpi = get_kpi_tracker(initial_capital=10000)
         self.alarms = get_risk_alarm_system()
-    
+
     def on_trade_close(self, trade):
         # Record trade
         self.kpi.record_trade(...)
-        
+
         # Check risks
         self.alarms.check_all_risks()
 ```
@@ -258,20 +258,20 @@ class AdvancedTradingBot:
         self.kpi = get_kpi_tracker(initial_capital=10000)
         self.tracker = get_performance_tracker()
         self.alarms = get_risk_alarm_system()
-        
+
         # Configure
         self.tracker.set_account_callbacks(
             account_value_fn=self.get_value,
             cash_balance_fn=self.get_cash,
             positions_fn=self.get_positions
         )
-        
+
         # Add alarm handler
         self.alarms.add_notification_callback(self.handle_alarm)
-        
+
         # Start tracking
         self.tracker.start()
-    
+
     def handle_alarm(self, alarm):
         if alarm.level == 'EMERGENCY':
             self.stop_trading()

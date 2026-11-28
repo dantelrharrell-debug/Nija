@@ -9,12 +9,6 @@ RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r requ
 
 FROM ${PYTHON_BASE}
 
-# Patch the base Python environment as well as the application virtualenv.
-# Fail the build if either vulnerable vendored distribution is still present.
-RUN /usr/local/bin/python -m pip install --no-cache-dir --disable-pip-version-check "setuptools==84.1.0" \
-    && /usr/local/bin/python -c "import importlib.metadata as m; assert m.version('setuptools') == '84.1.0'" \
-    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/METADATA \
-    && test ! -e /usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/METADATA
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /app
 # The official base contains vulnerable global setuptools vendored metadata
@@ -51,6 +45,6 @@ RUN chmod +x /app/docker-entrypoint.sh
 # Run with entrypoint for database initialization
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Default command: Run mobile backend server with Socket.IO support
-# For WebSocket support, use eventlet worker
-CMD ["gunicorn", "mobile_backend_server:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "eventlet", "--timeout", "120"]
+# Match the application's explicit Socket.IO threading mode. One worker
+# keeps polling and WebSocket requests in the same Engine.IO process.
+CMD ["gunicorn", "mobile_backend_server:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "gthread", "--threads", "32", "--timeout", "120"]

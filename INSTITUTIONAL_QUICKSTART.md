@@ -186,7 +186,7 @@ def should_enter_trade(symbol, signal_data):
         proposed_size_usd=calculate_size(),
         stop_loss_price=calculate_stop_loss()
     )
-    
+
     return allowed, reason, audit_id
 ```
 
@@ -224,19 +224,19 @@ while trading:
     # Update all position prices
     for symbol, price in get_current_prices().items():
         integration.update_position_price(symbol, price)
-    
+
     # Check for problems
     zombies = integration.get_positions_to_force_close()
     for zombie in zombies:
         print(f"🧟 Force closing zombie position: {zombie}")
         close_position(zombie)
-    
+
     # Check volatility
     should_reduce, target = integration.should_reduce_positions()
     if should_reduce:
         print(f"📉 Volatility spike - reducing to {target} positions")
         reduce_positions(target)
-    
+
     time.sleep(60)  # Check every minute
 ```
 

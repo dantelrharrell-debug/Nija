@@ -244,15 +244,15 @@ def bot_startup():
         broker_integration=broker,
         monitor_high_exposure=True
     )
-    
+
     state, diagnostics = protocol.verify_clean_state()
-    
+
     if state != AccountState.CLEAN:
         results = protocol.run_full_protocol()
-    
+
     # 2. Initialize risk gate
     risk_gate = create_risk_intelligence_gate()
-    
+
     return True  # Ready for trading
 ```
 

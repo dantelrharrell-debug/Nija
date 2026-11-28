@@ -70,20 +70,20 @@ def test_duplicate_registration_prevention():
     print("=" * 70)
 
     manager = _fresh_canonical()
-    
+
     # Create and register a broker
     broker1 = MockBroker(BrokerType.KRAKEN)
     broker1.connect()
-    
+
     # First registration should succeed
     result = manager.register_platform_broker_instance(BrokerType.KRAKEN, broker1)
     assert result == True, "First registration should succeed"
     print("✅ Test 1a PASSED: First registration successful")
-    
+
     # Second registration of the same broker type should fail
     broker2 = MockBroker(BrokerType.KRAKEN)
     broker2.connect()
-    
+
     try:
         manager.register_platform_broker_instance(BrokerType.KRAKEN, broker2)
         assert False, "Should have raised RuntimeError for duplicate registration"
@@ -92,7 +92,7 @@ def test_duplicate_registration_prevention():
         assert "INVARIANT VIOLATION" in str(e), "Error should indicate invariant violation"
         print("✅ Test 1b PASSED: Duplicate registration correctly prevented")
         print(f"   Error message: {e}")
-    
+
     print()
 
 
@@ -103,21 +103,21 @@ def test_immutability_after_lock():
     print("=" * 70)
 
     manager = _fresh_canonical()
-    
+
     # Register a broker
     broker1 = MockBroker(BrokerType.KRAKEN)
     broker1.connect()
     manager.register_platform_broker_instance(BrokerType.KRAKEN, broker1)
     print("✅ Test 2a: Broker registered before lock")
-    
+
     # Lock platform brokers
     manager._lock_platform_brokers()
     print("✅ Test 2b: Platform brokers locked")
-    
+
     # Attempt to register another broker should fail
     broker2 = MockBroker(BrokerType.OKX)
     broker2.connect()
-    
+
     try:
         manager.register_platform_broker_instance(BrokerType.OKX, broker2)
         assert False, "Should have raised RuntimeError when locked"
@@ -126,7 +126,7 @@ def test_immutability_after_lock():
         assert "INVARIANT VIOLATION" in str(e), "Error should indicate invariant violation"
         print("✅ Test 2c PASSED: Registration correctly prevented after lock")
         print(f"   Error message: {e}")
-    
+
     print()
 
 
@@ -137,34 +137,34 @@ def test_read_only_property():
     print("=" * 70)
 
     manager = _fresh_canonical()
-    
+
     # Register a broker
     broker1 = MockBroker(BrokerType.KRAKEN)
     broker1.connect()
     manager.register_platform_broker_instance(BrokerType.KRAKEN, broker1)
-    
+
     # Access via property should return a MappingProxyType (read-only view)
     brokers_view1 = manager.platform_brokers
     brokers_view2 = manager.platform_brokers
-    
+
     # Both should be MappingProxyType instances
     from types import MappingProxyType
     assert isinstance(brokers_view1, MappingProxyType), "Property should return MappingProxyType"
     assert isinstance(brokers_view2, MappingProxyType), "Property should return MappingProxyType"
     print("✅ Test 3a PASSED: Property returns MappingProxyType (read-only view)")
-    
+
     # Verify the broker is in the view
     assert BrokerType.KRAKEN in brokers_view1, "View should contain registered broker"
     assert brokers_view1[BrokerType.KRAKEN] == broker1, "View should have same broker instance"
     print("✅ Test 3b PASSED: View contains correct broker data")
-    
+
     # Attempting to modify the view should raise TypeError
     try:
         brokers_view1[BrokerType.OKX] = MockBroker(BrokerType.OKX)
         assert False, "Should not be able to modify MappingProxyType"
     except TypeError:
         print("✅ Test 3c PASSED: MappingProxyType prevents modification (immutable)")
-    
+
     print()
 
 
@@ -175,23 +175,23 @@ def test_single_registration_globally():
     print("=" * 70)
 
     manager = _fresh_canonical()
-    
+
     # Register multiple different broker types
     broker_types = [BrokerType.KRAKEN, BrokerType.OKX, BrokerType.ALPACA]
-    
+
     for broker_type in broker_types:
         broker = MockBroker(broker_type)
         broker.connect()
         result = manager.register_platform_broker_instance(broker_type, broker)
         assert result == True, f"Registration of {broker_type.value} should succeed"
         print(f"✅ {broker_type.value} registered successfully")
-    
+
     # Verify all are registered
     for broker_type in broker_types:
         broker = manager.get_platform_broker(broker_type)
         assert broker is not None, f"{broker_type.value} should be retrievable"
         assert broker.connected == True, f"{broker_type.value} should be connected"
-    
+
     print("✅ Test 4 PASSED: Multiple different brokers registered globally")
     print()
 
@@ -203,31 +203,31 @@ def test_retrieval_methods():
     print("=" * 70)
 
     manager = _fresh_canonical()
-    
+
     # Register a broker — use COINBASE to avoid the Kraken FSM startup gate
     # (is_platform_connected for Kraken checks _KRAKEN_STARTUP_FSM.is_connected
     # which is never set in unit tests).
     broker = MockBroker(BrokerType.COINBASE)
     broker.connect()
     manager.register_platform_broker_instance(BrokerType.COINBASE, broker)
-    
+
     # Test get_platform_broker
     retrieved = manager.get_platform_broker(BrokerType.COINBASE)
     assert retrieved is broker, "get_platform_broker should return registered instance"
     print("✅ Test 5a PASSED: get_platform_broker returns correct instance")
-    
+
     # Test is_platform_connected
     assert manager.is_platform_connected(BrokerType.COINBASE) == True, "Should report connected"
     print("✅ Test 5b PASSED: is_platform_connected reports correct status")
-    
+
     # Test for non-existent broker
     retrieved_none = manager.get_platform_broker(BrokerType.OKX)
     assert retrieved_none is None, "Non-existent broker should return None"
     print("✅ Test 5c PASSED: Non-existent broker returns None")
-    
+
     assert manager.is_platform_connected(BrokerType.OKX) == False, "Non-existent should not be connected"
     print("✅ Test 5d PASSED: Non-existent broker reported as not connected")
-    
+
     print()
 
 
@@ -270,12 +270,12 @@ def run_all_tests():
         test_single_registration_globally()
         test_retrieval_methods()
         test_bootstrap_refresh_includes_connected_platform_broker_before_ready_state()
-        
+
         print("\n" + "=" * 70)
         print("✅ ALL TESTS PASSED")
         print("=" * 70)
         return True
-        
+
     except AssertionError as e:
         print("\n" + "=" * 70)
         print(f"❌ TEST FAILED: {e}")

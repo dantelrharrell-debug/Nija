@@ -147,7 +147,7 @@ class AlphaOnboardingSystem:
 
         self._invitation_codes[code] = invitation
 
-        logger.info(f"📧 Generated invitation code for {email}: {code}")
+        logger.info("Generated onboarding invitation")
 
         return invitation
 
@@ -444,7 +444,7 @@ class AlphaOnboardingSystem:
         # Set expiration to now
         invitation.expires_at = datetime.now()
 
-        logger.info(f"🚫 Invitation code revoked: {code}")
+        logger.info("Revoked onboarding invitation")
 
         return True, None
 

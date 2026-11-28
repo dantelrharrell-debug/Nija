@@ -23,6 +23,8 @@ on:
       - 'bot/runtime_registered_platform_capital_completeness_v270_patch.py'
       - 'bot/tests/test_capital_v270_evidence_contract_20261019.py'
       - 'bot/kraken_live_history_recovery.py'
+      - 'bot/kraken_ledger_evidence.py'
+      - 'tests/test_kraken_native_collector_rehearsal.py'
       - 'bot/kraken_exact_pending_order_recovery_v466.py'
       - 'bot/kraken_authenticated_key_info_v477.py'
       - 'bot/kraken_authenticated_account_identity_v478.py'
@@ -407,4 +409,3 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: '/language:python/recovery-release'
-
