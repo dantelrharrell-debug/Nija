@@ -19,16 +19,26 @@ _FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 _MANIFEST_LIMIT = 32 * 1024
 
 
+def _mount_is_readonly(fd):
+    """Check the actual mount of an opened descriptor, not path permissions."""
+    return bool(os.fstatvfs(fd).f_flag & os.ST_RDONLY)
+
+
 def _open_regular(root, name):
-    """Open via a directory descriptor, without following a final symlink."""
+    """Open from a read-only mount without following a final symlink."""
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
+        if not _mount_is_readonly(directory):
+            raise ValueError("video_root_mount_not_readonly")
         fd = os.open(name, _FLAGS, dir_fd=directory)
     finally:
         os.close(directory)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("video_source_not_regular")
+        # A child bind mount can differ from the parent's mount flags.
+        if not _mount_is_readonly(fd):
+            raise ValueError("video_source_mount_not_readonly")
         return os.fdopen(fd, "rb")
     except BaseException:
         os.close(fd)
