@@ -1,0 +1,26 @@
+# Public crawl policy. Authentication, not robots.txt, protects private resources.
+User-agent: *
+Disallow: /dashboard
+Disallow: /admin
+Disallow: /founder-dashboard
+Disallow: /affiliate-dashboard
+Disallow: /course-access
+Disallow: /course-thank-you
+Disallow: /automation-setup
+Disallow: /contacts
+Disallow: /revenue-dashboard
+Disallow: /outreach-center
+Disallow: /calling-system
+Disallow: /beta-success
+Disallow: /beta-thank-you
+Disallow: /sponsor-thank-you
+Disallow: /partner-thank-you
+Disallow: /affiliate-creator-thank-you
+Disallow: /academy/dashboard
+Disallow: /academy/parents
+Disallow: /academy/educators
+Disallow: /gunit
+Disallow: /enroll
+Disallow: /game
+
+Sitemap: https://nijaaitrading.com/sitemap.xml
