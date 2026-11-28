@@ -109,7 +109,8 @@ def evaluate(
 ) -> dict:
     """Build an isolated report; an explicit cutoff prevents future outcomes entering training.
 
-    The default report flags its recommendations as in-sample. A chronological
+    Unmeasured excursion and dependent recommendations are never published as zero.
+    The default report flags its statistics as in-sample. A chronological
     review fits on at most 200 eligible lots through the supplied cutoff,
     measures only realized historical outcomes afterward, and never interprets
     them as counterfactual returns from either the candidate or baseline.
@@ -119,7 +120,7 @@ def evaluate(
     ):
         raise ValueError("invalid offline training cutoff")
     rows = inbox.evaluation_snapshot(scope)
-    evidence = {"evaluation_schema": 1, "scope": scope, "rows": rows}
+    evidence = {"evaluation_schema": 2, "scope": scope, "rows": rows}
     dated = sorted(
         (row for row in rows if row["economics"] is not None),
         key=lambda row: (row["economics"]["closed_at_epoch"], row["lot_id"]),
@@ -140,7 +141,7 @@ def evaluate(
         training = dated[-200:]
         recommendation_basis = "in_sample_shadow_only"
     else:
-        evidence.update(evaluation_schema=3, training_through_epoch=training_through_epoch)
+        evidence.update(evaluation_schema=4, training_through_epoch=training_through_epoch)
         training = [
             row for row in dated if row["economics"]["closed_at_epoch"] <= training_through_epoch
         ][-200:]
@@ -177,7 +178,16 @@ def evaluate(
             "sample_count": len(rows),
             "learning_sample_count": len(training),
             "metrics": _realized_metrics(rows),
-            "recommendations": engine.report_all(),
+            "recommendations": [
+                {
+                    **row, "avg_mfe": None, "mfe_capture": None,
+                    "calibration_score": None, "position_size_multiplier": None,
+                    "confidence_threshold_delta": None, "freeze_recommended": None,
+                    "eligible_for_review": False,
+                    "score_status": "unavailable_no_in_position_price_path",
+                }
+                for row in engine.report_all()
+            ],
             "recommendation_basis": recommendation_basis,
             "chronological_review": chronology,
             "owner_decisions": inbox.owner_decisions(scope, digest),

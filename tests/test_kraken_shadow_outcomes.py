@@ -238,6 +238,35 @@ class ShadowOutcomesTest(unittest.TestCase):
         same = evaluate(self.inbox, "test:a", training_through_epoch=cut)
         self.assertEqual(len(same["owner_decisions"]), 1)
 
+    def test_offline_missing_excursion_withholds_calibration_and_size_recommendations(self):
+        from bot.kraken_offline_strategy_review import evaluate
+        from bot.kraken_shadow_outcomes import CloseEconomics, _evidence_digest
+
+        for epoch in range(100, 122):
+            proof = close(
+                lot=f"lot-{epoch}", closing_fill_ids=(f"fill-{epoch}",),
+                economics=CloseEconomics(Decimal("100"), Decimal("3"), Decimal("1"), epoch),
+            )
+            self.assertEqual(self.put(proof), "accepted")
+        rows = self.inbox.evaluation_snapshot("test:a")
+        for cutoff, old_schema in ((None, 1), (121, 3)):
+            with self.subTest(cutoff=cutoff):
+                prior = {"scope": "test:a", "rows": rows, "evaluation_schema": old_schema}
+                if cutoff is not None:
+                    prior["training_through_epoch"] = cutoff
+                report = evaluate(self.inbox, "test:a", training_through_epoch=cutoff)
+                self.assertNotEqual(report["snapshot_sha256"], _evidence_digest(prior))
+                self.assertEqual(report["metrics"]["net_realized_pnl_usd"], "44")
+                self.assertFalse(report["authorizes_orders"])
+                self.assertEqual(len(report["recommendations"]), 1)
+                group = report["recommendations"][0]
+                self.assertEqual(group["sample_size"], 22)
+                self.assertEqual(group["score_status"], "unavailable_no_in_position_price_path")
+                for field in ("avg_mfe", "mfe_capture", "calibration_score",
+                              "position_size_multiplier", "confidence_threshold_delta", "freeze_recommended"):
+                    self.assertIsNone(group[field])
+                self.assertFalse(group["eligible_for_review"])
+
     def test_offline_cutoff_is_explicit_and_empty_samples_remain_uncertified(self):
         from bot.kraken_offline_strategy_review import evaluate
 
