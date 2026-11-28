@@ -2,9 +2,9 @@ name: Artifact Scanning
 
 on:
   push:
-    branches: [ main, develop, release/justcall-handoff-only-20261017 ]
+    branches: [ main, develop, release/justcall-handoff-only-20261017, sandbox/foundations-video-storage-a28c00d ]
   pull_request:
-    branches: [ main, release/justcall-handoff-only-20261017 ]
+    branches: [ main, release/justcall-handoff-only-20261017, sandbox/foundations-video-storage-a28c00d ]
   schedule:
     # Run weekly on Mondays at 3am UTC
     - cron: '0 3 * * 1'

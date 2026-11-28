@@ -9,9 +9,7 @@ for paid masters. Do not upload to billing Postgres as a substitute for streamin
 
 Select an approved durable store with a private, read-only runtime mount. The portal
 service and content must be separately deployable and the portal process must not be
-able to modify the mount. Never operate the origin as a public file server. If the
-selected durable store is object storage without a supported private mount, implement
-and test its authenticated range adapter separately; this change does not connect it.
+able to modify the mount. Never operate the origin as a public file server. For versioned S3, use the optional object adapter below.
 
 On a trusted staging device, match the exact owner-approved lesson inventory and record
 bytes and SHA-256 for each original. Use H.264/AAC seeking-compatible MP4 as needed,
