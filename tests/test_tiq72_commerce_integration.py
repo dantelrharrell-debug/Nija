@@ -179,8 +179,17 @@ class CommerceIntegrationTests(unittest.TestCase):
             success_url="https://example.org/success",
             cancel_url="https://example.org/cancel")
         rid=result["reservation_id"]
+        with patch("tiq72_test_commerce_orchestrator.verify_test_webhook") as verify:
+            verify.return_value = {
+                "id": "evt_paid",
+                "livemode": False,
+                "type": "checkout.session.completed",
+                "data": {"object": {"id": "cs_test_abc", "metadata": {"tiq72_reservation_id": rid}}},
+            }
+            self.assertTrue(self.service.accept_signed_checkout(raw_body=b"signed", signature="sig"))
         with self.assertRaisesRegex(CommerceDenied, "reservation_not_owned"):
-            self.service.fulfill_report(owner_id="adult-2", reservation_id=rid, report={"score":70})
+            self.service.fulfill_report(owner_id="adult-2", reservation_id=rid)
+        self.assertEqual(self.service.fulfill_report(owner_id="adult-1", reservation_id=rid), {"score": 70})
         with self.assertRaises(CommerceDenied):
             self.store.get_report(rid, "adult-2")
 
