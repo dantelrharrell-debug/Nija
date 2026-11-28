@@ -14,6 +14,15 @@ This proposal adds an unmounted customer ingress and a staging-only return view.
 
 Identify and test the existing trusted account issuer against the canonical NIJA user record, including revocation and adult eligibility. The backend and browser must share the exact protected preview origin; no wildcard CORS, public preview bypass, JWT signing secret in Vercel builds, or app-issued synthetic identities. Explicitly review how to route the two sandbox endpoints while retaining Vercel staging protection and keeping the TEST webhook unchanged. Hand off a completed canonical gameplay payload and CSRF through that trusted session, not through a score supplied by the browser.
 
+The default-off private-session reader accepts only the exact `__Host-nija-tiq72-test`
+opaque cookie. A separately reviewed host must mint it with Secure, HttpOnly, Path=/,
+no Domain attribute, and appropriate same-site settings. Keep the random value
+out of logs and deliver it only in the cookie. Resolve only its SHA-256 digest
+through an access-controlled, bounded server-side lookup. Preserve explicit
+revocation and expiry no greater than 15 minutes, protect the associated issuer
+bearer at rest, and never return it to the browser. This code does not provision,
+write, or mount a session store or mint and rotate cookies.
+
 ## Acceptance before a real-payment proposal
 
 Run a fresh authorized browser TEST with a genuine eligible test account, then reopen the correct report from another authenticated browser and deny anonymous, ineligible, revoked and wrong-owner access. Verify signed Stripe delivery, unpaid and canceled returns, refund and dispute revocation, duplicate delivery and restart persistence. The internal signed payment and refund rehearsal is good backend evidence but does not replace this customer-facing browser test.
