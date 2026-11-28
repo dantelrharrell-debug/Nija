@@ -239,10 +239,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Keep PyPI traffic from the three manifests from overlapping.
+      # Keep PyPI traffic from the runtime and notebook manifests from overlapping.
       max-parallel: 1
       matrix:
-        requirements: [requirements.txt, requirements-billing.txt, requirements-member-broker.txt]
+        requirements: [requirements.txt, requirements-billing.txt, requirements-member-broker.txt, requirements-notebook.txt]
 
     steps:
     - name: Checkout repository
@@ -261,13 +261,14 @@ jobs:
         python -m venv "$RUNNER_TEMP/nija-production-deps"
         "$RUNNER_TEMP/nija-production-deps/bin/python" -m pip install --upgrade pip
         "$RUNNER_TEMP/nija-production-deps/bin/python" -m pip install -r "${{ matrix.requirements }}"
+        "$RUNNER_TEMP/nija-production-deps/bin/python" -m pip check
 
     - name: Run pip-audit for vulnerability scanning
       run: |
         set -euo pipefail
         python -m venv "$RUNNER_TEMP/nija-pip-audit"
         "$RUNNER_TEMP/nija-pip-audit/bin/python" -m pip install pip-audit==2.10.1
-        # Audit the exact production manifest, not the mutable runner environment.
+        # Audit the exact selected manifest, not the mutable runner environment.
         # The latter includes scanner tooling and may miss declared pins.
         "$RUNNER_TEMP/nija-pip-audit/bin/pip-audit" -r "${{ matrix.requirements }}" --desc --output pip-audit-report.json --format json
 

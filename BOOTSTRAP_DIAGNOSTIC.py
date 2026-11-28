@@ -25,7 +25,7 @@ def check_credentials():
     logger.info("=" * 80)
     logger.info("1. CHECKING CREDENTIALS")
     logger.info("=" * 80)
-    
+
     checks = {
         "KRAKEN_PLATFORM_API_KEY": os.getenv("KRAKEN_PLATFORM_API_KEY") is not None,
         "KRAKEN_PLATFORM_API_SECRET": os.getenv("KRAKEN_PLATFORM_API_SECRET") is not None,
@@ -33,11 +33,11 @@ def check_credentials():
         "COINBASE_API_SECRET": os.getenv("COINBASE_API_SECRET") is not None,
         "LIVE_CAPITAL_VERIFIED": os.getenv("LIVE_CAPITAL_VERIFIED") == "true",
     }
-    
+
     for key, present in checks.items():
         status = "✅" if present else "❌"
         logger.info(f"{status} {key}: {present}")
-    
+
     return all(checks.values())
 
 def check_broker_connection():
@@ -45,10 +45,10 @@ def check_broker_connection():
     logger.info("\n" + "=" * 80)
     logger.info("2. TESTING BROKER CONNECTIONS")
     logger.info("=" * 80)
-    
+
     try:
         from bot.broker_manager import KrakenBroker, CoinbaseBroker, AccountType
-        
+
         # Test Kraken Platform
         logger.info("\n[Kraken PLATFORM]")
         try:
@@ -61,7 +61,7 @@ def check_broker_connection():
         except Exception as e:
             logger.error(f"❌ Connection failed: {type(e).__name__}: {e}")
             return False
-            
+
     except Exception as e:
         logger.error(f"❌ Broker module import failed: {e}")
         return False
@@ -71,21 +71,21 @@ def check_bootstrap_state():
     logger.info("\n" + "=" * 80)
     logger.info("3. CHECKING BOOTSTRAP STATE MACHINE")
     logger.info("=" * 80)
-    
+
     try:
         from bot.bootstrap_state_machine import get_bootstrap_fsm, BootstrapState
-        
+
         fsm = get_bootstrap_fsm()
         logger.info(f"Current state: {fsm.state.value}")
         logger.info(f"Boot complete: {fsm.boot_complete}")
         logger.info(f"Execution authority: {fsm.execution_authority}")
-        
+
         history = fsm.get_history(limit=10)
         if history:
             logger.info("\nRecent transitions:")
             for record in history:
                 logger.info(f"  {record['from']} → {record['to']} ({record['reason']})")
-        
+
         return fsm
     except Exception as e:
         logger.error(f"❌ FSM check failed: {e}")
@@ -96,13 +96,13 @@ def check_phase_gate():
     logger.info("\n" + "=" * 80)
     logger.info("4. CHECKING PHASE GATE")
     logger.info("=" * 80)
-    
+
     try:
         from bot.startup_phase_gate import get_phase_gate, Phase
-        
+
         gate = get_phase_gate()
         logger.info(f"Current phase: {gate.current.name}({gate.current.value})")
-        
+
         return gate
     except Exception as e:
         logger.error(f"❌ Phase gate check failed: {e}")
@@ -113,14 +113,14 @@ def check_capital_authority():
     logger.info("\n" + "=" * 80)
     logger.info("5. CHECKING CAPITAL AUTHORITY")
     logger.info("=" * 80)
-    
+
     try:
         from capital_authority import get_capital_authority
-        
+
         ca = get_capital_authority()
         logger.info(f"Ready: {ca.is_ready()}")
         logger.info(f"Total balance: {ca.total_balance}")
-        
+
         return ca
     except ImportError:
         logger.warning("⚠️  CapitalAuthority not available")
@@ -134,15 +134,15 @@ def check_multi_account_manager():
     logger.info("\n" + "=" * 80)
     logger.info("6. CHECKING MULTI-ACCOUNT BROKER MANAGER")
     logger.info("=" * 80)
-    
+
     try:
         from bot.multi_account_broker_manager import multi_account_broker_manager as mabm
-        
+
         logger.info(f"Platform brokers: {len(mabm.platform_brokers)}")
         for name, broker in mabm.platform_brokers.items():
             connected = getattr(broker, 'connected', False)
             logger.info(f"  ✅ {name}: connected={connected}")
-        
+
         return mabm
     except ImportError:
         logger.warning("⚠️  MABM not available")
@@ -154,7 +154,7 @@ def check_multi_account_manager():
 def main():
     logger.info("\n🔍 NIJA BOOTSTRAP DIAGNOSTIC")
     logger.info("Starting comprehensive system check...\n")
-    
+
     # Run all checks
     creds_ok = check_credentials()
     broker_ok = check_broker_connection()
@@ -162,7 +162,7 @@ def main():
     gate = check_phase_gate()
     ca = check_capital_authority()
     mabm = check_multi_account_manager()
-    
+
     # Summary
     logger.info("\n" + "=" * 80)
     logger.info("SUMMARY")
@@ -173,18 +173,18 @@ def main():
     logger.info(f"Phase gate: {gate.current.name if gate else 'N/A'}")
     logger.info(f"CA ready: {ca.is_ready() if ca else 'N/A'}")
     logger.info(f"MABM available: {mabm is not None}")
-    
+
     if not broker_ok:
         logger.critical("\n❌ BROKER CONNECTION FAILED — This is why trades aren't starting!")
         logger.critical("   Check: Kraken API keys, rate limits, nonce state")
         sys.exit(1)
-    
+
     if fsm and fsm.state.value not in ("CAPITAL_READY", "INIT_COMPLETE", "THREADS_STARTING", "RUNNING_SUPERVISED"):
         logger.critical(f"\n❌ FSM STUCK AT {fsm.state.value}")
         logger.critical("   Run with increased timeouts:")
         logger.critical("   export NIJA_BOOTSTRAP_BROKERS_READY_TIMEOUT_S=120")
         sys.exit(1)
-    
+
     logger.info("\n✅ All checks passed — system appears healthy")
     sys.exit(0)
 
