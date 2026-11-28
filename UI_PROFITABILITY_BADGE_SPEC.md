@@ -56,7 +56,7 @@ Text: #ffffff (same as light mode)
 
 #### Typography
 ```
-Badge Title: 
+Badge Title:
   - Font Family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto
   - Font Size: 15px
   - Font Weight: 600 (Semi-bold)
@@ -234,9 +234,9 @@ Padding: 10px 16px (reduced)
 
 ### ARIA Attributes
 ```html
-<div 
-  role="status" 
-  aria-live="polite" 
+<div
+  role="status"
+  aria-live="polite"
   aria-label="Profitability verification status: verified"
   class="profitability-badge verified">
   ...
@@ -252,18 +252,18 @@ Esc: Collapse details panel (if expanded)
 
 ### Screen Reader Support
 ```
-Verified: "Profitability verified for Coinbase exchange. 
+Verified: "Profitability verified for Coinbase exchange.
            Risk reward ratio 1.83 to 1. Press Enter for details."
 
-Failed: "Profitability check failed for Coinbase exchange. 
+Failed: "Profitability check failed for Coinbase exchange.
          Profit targets too low. Press Enter for recommendations."
 ```
 
 ### Color Contrast
 ```
-Success state: 
+Success state:
   - Text (#ffffff) on green (#10b981): 4.5:1 ✓ WCAG AA
-  
+
 Failed state:
   - Text (#ffffff) on red (#ef4444): 4.5:1 ✓ WCAG AA
 
@@ -324,7 +324,7 @@ Long press: Show tooltip with additional info
     animation: none;
     transition: opacity 0.2s ease;
   }
-  
+
   .banner-details {
     transition: none;
   }

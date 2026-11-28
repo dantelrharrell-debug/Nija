@@ -13,16 +13,16 @@ Automated Trading Algorithm
 ```
 IMPORTANT DISCLAIMER - PLEASE READ CAREFULLY
 
-NIJA is an automated cryptocurrency trading application that executes trades 
-on your behalf using algorithmic analysis. This app operates on YOUR exchange 
+NIJA is an automated cryptocurrency trading application that executes trades
+on your behalf using algorithmic analysis. This app operates on YOUR exchange
 accounts using YOUR API credentials.
 
 INDEPENDENT TRADING MODEL:
-NIJA does NOT copy trades between accounts. Each connected account evaluates 
+NIJA does NOT copy trades between accounts. Each connected account evaluates
 markets independently using shared software logic with independent per-account evaluation and account-
-specific state, risk, and execution context. Results may differ per account due 
-to timing variations, account balance differences, cooldown variance, and market 
-conditions. There is NO platform account that controls other accounts, and NO 
+specific state, risk, and execution context. Results may differ per account due
+to timing variations, account balance differences, cooldown variance, and market
+conditions. There is NO platform account that controls other accounts, and NO
 trade signal distribution occurs between accounts.
 
 WHY TRADING RESULTS DIFFER BETWEEN ACCOUNTS:
@@ -32,20 +32,20 @@ WHY TRADING RESULTS DIFFER BETWEEN ACCOUNTS:
 • Independent evaluation means independent results
 
 SUBSTANTIAL RISK OF LOSS:
-Trading cryptocurrencies involves substantial risk of loss. You may lose 
-some or all of your invested capital. Only invest money you can afford to 
+Trading cryptocurrencies involves substantial risk of loss. You may lose
+some or all of your invested capital. Only invest money you can afford to
 lose. Past performance does not guarantee future results.
 
 NOT FINANCIAL ADVICE:
-NIJA is a software tool, NOT a financial advisor. We do NOT provide investment 
-advice, recommendations, or financial planning services. System optimizations 
-are technical in nature and do not imply improved financial outcomes. You are 
+NIJA is a software tool, NOT a financial advisor. We do NOT provide investment
+advice, recommendations, or financial planning services. System optimizations
+are technical in nature and do not imply improved financial outcomes. You are
 solely responsible for your trading decisions.
 
 NO RETURN PROMISES:
-There are no profit promises. Any representation of potential earnings or 
-returns is purely hypothetical and not a guarantee of actual performance. 
-Trading results vary widely and depend on market conditions, account size, 
+There are no profit promises. Any representation of potential earnings or
+returns is purely hypothetical and not a guarantee of actual performance.
+Trading results vary widely and depend on market conditions, account size,
 risk settings, and timing.
 
 YOUR RESPONSIBILITY:
@@ -65,11 +65,11 @@ AGE RESTRICTION:
 You must be 18 years or older (21+ in some jurisdictions) to use this app.
 
 GEOGRAPHIC RESTRICTIONS:
-This app may not be available or legal in all jurisdictions. Users are 
-responsible for compliance with local laws. Cryptocurrency trading may be 
+This app may not be available or legal in all jurisdictions. Users are
+responsible for compliance with local laws. Cryptocurrency trading may be
 restricted or prohibited in your country.
 
-BY DOWNLOADING AND USING THIS APP, YOU ACKNOWLEDGE THAT YOU HAVE READ, 
+BY DOWNLOADING AND USING THIS APP, YOU ACKNOWLEDGE THAT YOU HAVE READ,
 UNDERSTOOD, AND AGREE TO THESE TERMS AND ACCEPT ALL ASSOCIATED RISKS.
 ```
 
@@ -85,7 +85,7 @@ UNDERSTOOD, AND AGREE TO THESE TERMS AND ACCEPT ALL ASSOCIATED RISKS.
 
 ⚠️  CRITICAL INFORMATION - PLEASE READ
 
-NIJA is an automated trading algorithm that will execute 
+NIJA is an automated trading algorithm that will execute
 cryptocurrency trades on your exchange account(s).
 
 INDEPENDENT TRADING:
@@ -185,8 +185,8 @@ Monitor your account regularly.
 
 ⚠️  IMPORTANT: INDEPENDENT TRADING MODEL
 
-Each connected account evaluates markets INDEPENDENTLY using the same 
-NIJA trading algorithm via risk-gated execution. Accounts do NOT copy 
+Each connected account evaluates markets INDEPENDENTLY using the same
+NIJA trading algorithm via risk-gated execution. Accounts do NOT copy
 trades from each other.
 
 What this means:
@@ -208,9 +208,9 @@ What this means:
 ```
 SECTION: INDEPENDENT TRADING MODEL
 
-NIJA operates using an independent trading model. Each connected account 
+NIJA operates using an independent trading model. Each connected account
 trades independently using shared software logic with independent per-account evaluation and account-
-specific state, risk, and execution context. The system does NOT copy, mirror, 
+specific state, risk, and execution context. The system does NOT copy, mirror,
 or replicate trades from one account to another.
 
 Specifically:
@@ -240,8 +240,8 @@ Users acknowledge and agree that:
 ```
 SECTION: RISK DISCLOSURE
 
-SUBSTANTIAL RISK OF LOSS: Trading cryptocurrencies involves substantial risk. 
-You may lose some or all of your invested capital. Factors contributing to 
+SUBSTANTIAL RISK OF LOSS: Trading cryptocurrencies involves substantial risk.
+You may lose some or all of your invested capital. Factors contributing to
 loss include but are not limited to:
 
 • Market Volatility: Cryptocurrency prices can change rapidly
@@ -252,11 +252,11 @@ loss include but are not limited to:
 • Liquidity Risk: You may not be able to exit positions quickly
 • Regulatory Risk: Laws may change affecting cryptocurrency trading
 
-NO RETURN PROMISES: There are no profit promises. Any hypothetical 
-performance results or backtests do not guarantee future performance. 
+NO RETURN PROMISES: There are no profit promises. Any hypothetical
+performance results or backtests do not guarantee future performance.
 Past performance is not indicative of future results.
 
-INDEPENDENT DECISION: You are solely responsible for deciding whether to use 
+INDEPENDENT DECISION: You are solely responsible for deciding whether to use
 this software and for all trading decisions made by the algorithm on your behalf.
 ```
 
@@ -295,22 +295,22 @@ You should:
 IMPORTANT FOR APP REVIEW:
 
 1. INDEPENDENT TRADING MODEL:
-   This app does NOT copy trades between accounts. Each account trades 
-   independently using shared software logic with independent per-account evaluation and account-specific 
-   state, risk, and execution context. There is no "platform account" or 
+   This app does NOT copy trades between accounts. Each account trades
+   independently using shared software logic with independent per-account evaluation and account-specific
+   state, risk, and execution context. There is no "platform account" or
    signal distribution.
 
 2. USER API CREDENTIALS:
-   The app requires user-provided exchange API credentials. The app does 
-   NOT have access to user funds. Users maintain full control via their 
+   The app requires user-provided exchange API credentials. The app does
+   NOT have access to user funds. Users maintain full control via their
    exchange accounts.
 
 3. FINANCIAL RISK:
-   Clear disclaimers are shown on first launch, strategy activation, and 
+   Clear disclaimers are shown on first launch, strategy activation, and
    throughout the app warning of financial risk and potential loss.
 
 4. AGE GATE:
-   The app requires users to confirm they are 18+ years old (21+ where 
+   The app requires users to confirm they are 18+ years old (21+ where
    required) before proceeding.
 
 5. GEOGRAPHIC COMPLIANCE:
@@ -321,7 +321,7 @@ IMPORTANT FOR APP REVIEW:
 ```
 Appropriate Age Rating: 17+
 
-Reason: Financial risk, potential for significant monetary loss, 
+Reason: Financial risk, potential for significant monetary loss,
 requires mature judgment and understanding of financial markets.
 
 Content Descriptors:
@@ -366,11 +366,11 @@ All marketing materials (website, social media, ads) MUST include:
 
 ```
 ⚠️ TRADING DISCLAIMER
-Cryptocurrency trading involves substantial risk of loss. NIJA is an 
-automated trading algorithm - NOT financial advice. System optimizations are 
-technical in nature and do not imply improved financial outcomes. Each account 
-trades independently using shared software logic with independent per-account evaluation and account-specific 
-state, risk, and execution context. No trade copying occurs. Past performance 
+Cryptocurrency trading involves substantial risk of loss. NIJA is an
+automated trading algorithm - NOT financial advice. System optimizations are
+technical in nature and do not imply improved financial outcomes. Each account
+trades independently using shared software logic with independent per-account evaluation and account-specific
+state, risk, and execution context. No trade copying occurs. Past performance
 does not guarantee future results. You may lose money.
 ```
 
@@ -380,23 +380,23 @@ does not guarantee future results. You may lose money.
 ```
 © 2026 NIJA Trading Systems
 
-RISK DISCLOSURE: Trading cryptocurrencies involves substantial risk of loss 
-and may not be suitable for all investors. This software is provided for 
-informational and automated trading purposes only and should not be considered 
-financial advice. Each account trades independently using the same strategy 
-framework with account-specific state and risk - no trade copying or signal 
-distribution occurs. Past performance is not 
-indicative of future results. Users are solely responsible for their trading 
-decisions and should only invest capital they can afford to lose. Consult with 
+RISK DISCLOSURE: Trading cryptocurrencies involves substantial risk of loss
+and may not be suitable for all investors. This software is provided for
+informational and automated trading purposes only and should not be considered
+financial advice. Each account trades independently using the same strategy
+framework with account-specific state and risk - no trade copying or signal
+distribution occurs. Past performance is not
+indicative of future results. Users are solely responsible for their trading
+decisions and should only invest capital they can afford to lose. Consult with
 a licensed financial advisor before trading.
 
-NOT FINANCIAL ADVICE: NIJA is software, not a financial advisor. We do not 
+NOT FINANCIAL ADVICE: NIJA is software, not a financial advisor. We do not
 provide investment advice, recommendations, or financial planning services.
 
-GEOGRAPHIC RESTRICTIONS: This software may not be available or legal in all 
+GEOGRAPHIC RESTRICTIONS: This software may not be available or legal in all
 jurisdictions. Users must comply with local laws and regulations.
 
-18+ ONLY: You must be 18 years or older (21+ in some jurisdictions) to use 
+18+ ONLY: You must be 18 years or older (21+ in some jurisdictions) to use
 this software.
 ```
 
@@ -427,7 +427,7 @@ Independent trading model - no trade copying occurs.
 - [ ] Terms of Service includes all required disclosures
 
 ### Updates Required:
-If the trading model changes, ALL disclaimers must be updated within 24 hours 
+If the trading model changes, ALL disclaimers must be updated within 24 hours
 and users must re-acknowledge terms.
 
 **Last Updated**: February 1, 2026

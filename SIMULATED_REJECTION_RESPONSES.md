@@ -18,19 +18,19 @@ Subject: App Store Review - NIJA - Rejected
 
 Hello,
 
-We have completed our review of NIJA and are unable to approve 
+We have completed our review of NIJA and are unable to approve
 your app for the App Store at this time.
 
 GUIDELINE 3.1.1 - Business - Payments - In-App Purchase
 
-Your app contains content or services that could be misleading 
+Your app contains content or services that could be misleading
 regarding financial returns:
 
 Issue Details:
-- App description contains "autonomous trading" which implies 
+- App description contains "autonomous trading" which implies
   automatic profit generation
 - User interface displays "AI-powered profit optimization"
-- Marketing materials suggest "promised returns" or 
+- Marketing materials suggest "promised returns" or
   "supplemental income"
 
 Next Steps:
@@ -55,8 +55,8 @@ Subject: Re: App Store Review - NIJA - Response to Rejection
 
 Hello App Review Team,
 
-Thank you for reviewing NIJA and providing specific feedback. 
-We take Apple's guidelines very seriously and have made 
+Thank you for reviewing NIJA and providing specific feedback.
+We take Apple's guidelines very seriously and have made
 comprehensive changes to address all concerns.
 
 CHANGES MADE:
@@ -64,7 +64,7 @@ CHANGES MADE:
 1. REMOVED ALL MISLEADING LANGUAGE
    Before: "autonomous trading" and "AI-powered profit optimization"
    After: "user-directed trading tool" and "technical analysis indicators"
-   
+
    We have removed all instances of:
    - "Return promises"
    - "Supplemental income"
@@ -97,18 +97,18 @@ SUPPORTING DOCUMENTATION:
 - Risk Disclosure: [URL]
 
 UPDATED APP DESCRIPTION:
-"NIJA is a user-directed trading tool for technical analysis 
-and strategy execution. Users configure their own trading rules 
-based on technical indicators like RSI, MACD, and moving averages. 
+"NIJA is a user-directed trading tool for technical analysis
+and strategy execution. Users configure their own trading rules
+based on technical indicators like RSI, MACD, and moving averages.
 
-⚠️ Trading involves substantial risk of loss. Past performance 
-does not guarantee future results. You are solely responsible 
-for all trading decisions, risk management, and compliance with 
+⚠️ Trading involves substantial risk of loss. Past performance
+does not guarantee future results. You are solely responsible
+for all trading decisions, risk management, and compliance with
 applicable regulations.
 
 NIJA does not provide investment advice or promised returns."
 
-We believe these changes fully address the concerns raised and 
+We believe these changes fully address the concerns raised and
 align with Apple's commitment to user safety and transparency.
 
 We respectfully request re-review of NIJA.
@@ -131,13 +131,13 @@ Subject: App Store Review - NIJA - Additional Changes Required
 
 Hello,
 
-We have reviewed your resubmission of NIJA. While we appreciate 
+We have reviewed your resubmission of NIJA. While we appreciate
 the changes made, additional modifications are required:
 
 GUIDELINE 5.1.1 - Legal - Privacy
 
 Issue:
-Your app facilitates financial trading but does not adequately 
+Your app facilitates financial trading but does not adequately
 disclose risks to users before they can execute trades.
 
 Specific Concerns:
@@ -147,7 +147,7 @@ Specific Concerns:
 - Insufficient warning about potential for total capital loss
 
 Required Changes:
-1. Implement a multi-step risk acknowledgment flow before 
+1. Implement a multi-step risk acknowledgment flow before
    enabling live trading
 2. Require explicit checkbox acknowledgment of specific risks
 3. Add clear explanation of user responsibilities
@@ -168,40 +168,40 @@ Subject: Re: App Store Review - NIJA - Enhanced Risk Disclosure
 
 Hello App Review Team,
 
-Thank you for the detailed feedback. We have implemented a 
-comprehensive risk disclosure system that exceeds industry 
+Thank you for the detailed feedback. We have implemented a
+comprehensive risk disclosure system that exceeds industry
 standards for financial applications.
 
 ENHANCEMENTS MADE:
 
 1. MULTI-STEP RISK ACKNOWLEDGMENT FLOW
-   We have implemented a mandatory risk acknowledgment dialog 
+   We have implemented a mandatory risk acknowledgment dialog
    that requires users to:
-   
+
    ✓ Read a detailed risk disclosure
    ✓ Check 6 specific acknowledgment boxes individually
    ✓ Confirm they understand they may lose all capital
    ✓ Acknowledge sole responsibility for trading decisions
    ✓ Agree to Terms of Service and Privacy Policy
-   
+
    See attached screenshot: risk_acknowledgment_flow.png
 
 2. PREVENTED ACCIDENTAL ACTIVATION
    Live trading can only be enabled after:
-   
+
    Step 1: User selects "Independent Trading Mode"
    Step 2: System displays full risk disclosure
    Step 3: User checks all 6 acknowledgment boxes
    Step 4: User clicks "I Acknowledge the Risks and Wish to Proceed"
    Step 5: System enables trading (with persistent warning banner)
-   
+
    Single-toggle activation has been removed entirely.
 
 3. CLEAR TERMINOLOGY DEFINITIONS
    We now provide explicit definitions:
-   
-   "Independent Trading Mode: NIJA will execute trades on your 
-   connected exchange based on YOUR configured strategy parameters. 
+
+   "Independent Trading Mode: NIJA will execute trades on your
+   connected exchange based on YOUR configured strategy parameters.
    YOU are solely responsible for:
    • All trading decisions
    • Risk management
@@ -210,8 +210,8 @@ ENHANCEMENTS MADE:
 
 4. TOTAL CAPITAL LOSS WARNING
    Before enabling live trading, users must acknowledge:
-   
-   "☑ I understand that I may lose all invested capital and 
+
+   "☑ I understand that I may lose all invested capital and
    that past performance does not guarantee future results."
 
 5. RE-ACKNOWLEDGMENT AFTER UPDATES
@@ -232,8 +232,8 @@ DOCUMENTATION:
 - Dedicated Risk Disclosure document
 - Apple UI Wording Guide (internal compliance doc)
 
-We believe NIJA now provides the most comprehensive risk 
-disclosure of any trading app on the App Store while 
+We believe NIJA now provides the most comprehensive risk
+disclosure of any trading app on the App Store while
 maintaining a respectful user experience.
 
 Attached:
@@ -263,8 +263,8 @@ Hello,
 
 GUIDELINE 5.1.1 - Legal - Privacy - Data Collection and Storage
 
-Your app requires users to provide exchange API credentials 
-but does not adequately explain how this sensitive financial 
+Your app requires users to provide exchange API credentials
+but does not adequately explain how this sensitive financial
 data is handled.
 
 Issues:
@@ -295,20 +295,20 @@ Subject: Re: App Store Review - NIJA - Comprehensive Privacy Policy
 
 Hello App Review Team,
 
-We have published a comprehensive Privacy Policy that provides 
-complete transparency about data handling, with special focus 
+We have published a comprehensive Privacy Policy that provides
+complete transparency about data handling, with special focus
 on API credential security.
 
 KEY PRIVACY COMMITMENTS:
 
 1. API CREDENTIALS - LOCAL STORAGE ONLY
    Our Privacy Policy now explicitly states:
-   
-   "Your exchange API credentials are NEVER transmitted to 
-   our servers. Credentials are stored locally on your device 
-   using industry-standard encryption (AES-256) in your 
+
+   "Your exchange API credentials are NEVER transmitted to
+   our servers. Credentials are stored locally on your device
+   using industry-standard encryption (AES-256) in your
    device's secure keychain/keystore."
-   
+
    Technical Details:
    - iOS: Credentials stored in iOS Keychain
    - Android: Credentials stored in Android Keystore
@@ -317,12 +317,12 @@ KEY PRIVACY COMMITMENTS:
 
 2. DATA ARCHITECTURE TRANSPARENCY
    We have added a dedicated section explaining:
-   
+
    "All Exchange API Calls Are Direct:
    NIJA connects directly from your device to your exchange.
    We do not proxy, intercept, or store these communications.
    Your API credentials remain on your device."
-   
+
    This is visually explained in the app as well.
 
 3. ENCRYPTION SPECIFICS
@@ -333,7 +333,7 @@ KEY PRIVACY COMMITMENTS:
    - No plaintext credential storage
 
 4. EXPLICIT "WHAT WE DON'T COLLECT" SECTION
-   We added a comprehensive list of 12 items we explicitly 
+   We added a comprehensive list of 12 items we explicitly
    DO NOT collect, including:
    - Exchange API credentials (to our servers)
    - Trading positions or portfolio value
@@ -343,9 +343,9 @@ KEY PRIVACY COMMITMENTS:
    - Location data
 
 5. THIRD-PARTY DATA SHARING
-   Clear statement: "We DO NOT sell, rent, or share your 
+   Clear statement: "We DO NOT sell, rent, or share your
    personal information with third parties."
-   
+
    Limited exceptions are clearly disclosed:
    - Direct user authorization only
    - Legal requirements (court order)
@@ -371,14 +371,14 @@ PRIVACY POLICY ACCESSIBILITY:
 - Available at https://nija.trading/privacy
 
 APPLE'S PRIVACY NUTRITION LABELS:
-We have completed accurate Privacy Nutrition Labels in 
+We have completed accurate Privacy Nutrition Labels in
 App Store Connect reflecting:
 - Data Used to Track You: None
 - Data Linked to You: Email (optional, for notifications only)
 - Data Not Linked to You: Anonymous analytics (opt-in)
 
-We believe our Privacy Policy now sets the standard for 
-transparency in financial applications while respecting 
+We believe our Privacy Policy now sets the standard for
+transparency in financial applications while respecting
 user privacy and Apple's guidelines.
 
 Documentation:
@@ -386,7 +386,7 @@ Documentation:
 - Privacy Policy Changelog showing updates
 - Screenshot of Privacy Policy access points in app
 
-Thank you for your thorough review process. We're committed 
+Thank you for your thorough review process. We're committed
 to maintaining the highest privacy standards.
 
 Best regards,
@@ -407,12 +407,12 @@ Hello,
 
 GUIDELINE 2.1 - Performance - App Completeness
 
-During our review, we were unable to clearly understand how 
-the app functions and whether it provides value without 
+During our review, we were unable to clearly understand how
+the app functions and whether it provides value without
 external services.
 
 Issues:
-- App shows "Trading is OFF" message but does not explain 
+- App shows "Trading is OFF" message but does not explain
   how to enable trading
 - Unclear what happens when app is in "cold start" mode
 - Reviewer could not successfully test trading functionality
@@ -439,8 +439,8 @@ Subject: Re: App Store Review - NIJA - Enhanced Onboarding & Demo Mode
 
 Hello App Review Team,
 
-We apologize for the confusion and have implemented comprehensive 
-onboarding and demo functionality to ensure reviewers and users 
+We apologize for the confusion and have implemented comprehensive
+onboarding and demo functionality to ensure reviewers and users
 can understand and test NIJA immediately.
 
 ENHANCEMENTS FOR REVIEWERS:
@@ -451,21 +451,21 @@ ENHANCEMENTS FOR REVIEWERS:
    - What NIJA doesn't do (no profit promises)
    - How to get started (step-by-step)
    - Option to use Demo Mode or connect real exchange
-   
+
    See attached: first_launch_v2.png
 
 2. FULLY FUNCTIONAL DEMO MODE
    Reviewers can now test ALL features without any credentials:
-   
+
    ✓ No exchange API required
    ✓ Simulated market data provided
    ✓ All strategy configuration available
    ✓ Simulated trade execution
    ✓ Performance tracking and reporting
-   
+
    Demo Mode Path:
    Launch App → "Try Demo Mode" → Immediately functional
-   
+
    This allows complete app testing in <2 minutes.
 
 3. INTERACTIVE TUTORIAL
@@ -474,21 +474,21 @@ ENHANCEMENTS FOR REVIEWERS:
    - Step 2: Choosing mode (Demo / Simulation / Live)
    - Step 3: Strategy configuration walkthrough
    - Step 4: Executing first simulated trade
-   
+
    Tutorial can be replayed from Settings → Help → Tutorial
 
 4. COLD START CLARITY
    When no credentials are configured, app now displays:
-   
+
    "✅ NIJA has started successfully
-   
+
    Trading Mode: OFF (No API credentials configured)
-   
+
    Options:
    • Try Demo Mode - Test with simulated data
    • Connect Exchange - Use your own exchange API
    • Learn More - Read documentation
-   
+
    NIJA is ready to use. No setup required for demo."
 
 5. IN-APP HELP & DOCUMENTATION
@@ -500,13 +500,13 @@ ENHANCEMENTS FOR REVIEWERS:
 
 6. REVIEWER GUIDE
    We have also created a dedicated document for reviewers:
-   
+
    "REVIEWER_WALKTHROUGH.md" includes:
    - Quick start (demo mode in 60 seconds)
    - How to test each major feature
    - What to expect at each stage
    - Known limitations (no real trading during review)
-   
+
    See attached.
 
 TESTING INSTRUCTIONS FOR REVIEWERS:
@@ -529,7 +529,7 @@ ATTACHED MATERIALS:
 4. REVIEWER_WALKTHROUGH.md
 5. App walkthrough video (2 minutes)
 
-We believe these improvements make NIJA's functionality 
+We believe these improvements make NIJA's functionality
 immediately clear to both reviewers and end users.
 
 Thank you for your patience and detailed feedback.
@@ -550,14 +550,14 @@ Subject: App Store Review - NIJA - Approved for Sale
 
 Hello,
 
-Congratulations! Your app, NIJA, has been approved for sale 
+Congratulations! Your app, NIJA, has been approved for sale
 on the App Store.
 
-Your app will be available for download once your release 
+Your app will be available for download once your release
 date arrives or you manually release it.
 
-Thank you for being an Apple Developer and for your patience 
-during the review process. The improvements you made have 
+Thank you for being an Apple Developer and for your patience
+during the review process. The improvements you made have
 resulted in a much better user experience.
 
 We encourage you to:

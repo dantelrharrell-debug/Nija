@@ -43,8 +43,8 @@ Total Positions: 59
 ```
 NIJA-Managed Positions (32)
 ───────────────────────────────────────────────
-These positions were opened by NIJA based on your 
-configured strategy. NIJA actively manages exits, 
+These positions were opened by NIJA based on your
+configured strategy. NIJA actively manages exits,
 stop-losses, and profit targets.
 
 🟢 BTC-USD    +2.3%    $1,234.56    [NIJA-Managed]
@@ -55,8 +55,8 @@ stop-losses, and profit targets.
 
 Existing Holdings - Not Managed by NIJA (27)
 ───────────────────────────────────────────────
-These positions existed before NIJA started or 
-were manually entered by you. NIJA does NOT 
+These positions existed before NIJA started or
+were manually entered by you. NIJA does NOT
 automatically manage or close these positions.
 
 ⚪ DOGE-USD    -0.5%     $123.45    [Manual]
@@ -70,7 +70,7 @@ automatically manage or close these positions.
 ```
 ℹ️ NIJA-Managed Position
 
-This position was opened by NIJA based on your 
+This position was opened by NIJA based on your
 configured trading strategy. NIJA actively manages:
   • Exit timing based on profit targets
   • Stop-loss protection
@@ -83,13 +83,13 @@ You can manually close this position at any time.
 ```
 ℹ️ Existing Holdings (Not Managed by NIJA)
 
-This position existed in your account before NIJA 
+This position existed in your account before NIJA
 started trading, or was manually entered by you.
 
-NIJA does NOT automatically manage or close this 
+NIJA does NOT automatically manage or close this
 position. You remain in full manual control.
 
-You can optionally enable NIJA management for this 
+You can optionally enable NIJA management for this
 position in settings.
 ```
 
@@ -104,16 +104,16 @@ position in settings.
 We found 27 existing positions in your account.
 
 ⚠️  IMPORTANT:
-NIJA will NOT automatically manage these existing 
+NIJA will NOT automatically manage these existing
 positions. They will remain under your manual control.
 
-NIJA will only manage NEW positions that it opens 
+NIJA will only manage NEW positions that it opens
 based on your configured trading strategy.
 
 What would you like to do?
 
 ○ Display only (recommended)
-  Show existing positions for information but do 
+  Show existing positions for information but do
   not manage them
 
 ○ Allow NIJA to adopt and manage
@@ -139,8 +139,8 @@ What would you like to do?
 ```
 Enable User-Directed Trading
 
-When enabled, NIJA will execute trades based on your 
-configured strategy parameters. You maintain full control 
+When enabled, NIJA will execute trades based on your
+configured strategy parameters. You maintain full control
 and can modify or disable at any time.
 
 ⚠️ Trading involves risk of loss.
@@ -161,11 +161,11 @@ Trading Mode Selection
 
 ○ Simulation Mode
   Practice with simulated trades. No real capital at risk.
-  
+
 ○ Independent Trading Mode
-  Execute trades on your connected exchange using your 
+  Execute trades on your connected exchange using your
   own capital and API credentials.
-  
+
   ⚠️ You are solely responsible for all trading activity.
   ⚠️ Past performance does not guarantee future results.
 ```
@@ -180,20 +180,20 @@ Trading Mode Selection
 ║              ⚠️  RISK ACKNOWLEDGMENT REQUIRED              ║
 ╚═══════════════════════════════════════════════════════════╝
 
-Before enabling Independent Trading Mode, you must 
+Before enabling Independent Trading Mode, you must
 acknowledge and accept the following:
 
-□ I understand that trading cryptocurrencies and other 
+□ I understand that trading cryptocurrencies and other
   financial instruments involves substantial risk of loss.
 
-□ I understand that NIJA is a tool for executing MY OWN 
-  trading strategy, and I am solely responsible for all 
+□ I understand that NIJA is a tool for executing MY OWN
+  trading strategy, and I am solely responsible for all
   trading decisions.
 
-□ I understand that past performance does not guarantee 
+□ I understand that past performance does not guarantee
   future results and that I may lose all invested capital.
 
-□ I understand that NIJA does not provide financial advice, 
+□ I understand that NIJA does not provide financial advice,
   investment recommendations, or promised returns.
 
 □ I understand that I am responsible for:
@@ -202,7 +202,7 @@ acknowledge and accept the following:
   • Understanding exchange fees and costs
   • Compliance with applicable laws and regulations
 
-□ I have read and agree to the Terms of Service and 
+□ I have read and agree to the Terms of Service and
   Privacy Policy.
 
 [Cancel]  [I Acknowledge the Risks and Wish to Proceed]
@@ -218,7 +218,7 @@ acknowledge and accept the following:
 ║                   Welcome to NIJA                         ║
 ╚═══════════════════════════════════════════════════════════╝
 
-NIJA is a user-directed trading tool that executes trades 
+NIJA is a user-directed trading tool that executes trades
 based on YOUR strategy and YOUR decisions.
 
 🔐 Your API credentials stay on your device
@@ -278,19 +278,19 @@ When LIVE:
 ```
 Strategy Configuration
 
-Configure the technical indicators and rules that will 
-trigger trade signals. You are responsible for backtesting 
+Configure the technical indicators and rules that will
+trigger trade signals. You are responsible for backtesting
 and validating your strategy before live use.
 
 Entry Rules:
   • RSI(9) < 30 AND RSI(14) < 35
   • Configurable thresholds
-  
+
 Exit Rules:
   • Take profit at +2% (configurable)
   • Stop loss at -1% (configurable)
-  
-⚠️ These are YOUR rules. NIJA executes based on your 
+
+⚠️ These are YOUR rules. NIJA executes based on your
    configuration. No strategy is guaranteed to be profitable.
 
 [Test in Simulation]  [Save Configuration]
@@ -309,7 +309,7 @@ Exit Rules:
 ```
 Historical Performance (Simulation)
 
-This data reflects simulated or past performance of your 
+This data reflects simulated or past performance of your
 configured strategy and does not guarantee future results.
 
 Period: Last 30 Days (Simulation)
@@ -370,8 +370,8 @@ Current Status:
   • No new trades will be executed
   • Existing positions remain open (not automatically closed)
   • All background processing stopped
-  
-⚠️ You are responsible for managing any open positions 
+
+⚠️ You are responsible for managing any open positions
    through your exchange.
 
 Next Steps:
@@ -394,29 +394,29 @@ Settings
 TRADING CONTROL
   ○ Trading Mode: [OFF / Simulation / Independent Trading]
   ○ Emergency Stop: [Activate]
-  
+
 RISK MANAGEMENT (Your Responsibility)
   ○ Position Size Limit: [Configure]
   ○ Daily Loss Limit: [Configure]
   ○ Maximum Open Positions: [Configure]
-  
+
 EXCHANGE CONNECTION
   ○ Coinbase API: [Connected / Not Connected]
   ○ Kraken API: [Connected / Not Connected]
-  
+
 PRIVACY & DATA
   ○ Anonymous Usage Stats: [On / Off]
   ○ Crash Reports: [On / Off]
   ○ Cloud Backup: [On / Off]
   ○ Export Data: [Export]
   ○ Delete All Local Data: [Delete]
-  
+
 LEGAL & SUPPORT
   ○ Terms of Service: [View]
   ○ Privacy Policy: [View]
   ○ Risk Disclosure: [View]
   ○ Support & Documentation: [Open]
-  
+
 App Version: 1.0.0
 ```
 
@@ -437,7 +437,7 @@ Your configured strategy has generated a signal:
   • Pair: BTC-USD
   • Signal: Entry (Long)
   • Confidence: Based on your RSI parameters
-  
+
 Action: [Depends on your settings]
   • If Independent Trading is enabled: Trade will execute
   • If Simulation Mode: Simulated trade recorded
@@ -477,17 +477,17 @@ These will cause **INSTANT REJECTION**:
 **On EVERY screen that shows trading or performance:**
 
 ```
-⚠️ Trading involves risk of loss. Past performance does 
-   not guarantee future results. You are solely responsible 
+⚠️ Trading involves risk of loss. Past performance does
+   not guarantee future results. You are solely responsible
    for your trading decisions.
 ```
 
 **On app description/marketing:**
 
 ```
-NIJA is a user-directed trading tool. You maintain full 
-control over trading decisions, strategy configuration, 
-and risk management. NIJA does not provide investment 
+NIJA is a user-directed trading tool. You maintain full
+control over trading decisions, strategy configuration,
+and risk management. NIJA does not provide investment
 advice or promised returns.
 ```
 

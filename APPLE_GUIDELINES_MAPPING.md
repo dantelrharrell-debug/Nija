@@ -65,7 +65,7 @@ This document provides explicit mappings between NIJA's onboarding flow, UI comp
 | ❌ "AI trades for you" | ✅ "You configure your own trading rules" | Strategy configuration |
 | ❌ "Consistent returns" | ✅ "Past performance does not guarantee future results" | Performance display |
 
-**Forbidden Phrases List**: 
+**Forbidden Phrases List**:
 - See `APPLE_UI_WORDING_GUIDE.md` lines 346-365 (complete list of 15 prohibited phrases)
 
 **File References**:
@@ -132,7 +132,7 @@ This document provides explicit mappings between NIJA's onboarding flow, UI comp
 
 **App Store Description Template**:
 ```
-NIJA is a user-directed trading tool that executes trades based on 
+NIJA is a user-directed trading tool that executes trades based on
 YOUR strategy and YOUR decisions.
 
 ✅ You configure your own trading rules
@@ -146,7 +146,7 @@ NIJA does not:
 ❌ Trade automatically without your configuration
 ❌ Access your credentials without permission
 
-⚠️ Trading involves risk of loss. Past performance does not 
+⚠️ Trading involves risk of loss. Past performance does not
    guarantee future results.
 ```
 
@@ -230,7 +230,7 @@ Pro ($X/month):
   • Priority support
 
 ⚠️ Auto-renews monthly. Cancel anytime.
-⚠️ Trading involves risk. Subscription fee is separate from 
+⚠️ Trading involves risk. Subscription fee is separate from
    trading capital and exchange fees.
 ```
 

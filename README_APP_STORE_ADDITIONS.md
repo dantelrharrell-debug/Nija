@@ -196,7 +196,7 @@ def place_order(symbol, side, quantity):
             side=side,
             size=quantity
         )
-    
+
     # Normal execution (only reached if mode disabled)
     return broker.place_order(symbol, side, quantity)
 ```
