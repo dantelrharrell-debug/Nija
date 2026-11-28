@@ -103,6 +103,62 @@ def formatting_paths() -> list[str]:
     })[:250]
 
 
+# Only documented path labels inside a known failed hook are recognized.
+# Never retain an entire finding, secret, source line or arbitrary hook text.
+PATH_LABELS = {
+    "bandit": re.compile(r"^\s*Location:\s*(.+?):[0-9]+(?::[0-9]+)?\s*$"),
+    "detect-secrets": re.compile(r"^\s*Location:\s*(.+?):[0-9]+\s*$"),  # pragma: allowlist secret - fixed public hook identifier
+    "detect-private-key": re.compile(r"^\s*Private key found:\s*(.+?)\s*$"),
+    "gitleaks": re.compile(r"^\s*File:\s*(.+?)\s*$"),
+}
+
+
+def tracked_finding_candidates() -> set[str]:
+    """Get tracked ordinary source paths, without reading their contents."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--"], capture_output=True, timeout=15,
+            check=False, shell=False, stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if result.returncode:
+        return set()
+    return {
+        path for path in result.stdout.decode("utf-8", errors="replace").split("\0")
+        if re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.(?:py|sh|yml|yaml|md|mjs|js|ts|tsx|json|toml|txt|html|css)", path)
+        and not any(part.startswith(".") for part in path.split("/"))
+    }
+
+
+def finding_paths(output: str, error_output: str, tracked: set[str]) -> dict:
+    """Return bounded tracked paths only; absence of attribution is not a pass."""
+    found: dict[str, set[str]] = {}
+    for stream in (output, error_output):
+        current = None
+        for line in re.sub(r"\x1b\[[0-9;]*m", "", stream).splitlines():
+            if line.strip() == "All changes made by hooks:":
+                break
+            # End attribution at any hook result, including unknown hooks.
+            if re.fullmatch(r".+\.{2,}(?:Passed|Failed|Skipped)\s*", line):
+                current = next((
+                    identifier for title, identifier in HOOKS.items()
+                    if identifier in PATH_LABELS
+                    and re.fullmatch(re.escape(title) + r"\.+Failed\s*", line)
+                ), None)
+                continue
+            if current is None:
+                continue
+            match = PATH_LABELS[current].fullmatch(line)
+            if match:
+                path = match.group(1)
+                if path.startswith("./"):
+                    path = path[2:]
+                if path in tracked:
+                    found.setdefault(current, set()).add(path)
+    return {hook: sorted(paths)[:100] for hook, paths in sorted(found.items())}
+
+
 def run(report_path: Path) -> int:
     """Run the unchanged all-file command; findings and runner errors fail closed."""
     report = {"schema_version": 1, "failed_hooks": [], "categories": []}
@@ -117,6 +173,10 @@ def run(report_path: Path) -> int:
         if {"trailing-whitespace", "end-of-file-fixer"} & set(report["failed_hooks"]) \
                 and "hook_modified_files" in report["categories"]:
             report["tracked_hook_edits"] = formatting_paths()
+        if set(report["failed_hooks"]) & set(PATH_LABELS):
+            report["tracked_finding_paths"] = finding_paths(
+                result.stdout, result.stderr, tracked_finding_candidates(),
+            )
     except subprocess.TimeoutExpired:
         status = 124
         report.update(outcome="runner_error", categories=["timeout"])
@@ -125,7 +185,7 @@ def run(report_path: Path) -> int:
         report.update(outcome="runner_error", categories=["runner_unavailable"])
     report["exit_code"] = status
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    console_report = {key: value for key, value in report.items() if key != "tracked_hook_edits"}
+    console_report = {key: value for key, value in report.items() if key not in {"tracked_hook_edits", "tracked_finding_paths"}}
     print(json.dumps(console_report, sort_keys=True))
     return status
 
