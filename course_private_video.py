@@ -57,22 +57,31 @@ def configured_catalog():
     """Return a safe empty catalog unless an operator pins a valid manifest."""
     root = Path(os.getenv("NIJA_COURSE_VIDEO_ROOT", ""))
     digest = os.getenv("NIJA_COURSE_VIDEO_MANIFEST_SHA256", "")
-    if not root.is_absolute() or not _SHA.fullmatch(digest):
+    from course_video_object import object_catalog_source
+
+    source = object_catalog_source()
+    if not _SHA.fullmatch(digest) or (source is None and not root.is_absolute()):
         return None, {}
     try:
         # Keep real media off the application tree, public static paths and tmp.
-        if not _allowed_root(root):
-            return None, {}
-        with _open_regular(root, "manifest.json") as file:
-            raw = file.read(_MANIFEST_LIMIT + 1)
+        if source is None:
+            if not _allowed_root(root):
+                return None, {}
+            with _open_regular(root, "manifest.json") as file:
+                raw = file.read(_MANIFEST_LIMIT + 1)
+        else:
+            raw = os.getenv("NIJA_COURSE_OBJECT_MANIFEST", "").encode()
         if len(raw) > _MANIFEST_LIMIT or not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), digest):
             return None, {}
         entries = json.loads(raw)
         if not isinstance(entries, list) or not 1 <= len(entries) <= 20:
             return None, {}
         catalog = {}
+        fields = {"id", "title", "sha256", "size_bytes"}
+        if source is not None:
+            fields.add("version")
         for entry in entries:
-            if not isinstance(entry, dict) or set(entry) != {"id", "title", "sha256", "size_bytes"}:
+            if not isinstance(entry, dict) or set(entry) != fields:
                 return None, {}
             key, title, sha, size = (entry[n] for n in ("id", "title", "sha256", "size_bytes"))
             if (not isinstance(key, str) or not _ID.fullmatch(key) or key in catalog
@@ -80,8 +89,10 @@ def configured_catalog():
                     or not isinstance(sha, str) or not _SHA.fullmatch(sha)
                     or type(size) is not int or not 1 <= size <= 2 * 1024**3):
                 return None, {}
+            if source is not None and not source.valid_version(entry["version"]):
+                return None, {}
             catalog[key] = entry
-        return root, catalog
+        return source if source is not None else root, catalog
     except (OSError, ValueError, RuntimeError):
         return None, {}
 
@@ -98,6 +109,12 @@ def verify_video_inventory(root, catalog):
     """Offline operator check; do not rehash multi-GB media on every seek."""
     if not catalog or root is None:
         raise ValueError("video_catalog_unavailable")
+    from course_video_object import ObjectSource
+
+    if isinstance(root, ObjectSource):
+        for entry in catalog.values():
+            root.verify(entry)
+        return len(catalog)
     for entry in catalog.values():
         with open_media(root, entry) as media:
             actual = hashlib.file_digest(media, "sha256").hexdigest()
@@ -107,6 +124,10 @@ def verify_video_inventory(root, catalog):
 
 
 def video_response(root, entry):
+    from course_video_object import ObjectSource
+
+    if isinstance(root, ObjectSource):
+        return root.response(entry)
     media = open_media(root, entry)
     response = Response(wrap_file(request.environ, media), mimetype="video/mp4", direct_passthrough=True)
     response.content_length = entry["size_bytes"]

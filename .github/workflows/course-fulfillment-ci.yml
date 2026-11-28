@@ -8,6 +8,8 @@ on:
       - 'course_fulfillment.py'
       - 'course_portal.py'
       - 'course_private_video.py'
+      - 'course_video_object.py'
+      - 'requirements-billing.txt'
       - 'tests/test_course_fulfillment.py'
       - 'tests/test_course_portal.py'
       - 'tests/test_course_private_video.py'
@@ -16,14 +18,17 @@ on:
       - 'tests/test_billing_service_contract.py'
       - 'tests/test_billing_checkout_store_regression.py'
       - '.github/workflows/course-fulfillment-ci.yml'
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, sandbox/foundations-video-storage-a28c00d]
     paths:
       - 'billing_service.py'
       - 'billing_service_store.py'
       - 'course_fulfillment.py'
       - 'course_portal.py'
       - 'course_private_video.py'
+      - 'course_video_object.py'
+      - 'requirements-billing.txt'
       - 'tests/test_course_fulfillment.py'
       - 'tests/test_course_portal.py'
       - 'tests/test_course_private_video.py'

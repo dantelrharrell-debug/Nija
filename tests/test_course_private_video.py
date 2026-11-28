@@ -285,3 +285,60 @@ def test_object_rehearsal_keeps_a_worker_slot_for_health_and_checkout(fake_objec
             release.set()
         result = first.result(timeout=2)
         assert result.status_code == 206 and result.data == payload[:32]
+
+
+def test_pinned_s3_versions_through_buyer_route(context, monkeypatch):
+    from base64 import b64encode
+    from contextlib import nullcontext
+    from io import BytesIO
+    from botocore.response import StreamingBody
+    from course_private_video import configured_catalog, verify_video_inventory
+    from course_video_object import ObjectSource
+
+    client, sign, paid, _, item, _, payload = context
+    item["version"] = "immutable-fixture-v1"
+    manifest = json.dumps([item])
+    monkeypatch.setenv("NIJA_COURSE_S3_BUCKET", "course-fixture")
+    monkeypatch.setenv("NIJA_COURSE_OBJECT_MANIFEST", manifest)
+    monkeypatch.setenv("NIJA_COURSE_VIDEO_MANIFEST_SHA256", hashlib.sha256(manifest.encode()).hexdigest())
+    expected = dict(Bucket="course-fixture", VersionId=item["version"], Key=f"foundations/{item['sha256']}.mp4")
+    calls = []
+    checksum = b64encode(hashlib.sha256(payload).digest()).decode()
+
+    class Origin:
+        def head_object(self, **params):
+            assert params == {**expected, "ChecksumMode": "ENABLED"}
+            calls.append("head")
+            return dict(VersionId=item["version"], ContentLength=len(payload), ChecksumSHA256=checksum)
+
+        def get_object(self, **params):
+            interval = params.pop("Range", None)
+            assert params == expected
+            calls.append("get")
+            data = payload
+            reply = {}
+            if interval:
+                assert interval == "bytes=2-6"
+                data = payload[2:7]
+                reply["ContentRange"] = f"bytes 2-6/{len(payload)}"
+            return dict(reply, VersionId=item["version"], ContentLength=len(data),
+                        Body=StreamingBody(BytesIO(data), len(data)))
+
+    monkeypatch.setattr(ObjectSource, "_client", lambda self: nullcontext(Origin()))
+    assert client.head(LESSON, base_url=BASE).status_code == 403
+    assert not calls
+    assert verify_video_inventory(*configured_catalog()) == 1
+    sign()
+    with client.head(LESSON, base_url=BASE) as head:
+        assert head.status_code == 200 and head.content_length == len(payload) and not head.data
+    with client.get(LESSON, base_url=BASE, headers={"Range": "bytes=2-6"}) as partial:
+        assert partial.status_code == 206 and partial.data == payload[2:7]
+        assert partial.headers["Content-Range"] == f"bytes 2-6/{len(payload)}"
+        assert client.head(LESSON, base_url=BASE).status_code == 503
+    with client.get(LESSON, base_url=BASE) as whole:
+        assert whole.status_code == 200 and whole.data == payload
+    checksum = "mismatched"
+    assert client.get(LESSON, base_url=BASE).status_code == 404
+    paid.clear()
+    n = len(calls)
+    assert client.head(LESSON, base_url=BASE).status_code == 403 and len(calls) == n

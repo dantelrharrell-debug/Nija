@@ -9,9 +9,7 @@ for paid masters. Do not upload to billing Postgres as a substitute for streamin
 
 Select an approved durable store with a private, read-only runtime mount. The portal
 service and content must be separately deployable and the portal process must not be
-able to modify the mount. Never operate the origin as a public file server. If the
-selected durable store is object storage without a supported private mount, implement
-and test its authenticated range adapter separately; this change does not connect it.
+able to modify the mount. Never operate the origin as a public file server. For versioned S3, use the optional object adapter below.
 
 On a trusted staging device, match the exact owner-approved lesson inventory and record
 bytes and SHA-256 for each original. Use H.264/AAC seeking-compatible MP4 as needed,
@@ -50,3 +48,28 @@ payments, earlier entitlements and the existing recovery path. Rollback disables
 optional catalog by removing its two settings; do not re-expose retired media or restore
 the retired ClickBank browser grant. No new live settings, billing or IONOS publish is
 included in this change.
+
+### Optional versioned S3 storage
+
+Use an existing authorized private, versioned Amazon S3 bucket with public access
+blocked. Preserve the pinned versions against deletion using Object Lock and a
+separate provisioning identity. The portal needs only GetObjectVersion on the
+course prefix. Upload each verified original as a single-part object with an
+S3 SHA-256 checksum at `foundations/<sha256>.mp4`. A missing or composite
+checksum fails verification. Use the regional S3 endpoint in the commercial
+AWS partition. Keep credentials in the service secret settings.
+
+Set NIJA_COURSE_S3_BUCKET, NIJA_COURSE_S3_REGION, NIJA_COURSE_S3_ACCESS_KEY_ID,
+NIJA_COURSE_S3_SECRET_ACCESS_KEY and, for temporary credentials,
+NIJA_COURSE_S3_SESSION_TOKEN. Rotate temporary credentials before expiry.
+Put the existing manifest JSON with a non-null S3 version string in each
+entry's additional `version` field in NIJA_COURSE_OBJECT_MANIFEST. Pin the
+SHA-256 of its exact UTF-8 bytes in NIJA_COURSE_VIDEO_MANIFEST_SHA256.
+Run the inventory command above from the candidate, repeat after restart, and
+compare the count and ordered lesson mappings to the independent source ledger.
+The adapter reads each version in full for inventory verification. Buyer
+requests recheck entitlement and the stored version's full SHA-256 and size
+before serving bytes. A busy video stream returns 503 with Retry-After for
+another stream in the same worker. The portal never redirects buyers to S3.
+
+To roll back, restore the prior verified deployment and media settings together.

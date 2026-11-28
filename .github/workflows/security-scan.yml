@@ -2,9 +2,9 @@ name: Security Scanning
 
 on:
   push:
-    branches: [ main, develop, release/justcall-handoff-only-20261017 ]
+    branches: [ main, develop, release/justcall-handoff-only-20261017, sandbox/foundations-video-storage-a28c00d ]
   pull_request:
-    branches: [ main, release/justcall-handoff-only-20261017 ]
+    branches: [ main, release/justcall-handoff-only-20261017, sandbox/foundations-video-storage-a28c00d ]
   schedule:
     # Run security scan weekly on Sundays at 2am UTC
     - cron: '0 2 * * 0'
