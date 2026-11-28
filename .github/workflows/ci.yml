@@ -49,7 +49,7 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt pytest==9.0.3
 
       - name: Remove SSH agent identities before tests
         if: ${{ env.SSH_PRIVATE_KEY != '' }}
