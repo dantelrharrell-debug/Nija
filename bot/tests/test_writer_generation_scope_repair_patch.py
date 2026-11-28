@@ -6,6 +6,9 @@ import os
 import sys
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import Mock
+
+from bot import writer_generation_tracker
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +35,7 @@ def test_user_nonce_lease_does_not_overwrite_platform_generation(monkeypatch):
     monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "platform-secret")
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "101")
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION_LAST", "101")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "fixture-fence")
 
     module = ModuleType("fake_nonce")
 
@@ -52,6 +56,9 @@ def test_user_nonce_lease_does_not_overwrite_platform_generation(monkeypatch):
 def test_platform_nonce_lease_publishes_platform_generation(monkeypatch):
     patch = _load_patch()
     monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "platform-secret")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "101")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION_LAST", "101")
+    monkeypatch.delenv("NIJA_PLATFORM_NONCE_LEASE_GENERATION", raising=False)
     platform_id = hashlib.sha256(b"platform-secret").hexdigest()[:16]
 
     module = ModuleType("fake_nonce")
@@ -63,8 +70,9 @@ def test_platform_nonce_lease_publishes_platform_generation(monkeypatch):
     module._PerKeyRedisBackend = Backend
     assert patch._patch_nonce_backend(module)
     assert Backend()._ensure_writer_lease(platform_id) == 303
-    assert os.environ["NIJA_WRITER_LEASE_GENERATION"] == "303"
-    assert os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] == "303"
+    assert os.environ["NIJA_PLATFORM_NONCE_LEASE_GENERATION"] == "303"
+    assert os.environ["NIJA_WRITER_LEASE_GENERATION"] == "101"
+    assert os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] == "101"
 
 
 def test_user_nonce_publisher_never_exposes_user_generation(monkeypatch):
@@ -93,59 +101,27 @@ def test_user_nonce_publisher_never_exposes_user_generation(monkeypatch):
 
 
 def test_tracker_reads_canonical_generation_key(monkeypatch):
-    """Patched get_redis_generation must read from NIJA_LEASE_GENERATION_KEY.
-
-    The previous implementation read from the per-key nonce lease version
-    ("nija:kraken:writer:lease_version:{key_id}"), which caused
-    ``platform_lease_version_missing`` even when the canonical generation
-    counter ("nija:lease:generation") was healthy.  The patch now reads from
-    the same key that entrypoint_writer_authority increments atomically.
-    """
+    """The compatibility shim leaves the real process generation reader in place."""
     patch = _load_patch()
-    monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "platform-secret")
-    # Use the default key (no NIJA_LEASE_GENERATION_KEY override).
     monkeypatch.delenv("NIJA_LEASE_GENERATION_KEY", raising=False)
-    requested = []
+    client = Mock()
+    client.get.return_value = "404"
+    monkeypatch.setattr(writer_generation_tracker, "_connect_redis", Mock(return_value=(client, "")))
+    original = writer_generation_tracker.get_redis_generation
 
-    class Client:
-        def get(self, key):
-            requested.append(key)
-            return "404"
-
-    tracker = ModuleType("fake_tracker")
-    tracker.get_redis_generation = lambda: (999, "")
-    tracker._connect_redis = lambda timeout_s=2: (Client(), "")
-
-    assert patch._patch_generation_tracker(tracker)
-    assert tracker.get_redis_generation() == (404, "")
-    # Must use the canonical lease generation key, NOT the per-key nonce key.
-    assert requested == ["nija:lease:generation"], (
-        f"Expected ['nija:lease:generation'] but got {requested!r}. "
-        "The patched get_redis_generation must read from NIJA_LEASE_GENERATION_KEY "
-        "(default nija:lease:generation), not nija:kraken:writer:lease_version:..."
-    )
+    assert patch._patch_generation_tracker(writer_generation_tracker)
+    assert writer_generation_tracker.get_redis_generation is original
+    assert writer_generation_tracker.get_redis_generation() == (404, "")
+    client.get.assert_called_once_with("nija:lease:generation")
 
 
 def test_tracker_respects_nija_lease_generation_key_override(monkeypatch):
-    """NIJA_LEASE_GENERATION_KEY override must be honoured."""
     patch = _load_patch()
     monkeypatch.setenv("NIJA_LEASE_GENERATION_KEY", "nija:custom:gen")
-    requested = []
+    client = Mock()
+    client.get.return_value = "7"
+    monkeypatch.setattr(writer_generation_tracker, "_connect_redis", Mock(return_value=(client, "")))
 
-    class Client:
-        def get(self, key):
-            requested.append(key)
-            return "7"
-
-    tracker = ModuleType("fake_tracker")
-    tracker.get_redis_generation = lambda: (999, "")
-    tracker._connect_redis = lambda timeout_s=2: (Client(), "")
-
-    assert patch._patch_generation_tracker(tracker)
-    gen, err = tracker.get_redis_generation()
-    assert err == "", f"Unexpected error: {err}"
-    assert gen == 7
-    assert requested == ["nija:custom:gen"], (
-        f"Expected ['nija:custom:gen'] but got {requested!r}"
-    )
-
+    assert patch._patch_generation_tracker(writer_generation_tracker)
+    assert writer_generation_tracker.get_redis_generation() == (7, "")
+    client.get.assert_called_once_with("nija:custom:gen")

@@ -145,4 +145,3 @@ def test_system_readiness_proof_threads_gate_passes_with_full_state():
     assert "threads.running" not in proof.failed_gates, (
         f"threads.running must not be in failed_gates; failed={proof.failed_gates}"
     )
-

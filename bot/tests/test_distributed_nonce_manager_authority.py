@@ -17,6 +17,7 @@ from bot.distributed_nonce_manager import (
     _emit_nonce_debug_hook,
 )
 from bot import global_kraken_nonce as gkn
+from writer_generation_scope_repair_patch import _nonce_generation_key
 
 
 class _FakeRedisBackend:
@@ -177,6 +178,27 @@ class TestCanonicalWriterNonceLeaseHandoff(unittest.TestCase):
             _PerKeyRedisBackend._LEASE_GENERATION_KEY,
             "nija:kraken:writer:generation",
         )
+
+    def test_collision_blocks_native_nonce_lease_before_redis_mutation(self) -> None:
+        backend = self._make_backend()
+        backend._lease_script = Mock()
+        backend._lease_force_script = Mock()
+        with patch.dict(os.environ, {"NIJA_LEASE_GENERATION_KEY": backend._LEASE_GENERATION_KEY}):
+            with patch("bot.distributed_nonce_manager._assert_canonical_writer_for_nonce_lease"):
+                with self.assertRaisesRegex(RuntimeError, "generation keys collide"):
+                    backend._ensure_writer_lease("kid")
+
+        backend._lease_script.assert_not_called()
+        backend._lease_force_script.assert_not_called()
+
+    def test_collision_with_nonce_default_has_no_safe_fallback_key(self) -> None:
+        shared_key = "nija:kraken:writer:generation"
+        with patch.dict(os.environ, {
+            "NIJA_LEASE_GENERATION_KEY": shared_key,
+            "NIJA_KRAKEN_NONCE_LEASE_GENERATION_KEY": shared_key,
+        }):
+            with self.assertRaisesRegex(RuntimeError, "generation keys collide"):
+                _nonce_generation_key()
 
     def test_canonical_writer_fences_superseded_nonce_holder(self) -> None:
         backend = self._make_backend()

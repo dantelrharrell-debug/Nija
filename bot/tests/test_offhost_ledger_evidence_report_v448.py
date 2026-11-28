@@ -158,4 +158,3 @@ class OffhostRestoreDeploymentPinTests(unittest.TestCase):
         result = self.run_verifier("NOT_A_SHA")
         self.assertEqual(result.returncode, 2)
         self.assertIn("INDEPENDENTLY_CONFIRMED_DEPLOY_SHA", result.stderr)
-
