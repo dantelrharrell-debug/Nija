@@ -1,6 +1,6 @@
 # NIJA Account Deletion
 
-**Status date:** 2026-11-26
+**Status date:** 2026-11-27
 
 **Status:** Source-level scope clarification. Production deployment, published
 instructions and cross-system deletion remain unverified.
@@ -15,7 +15,7 @@ with existing clients.
 
 | Covered by the current handler | Outside this handler's coverage |
 |---|---|
-| `users`, `sessions`, and `login_history` in the current authentication database | Other auth state, including `email_verification_tokens`, `two_factor_auth` and `two_factor_backup_codes` |
+| `users`, `sessions`, `login_history` and local verification, reset and two-factor records in the current authentication database | Authentication and two-factor stores outside the configured account database |
 | `credentials` and user-linked `audit_log` rows in `vault/__init__.py`, plus the legacy in-memory credential cache | The separate PocketBase member broker vault (`nija_broker_vault`) and credentials held in other stores or runtime copies |
 | Mobile device/push registrations in `mobile_device_store.py` | Other provider identities, device records and copies not managed by that store |
 | Current user/permission caches and the per-user trading-rule file/cache | Trading history, ledgers, recovery journals and other trading state |
@@ -29,15 +29,21 @@ review is not automatically submitted by this endpoint.
 
 There is no single transaction across all covered stores. A failed step returns
 HTTP 500 without a success claim; earlier cleanup may already have completed.
-The existing HTTP 400 confirmation failure and HTTP 404 missing-account response
-are unchanged. A repeated request must not delete another account, but a repeated
-successful deletion is not promised to return HTTP 200.
+The HTTP 400 confirmation failure remains unchanged. When a validly signed
+JWT belongs to an account already removed, the shared auth decorator now
+rejects it with HTTP 401 before the handler runs. The handler's HTTP 404
+missing-account response can still occur if the account disappears between
+its authentication check and its lookup. Repeated requests must not delete
+another account or claim success.
 
-The canonical `require_auth` decorator verifies JWT signature and expiry; it does
-not check whether the account still exists. The mobile gateway adds an account
-existence check, but revocation and re-registration behaviour remain unverified
-for the exact deployed entrypoint. A failed cleanup response does not establish
-that account access is blocked, or that earlier cleanup was rolled back.
+The shared `require_auth` decorator now checks that the JWT subject still
+exists and is enabled in the authoritative authentication database, in
+addition to verifying signature and expiry. The mobile gateway still performs
+its separate check. The exact deployed entrypoints, already-issued token
+rejection and cross-gateway re-registration behaviour remain **unverified**
+until an approved release and synthetic runtime acceptance tests. A failed
+cleanup response does not establish that account access is blocked or that
+earlier cleanup was rolled back.
 
 This handler's completion log contains scope and counts instead of the user ID.
 Its failure log contains the cleanup stage and exception class, without raw
@@ -85,8 +91,8 @@ NIJA users can request deletion from inside the NIJA app:
 4. Select **Delete Account**.
 5. Review the deletion notice and confirm the request.
 
-When cleanup succeeds, the service removes your account records, sessions, broker
-credentials, mobile push registrations and trading-rule state from its covered
+When cleanup succeeds, the service removes your account records, sessions, local verification, reset and two-factor
+records, broker credentials, mobile push registrations and trading-rule state from its covered
 active stores. The confirmation lists the scope. This request does not cover
 all NIJA-related records.
 

@@ -209,6 +209,27 @@ When opening a PR, follow `.github/pull_request_template.md`. Minimally verify:
 
 ---
 
+## NIJA owner authorization
+
+Dante Harrell (`@dantelrharrell-debug`) is the sole human decision-maker for
+NIJA-controlled changes. For protected merges, production deployment or
+configuration changes, production data migrations, and live-order activation,
+record his explicit approval for the specific action and target. Bind approval
+to the exact commit, image, account, or configuration where applicable. An
+approval for one action does not authorize another.
+
+Reviewers can document findings and attest to evidence they verified. Their
+attestations establish what was checked. Dante makes the release or activation
+decision. For Kraken recovery, an independent reviewer may examine a complete,
+verifiable capture after collection. The startup receipt contract does not
+require a particular reviewer or a live witness meeting.
+
+Keep technical eligibility checks enforceable independently of human approval.
+Use the protected merge and production workflows to enforce exact-candidate
+checks, signed evidence, account binding, order safeguards, and rollback
+readiness. GitHub review settings, service privileges, and vendor authorization
+are managed in their respective platforms and must be verified there.
+
 ## Deployment
 
 - Platform: **Render**. Railway configuration is historical; do not reconnect it or create a second deployment authority.
@@ -225,8 +246,8 @@ changed. Do not sync the complete Blueprint merely to change this setting:
 other fields can differ from the approved runtime configuration.
 
 Before deployment, require successful mandatory checks on the exact release
-commit and image digest, required independent review, verified backup/restore
-evidence, and separate owner approval for the exact release and any migration.
+commit and image digest, required signed startup evidence, verified
+backup/restore evidence, and separate owner approval for the exact release and any migration.
 Live orders additionally require the separate authenticated exact-order approval
 and the canonical commissioning controls. Never infer either approval from a
 merge, passing CI, this file, or a request to repair the system.

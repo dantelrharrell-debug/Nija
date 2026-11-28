@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 USER_A = "synthetic-account-a"
 USER_B = "synthetic-account-b"
 AUTH_TABLES = ("users", "sessions", "login_history")
-UNSUPPORTED_AUTH = ("email_verification_tokens", "two_factor_auth", "two_factor_backup_codes")
+OPTIONAL_AUTH = ("email_verification_tokens", "two_factor_auth", "two_factor_backup_codes")
 
 
 def _rows(path: Path, table: str, user_id: str) -> int:
@@ -61,23 +61,25 @@ def isolated_api(monkeypatch, tmp_path):
     monkeypatch.setenv("PUSH_TOKEN_ENCRYPTION_KEY", secrets.token_urlsafe(32))
 
     app = Flask(__name__)
-    app.config.update(TESTING=True, SECRET_KEY=secrets.token_urlsafe(32))
+    app.config.update(TESTING=True, SECRET_KEY=secrets.token_urlsafe(32), JWT_EXPIRATION_HOURS=1)
     auth_module = _module(
         monkeypatch, "api_server", app=app, jwt=jwt, request=request, jsonify=jsonify,
         wraps=wraps, Optional=Optional, Dict=Dict, logger=logging.getLogger("test.auth"),
+        datetime=datetime, timedelta=timedelta,
     )
     auth_source = ast.parse((ROOT / "api_server.py").read_text(encoding="utf-8"))
     selected = [
         node for node in auth_source.body
-        if isinstance(node, ast.FunctionDef) and node.name in {"decode_jwt_token", "require_auth"}
+        if isinstance(node, ast.FunctionDef) and node.name in {"decode_jwt_token", "require_auth", "generate_jwt_token", "login"}
     ]
-    assert len(selected) == 2
+    assert len(selected) == 4
+    next(node for node in selected if node.name == "login").decorator_list = []
     exec(compile(ast.Module(body=selected, type_ignores=[]), "api_server.py", "exec"), auth_module.__dict__)
 
     auth_path = tmp_path / "auth.sqlite3"
     vault_path = tmp_path / "vault.sqlite3"
     for path, tables in (
-        (auth_path, AUTH_TABLES + UNSUPPORTED_AUTH),
+        (auth_path, AUTH_TABLES + OPTIONAL_AUTH),
         (vault_path, ("credentials", "audit_log")),
     ):
         with sqlite3.connect(path) as connection:
@@ -90,6 +92,12 @@ def isolated_api(monkeypatch, tmp_path):
     user_db = types.SimpleNamespace(
         db_path=str(auth_path), get_user=lambda user: {"user_id": user} if _rows(auth_path, "users", user) else None
     )
+    user_db.get_user_by_email = lambda email: user_db.get_user(email.removesuffix("@example.test"))
+    fixture_value = secrets.token_urlsafe(24)
+    user_db.verify_password = lambda user, password, ip_address: password == fixture_value
+    auth_module.user_db = user_db
+    auth_module.fixture_value = fixture_value
+    app.add_url_rule("/api/auth/login", view_func=auth_module.login, methods=["POST"])
     vault = types.SimpleNamespace(
         db_path=str(vault_path),
         list_user_brokers=lambda user: ["kraken"] if _rows(vault_path, "credentials", user) else [],
@@ -217,8 +225,8 @@ def test_success_cleans_only_covered_authenticated_user_stores(isolated_api, cap
     for table in ("credentials", "audit_log"):
         assert _rows(api.vault_path, table, USER_A) == 0
         assert _rows(api.vault_path, table, USER_B) == 1
-    for table in UNSUPPORTED_AUTH:
-        assert _rows(api.auth_path, table, USER_A) == 1
+    for table in OPTIONAL_AUTH:
+        assert _rows(api.auth_path, table, USER_A) == 0
         assert _rows(api.auth_path, table, USER_B) == 1
     for mapping in (api.legacy.user_keys, api.users.users, api.permissions.user_permissions, api.rules._rules_cache):
         assert USER_A not in mapping
@@ -272,11 +280,248 @@ def test_partial_cleanup_never_claims_success_or_logs_raw_error(isolated_api, mo
     assert all(record.exc_info is None for record in records)
 
 
-def test_repeat_request_preserves_existing_missing_account_status(isolated_api):
+def test_repeat_request_denies_deleted_jwt_subject(isolated_api):
     api = isolated_api
     assert _delete(api).status_code == 200
     response = _delete(api)
-    assert response.status_code == 404
-    assert response.get_json() == {"error": "Account is no longer available"}
+    assert response.status_code == 401
+    assert response.get_json() == {"error": "Account is unavailable"}
     assert _rows(api.auth_path, "users", USER_B) == 1
     assert api.devices.count_devices(USER_B) == 1
+
+
+
+def test_existing_signed_token_is_rejected_after_successful_account_deletion(isolated_api):
+    api = isolated_api
+    def login(user):
+        response = api.client.post(
+            "/api/auth/login", json={"email": f"{user}@example.test", "password": sys.modules["api_server"].fixture_value},
+        )
+        assert response.status_code == 200
+        body = response.get_json()
+        assert "refresh_token" not in body
+        return {"Authorization": f"Bearer {body['token']}"}
+
+    signed_headers = login(USER_A)
+    other_headers = login(USER_B)
+    assert api.client.get("/api/account/deletion", headers=signed_headers).status_code == 200
+    assert api.client.delete(
+        "/api/account/deletion", headers=signed_headers, json={"confirmation": "DELETE MY NIJA ACCOUNT"},
+    ).status_code == 200
+    assert api.client.get("/api/account/deletion", headers=other_headers).status_code == 200
+    # Previously valid signed JWTs must not authenticate against a deleted subject.
+    for method in ("get", "delete"):
+        response = getattr(api.client, method)("/api/account/deletion", headers=signed_headers)
+        assert response.status_code == 401
+        assert response.get_json() == {"error": "Account is unavailable"}
+    assert _rows(api.auth_path, "users", USER_B) == 1
+
+
+def test_disabled_account_denies_unexpired_valid_token(isolated_api, monkeypatch):
+    api = isolated_api
+    database = sys.modules["api_server"].user_db
+    original = database.get_user
+
+    def disabled(user_id):
+        account = original(user_id)
+        return {**account, "enabled": False} if account and user_id == USER_A else account
+
+    monkeypatch.setattr(database, "get_user", disabled)
+    response = api.client.get("/api/account/deletion", headers=api.headers())
+    assert response.status_code == 401
+    assert response.get_json() == {"error": "Account is unavailable"}
+    assert _rows(api.auth_path, "users", USER_A) == 1
+
+
+def test_auth_account_lookup_failure_fails_closed_without_logging_details(isolated_api, monkeypatch, caplog):
+    api = isolated_api
+    database = sys.modules["api_server"].user_db
+
+    def broken_lookup(_user_id):
+        raise sqlite3.OperationalError("synthetic-database-location-is-private")
+
+    monkeypatch.setattr(database, "get_user", broken_lookup)
+    with caplog.at_level(logging.ERROR, logger="test.auth"):
+        response = api.client.get("/api/account/deletion", headers=api.headers())
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "Authentication temporarily unavailable"}
+    logs = " ".join(row.getMessage() for row in caplog.records)
+    assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in logs
+    assert USER_A not in logs and "synthetic-database-location-is-private" not in logs
+    assert _rows(api.auth_path, "users", USER_A) == 1
+
+
+
+@pytest.mark.parametrize("source_file", ["api_server.py", "gateway.py"])
+def test_both_api_entrypoints_reject_stale_and_disabled_jwts(source_file, monkeypatch, caplog):
+    """Execute the actual decorators without loading production managers.
+
+    Token subjects must still resolve to a current enabled user. Missing or
+    unavailable account records deny even a correctly signed, unexpired JWT.
+    """
+    app = Flask("synthetic-" + source_file)
+    app.config.update(TESTING=True, SECRET_KEY=secrets.token_urlsafe(32))
+    source = ast.parse((ROOT / source_file).read_text(encoding="utf-8"))
+    functions = [
+        node for node in source.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"decode_jwt_token", "require_auth"}
+    ]
+    assert len(functions) == 2
+    database = types.SimpleNamespace(
+        get_user=lambda uid: {"user_id": uid, "enabled": True}
+        if uid == USER_A else None
+    )
+    namespace = dict(
+        app=app, jwt=jwt, request=request, jsonify=jsonify, wraps=wraps,
+        logger=logging.getLogger("synthetic.auth." + source_file),
+        Optional=Optional, Dict=Dict, user_db=database,
+    )
+    exec(compile(ast.Module(body=functions, type_ignores=[]), source_file, "exec"), namespace)
+
+    @app.get("/synthetic/probe")
+    @namespace["require_auth"]
+    def protected_probe():
+        return jsonify({"user_id": request.user_id})
+
+    client = app.test_client()
+
+    def authorization(subject):
+        token = jwt.encode({
+            "user_id": subject,
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=10),
+        }, app.config["SECRET_KEY"], algorithm="HS256")
+        return {"Authorization": "Bearer " + token}
+
+    assert client.get("/synthetic/probe", headers=authorization(USER_A)).status_code == 200
+    for subject in (USER_B, "   ", 17, None):
+        response = client.get("/synthetic/probe", headers=authorization(subject))
+        assert response.status_code == 401
+        assert response.get_json()["error"] in ("Account is unavailable", "Invalid or expired token")
+
+    monkeypatch.setattr(
+        database, "get_user",
+        lambda uid: {"user_id": uid, "enabled": False} if uid == USER_A else None,
+    )
+    disabled = client.get("/synthetic/probe", headers=authorization(USER_A))
+    assert disabled.status_code == 401
+    assert disabled.get_json() == {"error": "Account is unavailable"}
+
+    def unavailable(_):
+        raise sqlite3.OperationalError("private-backend-detail")
+
+    monkeypatch.setattr(database, "get_user", unavailable)
+    with caplog.at_level(logging.ERROR, logger=namespace["logger"].name):
+        error = client.get("/synthetic/probe", headers=authorization(USER_A))
+    assert error.status_code == 503
+    assert error.get_json() == {"error": "Authentication temporarily unavailable"}
+    assert "private-backend-detail" not in error.get_data(as_text=True)
+    logs = " ".join(entry.getMessage() for entry in caplog.records
+                    if entry.name == namespace["logger"].name)
+    assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in logs
+    assert USER_A not in logs and "private-backend-detail" not in logs
+
+
+
+@pytest.mark.parametrize("source_file", ["api_gateway.py", "fastapi_backend.py"])
+def test_fastapi_entrypoints_reject_deleted_jwt_subjects(source_file, caplog):
+    """Run the actual source FastAPI dependencies without a trading service."""
+    import asyncio
+
+    class SyntheticHTTPException(Exception):
+        def __init__(self, status_code, detail, headers=None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+            self.headers = headers
+
+    async def no_rate_limit(_request, _subject):
+        return None
+
+    key = secrets.token_urlsafe(40)
+    account = types.SimpleNamespace(
+        get_user=lambda uid: {"user_id": uid, "enabled": True}
+        if uid == USER_A else None
+    )
+    env = dict(
+        jwt=jwt, JWT_SECRET_KEY_STR=key, JWT_ALGORITHM="HS256",
+        HTTPException=SyntheticHTTPException,
+        status=types.SimpleNamespace(HTTP_401_UNAUTHORIZED=401,
+                                     HTTP_503_SERVICE_UNAVAILABLE=503),
+        Optional=Optional, Dict=Dict, Request=object,
+        HTTPAuthorizationCredentials=object, security=object(),
+        Depends=lambda _: None, user_db=account,
+        check_rate_limit=no_rate_limit,
+        logger=logging.getLogger("synthetic.fastapi." + source_file),
+    )
+    source = ast.parse((ROOT / source_file).read_text(encoding="utf-8"))
+    functions = [node for node in source.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and node.name in {"decode_access_token", "get_current_user"}]
+    assert len(functions) == 2
+    exec(compile(ast.Module(body=functions, type_ignores=[]), source_file, "exec"), env)
+
+    def access(subject):
+        token = jwt.encode(
+            {"user_id": subject, "exp": datetime.now(timezone.utc) + timedelta(minutes=5)},
+            key, algorithm="HS256",
+        )
+        credentials = types.SimpleNamespace(credentials=token)
+        caller = env["get_current_user"]
+        if source_file == "fastapi_backend.py":
+            return asyncio.run(caller(request=object(), credentials=credentials))
+        return asyncio.run(caller(credentials=credentials))
+
+    assert access(USER_A) == USER_A
+    for subject in (USER_B, " ", 17, None):
+        with pytest.raises(SyntheticHTTPException) as denied:
+            access(subject)
+        assert denied.value.status_code == 401
+
+    account.get_user = lambda uid: {"user_id": uid, "enabled": False}
+    with pytest.raises(SyntheticHTTPException) as disabled:
+        access(USER_A)
+    assert disabled.value.status_code == 401
+    assert disabled.value.detail == "Account is unavailable"
+
+    def broken(_uid):
+        raise sqlite3.OperationalError("private-user-database-location")
+    account.get_user = broken
+    with caplog.at_level(logging.ERROR, logger=env["logger"].name):
+        with pytest.raises(SyntheticHTTPException) as unavailable:
+            access(USER_A)
+    assert unavailable.value.status_code == 503
+    assert unavailable.value.detail == "Authentication temporarily unavailable"
+    rendered = " ".join(r.getMessage() for r in caplog.records
+                        if r.name == env["logger"].name)
+    assert "AUTH_SUBJECT_LOOKUP_FAILED error_type=OperationalError" in rendered
+    assert "private-user-database-location" not in rendered
+    assert USER_A not in rendered
+
+
+def test_missing_optional_auth_tables_are_compatible(isolated_api):
+    api = isolated_api
+    with sqlite3.connect(api.auth_path) as connection:
+        connection.execute("DROP TABLE email_verification_tokens")
+        connection.execute("DROP TABLE two_factor_backup_codes")
+        connection.execute("DROP TABLE two_factor_auth")
+    assert _delete(api).status_code == 200
+    assert _rows(api.auth_path, "users", USER_B) == 1
+
+
+def test_auth_cleanup_is_atomic_when_an_optional_store_fails(isolated_api):
+    api = isolated_api
+    with sqlite3.connect(api.auth_path) as connection:
+        connection.execute(
+            "CREATE TRIGGER deny_backup_code_cleanup BEFORE DELETE ON two_factor_backup_codes "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"
+        )
+    assert _delete(api).status_code == 500
+    for table in AUTH_TABLES + OPTIONAL_AUTH:
+        assert _rows(api.auth_path, table, USER_A) == 1
+        assert _rows(api.auth_path, table, USER_B) == 1
+    with sqlite3.connect(api.auth_path) as connection:
+        connection.execute("DROP TRIGGER deny_backup_code_cleanup")
+    assert _delete(api).status_code == 200
+    for table in AUTH_TABLES + OPTIONAL_AUTH:
+        assert _rows(api.auth_path, table, USER_A) == 0
+        assert _rows(api.auth_path, table, USER_B) == 1

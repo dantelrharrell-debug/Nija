@@ -9,6 +9,18 @@ export class V515PgReportStore {
     if (!pool || typeof pool.connect !== "function") throw new TypeError("pg_pool_required");
     this.pool = pool;
   }
+  async findOwnedTestReturn(ownerId, sessionId) {
+    if (typeof ownerId!=="string" || !/^[A-Za-z0-9_.:@-]{1,160}$/.test(ownerId) ||
+        typeof sessionId!=="string" || !/^cs_test_[A-Za-z0-9]{8,220}$/.test(sessionId))
+      return null;
+    const result=await this.pool.query(
+      "SELECT run_id, state FROM tiq72_v515_reservations WHERE owner_id=$1 AND stripe_session=$2",
+      [ownerId,sessionId]
+    );
+    if(result.rows.length!==1) return null;
+    return {runId:result.rows[0].run_id,state:result.rows[0].state};
+  }
+
   async getOwnedPurchase(ownerId, runId) {
     if (!okId(ownerId) || !okId(runId)) return null;
     const r = await this.pool.query(`

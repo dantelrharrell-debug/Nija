@@ -32,6 +32,7 @@ Architecture:
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from auth.user_database import get_user_database
 from admin_access_fastapi import install_admin_access
 from web_cors_policy import allowed_web_origins
 from pydantic import BaseModel, Field
@@ -124,6 +125,8 @@ JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 # Get manager instances
 user_control = get_user_control_backend()
 permission_validator = get_permission_validator()
+# Use the same durable authentication authority as the other NIJA endpoints.
+user_db = get_user_database()
 
 # Security
 security = HTTPBearer()
@@ -258,13 +261,29 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         )
 
     user_id = payload.get('user_id')
-    if not user_id:
+    if not isinstance(user_id, str) or not user_id.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Signature and expiry do not authorize a deleted or disabled account.
+    # Query NIJA's existing durable user store; never rely on in-memory state.
+    try:
+        current_user = user_db.get_user(user_id)
+    except Exception as exc:
+        logger.error("AUTH_SUBJECT_LOOKUP_FAILED error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication temporarily unavailable",
+        ) from None
+    if not current_user or not current_user.get('enabled', True):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is unavailable",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user_id
 
 

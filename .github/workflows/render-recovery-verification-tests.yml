@@ -8,6 +8,7 @@ on:
       - 'bot.py'
       - 'bot/redis_env.py'
       - 'start.sh'
+      - 'tests/test_redis_cli_recovery_transport.py'
       - 'tests/test_redis_configuration_error_privacy.py'
       - 'bot/bot_main.py'
       - 'bot/kraken_protected_startup_root.py'
@@ -60,16 +61,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Fetch immutable reviewed broker fixtures for offline tests
+      - name: Fetch immutable reviewed broker and startup fixtures for offline tests
         run: |
           git fetch --no-tags --depth=1 origin \
             68c566204312a9cabe328ad3f3504cadc1d8736c \
-            63d63c7e2746c3d7f0aabd39bd6b2a3c853f77c8
+            63d63c7e2746c3d7f0aabd39bd6b2a3c853f77c8 \
+            55b1fc11a6715c053036b69f6e71241ec4c5c269
       - name: Exercise offline fail-closed deployment, checkout, digest and authority boundaries
         run: |
           python -B -S -m unittest discover -s tests -p test_stage_archived_kraken_history.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_margin_cash_reconciliation.py -v
           python -B -S -m unittest discover -s tests -p test_redis_configuration_error_privacy.py -v
+          python -B -S -m unittest discover -s tests -p test_redis_cli_recovery_transport.py -v
           python -B -S -m unittest discover -s tests -p test_kraken_instance_diagnostic.py -v
           python -B -S -m unittest discover -s tests -p test_render_recovery_verification.py -v
           python -B -S -m unittest discover -s tests -p test_render_runtime_build_sources.py -v

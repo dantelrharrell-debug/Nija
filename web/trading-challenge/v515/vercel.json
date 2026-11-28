@@ -28,6 +28,10 @@
   ],
   "rewrites": [
     {
+      "source": "/trading-iq-challenge/payment-return",
+      "destination": "/index.html"
+    },
+    {
       "source": "/trading-iq-challenge",
       "destination": "/index.html"
     }
@@ -40,3 +44,4 @@
     }
   ]
 }
+

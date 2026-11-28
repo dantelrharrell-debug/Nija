@@ -120,3 +120,49 @@ class ShadowOutcomesTest(unittest.TestCase):
         rebuild(1)
         self.assertEqual(self.put(close(net_return=Decimal("-0.02"))), "quarantined")
         rebuild(0)
+
+    def test_cost_reconciliation_and_owner_decisions_survive_restart(self):
+        from bot.kraken_offline_strategy_review import evaluate
+        from bot.kraken_shadow_outcomes import CloseEconomics, OwnerDecision
+
+        first = close(economics=CloseEconomics(Decimal("100"), Decimal("3"), Decimal("1"), 100))
+        self.assertEqual(self.put(replace(first, economics=None)), "accepted")
+        self.assertIsNone(evaluate(self.inbox, "test:a")["metrics"]["net_realized_pnl_usd"])
+        self.assertEqual(self.put(first), "enriched")
+        self.assertEqual(self.put(first), "duplicate")
+        self.assertEqual(self.put(close(
+            lot="loss", closing_fill_ids=("fill-3",),
+            net_return=Decimal("-.01"),
+            economics=CloseEconomics(Decimal("100"), Decimal("0"), Decimal("1"), 200),
+        )), "accepted")
+
+        report = evaluate(self.reopen(), "test:a")
+        self.assertEqual(report["learning_sample_count"], 2)
+        self.assertFalse(report["authorizes_orders"])
+        self.assertEqual(report["metrics"], {
+            "status": "reconciled_sample", "net_realized_pnl_usd": "1", "execution_cost_usd": "2",
+            "realized_drawdown_usd": "1", "profit_factor": "2",
+        })
+        decision = OwnerDecision("test:a", "evaluation-1", "owner-fixture", report["snapshot_sha256"], "retain_for_review", 250)
+        self.assertEqual(self.inbox.record_owner_decision(decision, authenticate=lambda _: False), "unverified")
+        self.assertEqual(self.inbox.record_owner_decision(decision, authenticate=lambda _: True), "recorded")
+        self.assertEqual(self.reopen().record_owner_decision(decision, authenticate=lambda _: True), "duplicate")
+        self.assertEqual(self.inbox.record_owner_decision(
+            replace(decision, decision="reject"), authenticate=lambda _: True,
+        ), "conflict")
+        self.assertEqual(len(evaluate(self.reopen(), "test:a")["owner_decisions"]), 1)
+
+        disputed = replace(first, economics=CloseEconomics(Decimal("100"), Decimal("4"), Decimal("2"), 100))
+        self.assertEqual(self.put(disputed), "quarantined")
+        report = evaluate(self.reopen(), "test:a")
+        self.assertEqual(report["owner_decisions"], [])
+        self.assertEqual(report["metrics"]["net_realized_pnl_usd"], "-1")
+
+    def test_reject_wrong_or_missing_cost_reconciliation(self):
+        from bot.kraken_shadow_outcomes import CloseEconomics
+
+        for cost, stamp in ((Decimal("2"), 100), (Decimal("-1"), 100), (Decimal("1"), True)):
+            self.assertEqual(self.put(close(
+                economics=CloseEconomics(Decimal("100"), Decimal("3"), cost, stamp),
+            )), "unverified")
+        self.assertEqual(self.inbox.snapshot("test:a"), [])

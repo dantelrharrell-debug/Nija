@@ -62,6 +62,23 @@ def api():
         "/v1/invoices/in_fixture": invoice,
         "/v1/invoices": {"object": "list", "has_more": False,
             "data": [copy.deepcopy(invoice), free_trial_invoice]},
+        "/v1/invoice_payments": {"object": "list", "has_more": False, "data": [{
+            "object": "invoice_payment", "livemode": False, "invoice": RUN.invoice_id,
+            "status": "paid", "currency": "usd", "amount_paid": 5000, "amount_requested": 5000,
+            "status_transitions": {"paid_at": TS + 3700},
+            "payment": {"type": "payment_intent", "payment_intent": "pi_fixture"},
+        }]},
+        "/v1/payment_intents/pi_fixture": {
+            "object": "payment_intent", "id": "pi_fixture", "livemode": False,
+            "customer": "cus_fixture", "status": "succeeded", "currency": "usd",
+            "amount_received": 5000, "latest_charge": "ch_fixture",
+        },
+        "/v1/charges/ch_fixture": {
+            "object": "charge", "id": "ch_fixture", "livemode": False,
+            "customer": "cus_fixture", "status": "succeeded", "currency": "usd",
+            "paid": True, "captured": True, "amount_captured": 5000, "amount_refunded": 0,
+            "refunded": False, "disputed": False, "payment_intent": "pi_fixture",
+        },
     }
 
 
@@ -80,6 +97,8 @@ class Opener:
             assert parse_qs(url.query) == {
                 "customer": ["cus_fixture"], "subscription": [RUN.subscription_id], "limit": ["20"],
             }
+        elif url.path == "/v1/invoice_payments":
+            assert parse_qs(url.query) == {"invoice": [RUN.invoice_id], "status": ["paid"], "limit": ["2"]}
         else:
             assert not url.query
         self.paths.append(url.path)
@@ -143,3 +162,33 @@ def test_cli_without_key_reports_only_value_free_failure(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {
         "scope": "isolated_stripe_test_only", "first_invoice_verified": False,
     }
+
+
+def test_paid_status_without_stripe_payment_is_not_provider_proof(api):
+    api["/v1/invoice_payments"] = {"object": "list", "has_more": False, "data": []}
+    assert not verify_first_sandbox_invoice(RUN, StripeTestInvoiceReader(TEST_KEY, RUN, opener=Opener(api)))
+
+
+@pytest.mark.parametrize("path,changes", [
+    ("/v1/invoice_payments", {"has_more": True}),
+    ("/v1/payment_intents/pi_fixture", {"livemode": True}),
+    ("/v1/payment_intents/pi_fixture", {"customer": "cus_wrong"}),
+    ("/v1/payment_intents/pi_fixture", {"status": "requires_payment_method"}),
+    ("/v1/payment_intents/pi_fixture", {"amount_received": 4999}),
+    ("/v1/charges/ch_fixture", {"payment_intent": "pi_wrong"}),
+    ("/v1/charges/ch_fixture", {"amount_refunded": 1}),
+    ("/v1/charges/ch_fixture", {"disputed": True}),
+    ("/v1/charges/ch_fixture", {"captured": False}),
+])
+def test_incomplete_unrelated_or_reversed_tender_cannot_certify(api, path, changes):
+    api[path].update(changes)
+    assert not verify_first_sandbox_invoice(RUN, StripeTestInvoiceReader(TEST_KEY, RUN, opener=Opener(api)))
+
+
+def test_paid_outside_provider_or_duplicate_tenders_cannot_certify(api):
+    payments = api["/v1/invoice_payments"]["data"]
+    payments.append(copy.deepcopy(payments[0]))
+    assert not verify_first_sandbox_invoice(RUN, StripeTestInvoiceReader(TEST_KEY, RUN, opener=Opener(api)))
+    payments.pop()
+    payments[0]["payment"] = {"type": "payment_record", "payment_record": "synthetic"}
+    assert not verify_first_sandbox_invoice(RUN, StripeTestInvoiceReader(TEST_KEY, RUN, opener=Opener(api)))

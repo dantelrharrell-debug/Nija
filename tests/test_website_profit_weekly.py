@@ -93,6 +93,33 @@ class WeeklyEvidenceTests(unittest.TestCase):
         self.assertEqual(result["unique_visitors"], 10)
         self.assertEqual(result["net_profit_per_visitor_usd"], "10.50")
 
+    def test_weekly_union_must_agree_with_certified_daily_counts(self):
+        for field, below_daily_max, above_daily_sum in (
+            ("unique_visitors", 1, 71),
+            ("qualified_leads", 1, 15),
+            ("waitlist_signups", 0, 8),
+        ):
+            for value in (below_daily_max, above_daily_sum):
+                with self.subTest(field=field, value=value):
+                    evidence = weekly_counts(self.end)
+                    evidence[field] = value
+                    current = summarize_week(fixtures(self.end, 7), self.end, evidence)
+                    self.assertEqual(current["verification_status"], "PARTIAL")
+                    self.assertIsNone(current[field])
+                    self.assertIsNone(current["net_profit_usd"])
+                    self.assertIsNone(current["net_profit_per_visitor_usd"])
+                    self.assertIsNone(current["target_met"])
+
+    def test_one_conflicting_window_does_not_invalidate_its_neighbor(self):
+        evidence = weekly_counts(self.end)
+        evidence["unique_visitors"] = 1
+        results = compare_weeks(
+            fixtures(self.end), self.end,
+            [evidence, weekly_counts(self.end - timedelta(days=7))],
+        )
+        self.assertEqual(results["current"]["verification_status"], "PARTIAL")
+        self.assertEqual(results["previous"]["verification_status"], "VERIFIED")
+
     def test_missing_weekly_evidence_cannot_verify(self):
         result = compare_weeks(fixtures(self.end), self.end)
         self.assertEqual(result["current"]["verification_status"], "PARTIAL")
@@ -106,13 +133,19 @@ class WeeklyEvidenceTests(unittest.TestCase):
         self.assertEqual(result["previous"]["verification_status"], "VERIFIED")
 
     def test_invalid_financial_values_fail_closed(self):
-        for invalid in ("NaN", "Infinity", "-1", None, True, "oops"):
+        for invalid in ("NaN", "Infinity", "-1", None, True, "oops", "1e1000000", "1e-1000000"):
             with self.subTest(invalid=invalid):
                 rows = fixtures(self.end, 7)
                 rows[0]["attributable_costs_usd"] = invalid
                 result = summarize_week(rows, self.end, weekly_counts(self.end))
                 self.assertEqual(result["verification_status"], "PARTIAL")
                 self.assertIsNone(result["net_profit_usd"])
+
+    def test_malformed_dates_return_unverified(self):
+        rows = fixtures(self.end)
+        rows[2]["date"] = []
+        self.assertEqual(summarize_week(rows[:7], self.end)["verification_status"], "UNVERIFIED")
+        self.assertEqual(compare_weeks(rows, self.end)["current"]["verification_status"], "UNVERIFIED")
 
     def test_invalid_input_types_rejected(self):
         with self.assertRaises(ValueError):

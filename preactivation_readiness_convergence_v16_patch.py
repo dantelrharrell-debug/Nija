@@ -156,6 +156,33 @@ def _ensure_strategy_publication_monitor() -> tuple[bool, str]:
         return False, f"start_monitor_failed:{type(exc).__name__}:{exc}"
 
 
+def _capital_reporting(authority: Any) -> dict[str, Any]:
+    """Read one atomic dashboard snapshot, independently of activation inputs."""
+    unavailable = {"status": "unavailable", "real_capital_usd": None, "source": "capital_authority"}
+    try:
+        snapshot = authority.get_snapshot()
+        publication = snapshot["snapshot_publication"]
+        amount = snapshot["real_capital"]
+        count = snapshot["broker_count"]
+        expected = snapshot["expected_brokers"]
+        if (
+            snapshot["is_fresh"] is not True or publication["stale"] is not False
+            or not snapshot["last_updated"] or snapshot["last_updated"] != publication["timestamp"]
+            or type(count) is not int or type(expected) is not int or not 0 < expected <= count
+            or type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0
+        ):
+            return unavailable
+        if amount == 0:
+            # Current coordinator snapshots can contain placeholder balances.
+            # Only separate authenticated zero evidence could establish an empty account.
+            return {**unavailable, "status": "zero_unverified"}
+        if publication["accepted"] is True:
+            return {**unavailable, "status": "reported", "real_capital_usd": amount}
+    except Exception:
+        return unavailable
+    return unavailable
+
+
 def _capital_snapshot() -> dict[str, Any]:
     result: dict[str, Any] = {
         "hydrated": False,
@@ -163,6 +190,7 @@ def _capital_snapshot() -> dict[str, Any]:
         "real": 0.0,
         "registered": 0,
         "source": "capital_authority",
+        "reporting": {"status": "unavailable", "real_capital_usd": None, "source": "capital_authority"},
     }
     try:
         try:
@@ -195,6 +223,7 @@ def _capital_snapshot() -> dict[str, Any]:
             )
         stale = getattr(authority, "is_stale", None)
         result["stale"] = bool(stale()) if callable(stale) else bool(getattr(authority, "stale", False))
+        result["reporting"] = _capital_reporting(authority)
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}:{exc}"
 
@@ -202,6 +231,7 @@ def _capital_snapshot() -> dict[str, Any]:
         return result
     handoff = _fresh_capital_handoff()
     if handoff is not None:
+        handoff["reporting"] = result["reporting"]
         if "error" in result:
             handoff["authority_error"] = result["error"]
         return handoff

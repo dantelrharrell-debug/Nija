@@ -215,13 +215,24 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(report["lead_database"]["crm_review_categories"], {"other": 1})
         self.assertNotIn("sensitive-customer", json.dumps(report))
 
-    def test_unknown_forward_state_redacted(self):
+    def test_uncertain_forward_count_distinct_from_redacted_unknown_state(self):
         self.populate()
         with db_transaction(self.forward) as db:
-            db.execute("UPDATE website_lead_forwarding SET state='private-token' WHERE event_key='a'")
+            db.executemany(
+                "INSERT INTO website_lead_forwarding VALUES(?,?)",
+                [("fixture-held-event", "uncertain"), ("fixture-unrecognized-event", "private-token")],
+            )
+        before = self.forward.read_bytes()
         report = self.audit()
-        self.assertEqual(report["forward_history"]["forwarding_states"]["other"], 1)
-        self.assertNotIn("private-token", json.dumps(report))
+        self.assertEqual(report["forward_history"]["forwarding_states"], {
+            "pending": 2, "sending": 0, "sent": 1, "uncertain": 1, "other": 1,
+        })
+        self.assertFalse(report["production_pipeline_certified"])
+        self.assertFalse(report["bulk_replay_authorized"])
+        self.assertEqual(self.forward.read_bytes(), before)
+        serialized = json.dumps(report)
+        for value in ("fixture-held-event", "fixture-unrecognized-event", "private-token"):
+            self.assertNotIn(value, serialized)
 
     def test_symlink_to_disk_is_durable(self):
         self.populate()

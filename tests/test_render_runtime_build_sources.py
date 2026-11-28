@@ -39,37 +39,9 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         self.sources = {path: (root / path).read_bytes() for path in SOURCE_PATHS}
         self.recipe = {path: (root / path).read_bytes() for path in RECIPE_PATHS}
-        # Positive transformation tests require an independently allowlisted
-        # Dockerfile. HEAD contains the newer Render secrets permission change,
-        # which is intentionally NOT approved by the runtime recipe guard.
-        # Use the exact earlier public, immutable build recipe as a test
-        # fixture; do not authorize HEAD or alter production trust pins.
-        # CI checkouts may be shallow and omit historical commits. Reverse
-        # only the exact reviewed public PR #3950 insertion and the single
-        # digest-pinned Trixie base change in the isolated test fixture.
-        # This must never approve current Dockerfile bytes for recovery.
-        # All changed or unexpected layouts fail closed.
         from scripts.render_runtime_build_sources import DOCKER_SHA256
         current = self.recipe["Dockerfile"]
-        added = (
-            b"# Render runtime Secret Files are mounted with group 1000 access. Keep the\n"
-            b"# non-root trading process and grant only that supplementary group.\n"
-            b"RUN (getent group 1000 >/dev/null || groupadd --gid 1000 render-secrets) && \\\n"
-            b"    usermod -a -G 1000 nija && \\\n"
-            b"    id -G nija | tr ' ' '\\n' | grep -qx 1000\n"
-        )
-        self.assertEqual(current.count(added), 1)
-        candidate = b"ARG PYTHON_BASE=python:3.11-slim-trixie@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535\n"
-        previous = b"ARG PYTHON_BASE=python:3.11-slim\n"
-        self.assertEqual(current.count(candidate), 1)
         self.current_unreviewed_dockerfile = current
-        # Reconstruct only the previously allowlisted fixture. The actual
-        # current Trixie recipe remains outside the runtime allowlist.
-        self.recipe["Dockerfile"] = (
-            current.replace(added, b"", 1).replace(candidate, previous, 1)
-        )
-        from scripts.render_runtime_build_sources import DOCKER_SHA256
-        self.assertIn(hashlib.sha256(self.recipe["Dockerfile"]).hexdigest(), DOCKER_SHA256)
         # Load immutable, reviewed historical bytes rather than reversing a
         # growing sequence of production Dockerfile changes. This fixture is
         # only used by offline positive tests, never by production recovery.
@@ -87,13 +59,18 @@ class RuntimeBuildSourcesTests(unittest.TestCase):
 
     def test_reproduce_build_outputs_without_touching_files_or_approval_inputs(self) -> None:
         root = Path(__file__).resolve().parents[1]
+        # Reproduce the historical output with the original startup input.
+        # Other tests exercise the current startup bytes and reject tampering.
+        historical_startup = subprocess.check_output(
+            ["git", "show", "55b1fc11a6715c053036b69f6e71241ec4c5c269:start.sh"], cwd=root,
+        )
         for commit, expected_source, expected_output in _REVIEWED_BROKER_FIXTURES:
             with self.subTest(commit=commit):
                 reviewed = subprocess.check_output(
                     ["git", "show", commit + ":" + _BROKER_SOURCE], cwd=root,
                 )
                 self.assertEqual(hashlib.sha256(reviewed).hexdigest(), expected_source)
-                sources = {**self.sources, _BROKER_SOURCE: reviewed}
+                sources = {**self.sources, _BROKER_SOURCE: reviewed, "start.sh": historical_startup}
                 original = copy.deepcopy(sources)
                 with patch.object(Path, "write_text", side_effect=AssertionError("must not write")):
                     built = derive_runtime_source_sha256(sources, self.recipe)

@@ -10,7 +10,9 @@ on:
       - 'website_profit_reporting_api.py'
       - 'website_profit_dashboard.py'
       - 'website_profit_sources.py'
+      - 'website_profit_weekly.py'
       - 'scripts/collect_website_profit_sources.py'
+      - 'scripts/website_profit_config_preflight.py'
       - 'website_persisted_lead_audit.py'
       - 'billing_service.py'
       - 'tests/test_website_revenue_attribution.py'
@@ -18,7 +20,9 @@ on:
       - 'tests/test_website_profit_reporting_api.py'
       - 'tests/test_website_profit_dashboard.py'
       - 'tests/test_website_profit_sources.py'
+      - 'tests/test_website_profit_weekly.py'
       - 'tests/test_website_profit_certification_boundary.py'
+      - 'tests/test_website_profit_config_preflight.py'
       - 'tests/test_website_persisted_lead_audit.py'
       - '.github/workflows/website-profit-tests.yml'
   pull_request:
@@ -28,7 +32,9 @@ on:
       - 'website_profit_reporting_api.py'
       - 'website_profit_dashboard.py'
       - 'website_profit_sources.py'
+      - 'website_profit_weekly.py'
       - 'scripts/collect_website_profit_sources.py'
+      - 'scripts/website_profit_config_preflight.py'
       - 'website_persisted_lead_audit.py'
       - 'billing_service.py'
       - 'tests/test_website_revenue_attribution.py'
@@ -36,7 +42,9 @@ on:
       - 'tests/test_website_profit_reporting_api.py'
       - 'tests/test_website_profit_dashboard.py'
       - 'tests/test_website_profit_sources.py'
+      - 'tests/test_website_profit_weekly.py'
       - 'tests/test_website_profit_certification_boundary.py'
+      - 'tests/test_website_profit_config_preflight.py'
       - 'tests/test_website_persisted_lead_audit.py'
       - '.github/workflows/website-profit-tests.yml'
   workflow_dispatch:
@@ -61,8 +69,8 @@ jobs:
           set -euo pipefail
           tmpdir="$(mktemp -d)"
           mkdir -p "$tmpdir/tests" "$tmpdir/scripts"
-          cp scripts/collect_website_profit_sources.py "$tmpdir/scripts/"
-          cp website_revenue_attribution.py website_net_profit.py website_profit_reporting_api.py website_profit_dashboard.py website_profit_sources.py website_persisted_lead_audit.py "$tmpdir/"
-          cp tests/test_website_revenue_attribution.py tests/test_website_net_profit.py tests/test_website_profit_reporting_api.py tests/test_website_profit_dashboard.py tests/test_website_profit_sources.py tests/test_website_profit_certification_boundary.py tests/test_website_persisted_lead_audit.py "$tmpdir/tests/"
+          cp scripts/collect_website_profit_sources.py scripts/website_profit_config_preflight.py "$tmpdir/scripts/"
+          cp website_revenue_attribution.py website_net_profit.py website_profit_reporting_api.py website_profit_dashboard.py website_profit_sources.py website_profit_weekly.py website_persisted_lead_audit.py "$tmpdir/"
+          cp tests/test_website_revenue_attribution.py tests/test_website_net_profit.py tests/test_website_profit_reporting_api.py tests/test_website_profit_dashboard.py tests/test_website_profit_sources.py tests/test_website_profit_weekly.py tests/test_website_profit_certification_boundary.py tests/test_website_profit_config_preflight.py tests/test_website_persisted_lead_audit.py "$tmpdir/tests/"
           cd "$tmpdir"
           PYTHONNOUSERSITE=1 python -m unittest discover -s tests -p 'test_website*.py' -v
