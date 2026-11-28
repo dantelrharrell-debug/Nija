@@ -14,7 +14,7 @@ NIJA's architecture provides two fundamental guarantees that ensure fair, indepe
   - Each user has separate trading threads
   - Position sizing is scaled to individual account balances
   - Risk management is applied per account
-  
+
 - **Code Architecture:** 
   - Separate broker dictionaries: `platform_brokers` vs `user_brokers`
   - Account type tagging on every broker instance
@@ -36,7 +36,7 @@ NIJA's architecture provides two fundamental guarantees that ensure fair, indepe
 - **Configuration:** User threads check `independent_trading` flag, not platform status
   - Users with `independent_trading: true` always get their own trading thread
   - Platform disconnect does not stop user trading threads
-  
+
 - **Code Architecture:**
   - User threads are started based on: `user.enabled AND user.independent_trading`
   - Platform broker status is not checked for user thread startup

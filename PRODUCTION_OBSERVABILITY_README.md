@@ -275,7 +275,7 @@ Each failure type shows:
    ```bash
    # Using Railway
    railway up
-   
+
    # Or Docker
    docker build -t nija-dashboard .
    docker run -p 5001:5001 nija-dashboard
@@ -288,7 +288,7 @@ Each failure type shows:
 
 3. **Configure API URL**:
    The dashboard uses `window.location.origin` by default. For cross-domain deployments, update the `API_BASE_URL` in the HTML file:
-   
+
    ```javascript
    const API_BASE_URL = 'https://your-api-domain.com';
    ```

@@ -41,7 +41,7 @@ All tiers include:
    # Coinbase
    COINBASE_API_KEY=organizations/YOUR_ORG/apiKeys/YOUR_KEY
    # Set COINBASE_API_SECRET privately to the complete downloaded PEM value.
-   
+
    # Kraken (optional)
    KRAKEN_PLATFORM_API_KEY=your-key
    KRAKEN_PLATFORM_API_SECRET=your-secret

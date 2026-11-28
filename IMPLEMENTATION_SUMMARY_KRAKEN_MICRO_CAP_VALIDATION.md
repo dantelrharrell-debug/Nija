@@ -390,7 +390,7 @@ Integration with existing docs:
    ```bash
    # In .env:
    LIVE_CAPITAL_VERIFIED=true
-   
+
    # Start bot
    ./start.sh
    ```

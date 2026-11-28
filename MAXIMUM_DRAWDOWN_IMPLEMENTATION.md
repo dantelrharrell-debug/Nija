@@ -99,7 +99,7 @@ if drawdown > max_drawdown:
 - **Dollar amounts** (profitability_monitor): Shows absolute capital at risk
   - Critical for micro accounts where every dollar matters
   - Useful for position sizing decisions
-  
+
 - **Percentages** (kpi_tracker): Shows relative performance
   - Useful for comparing different capital levels
   - Standard industry metric for risk assessment

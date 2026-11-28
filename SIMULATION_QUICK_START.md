@@ -192,7 +192,7 @@ This tool demonstrates that NIJA uses an **independent trading model**, NOT copy
    ```bash
    # Very small accounts
    python simulate_live_trade.py --platform-balance 100 --platform-trade-size 2
-   
+
    # Kraken's higher minimums
    python simulate_live_trade.py --exchange kraken
    ```

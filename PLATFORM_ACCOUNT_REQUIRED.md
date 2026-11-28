@@ -260,7 +260,7 @@ System will continue attempting connection and display warnings until Platform a
    ```bash
    # Local development
    cat .env | grep KRAKEN_PLATFORM
-   
+
    # Production (Railway)
    # Check Variables tab in Railway dashboard
    ```

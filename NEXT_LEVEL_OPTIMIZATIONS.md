@@ -76,23 +76,23 @@ Different playbooks for different market regimes. Instead of one-size-fits-all, 
 1. **STRONG_TREND** (ADX > 30)
    - Strategy: Trend Following
    - Characteristics: Wide stops, larger positions, let winners run
-   
+
 2. **WEAK_TREND** (ADX 20-30)
    - Strategy: Momentum Continuation
    - Characteristics: Moderate stops, scaled positions
-   
+
 3. **RANGING** (ADX < 20)
    - Strategy: Mean Reversion
    - Characteristics: Tight stops, quick profits, more positions
-   
+
 4. **CONSOLIDATION** (Low volatility, tight range)
    - Strategy: Breakout
    - Characteristics: Wait for volume, aggressive on confirmation
-   
+
 5. **VOLATILITY_EXPANSION** (Breaking out with volume)
    - Strategy: Breakout
    - Characteristics: Ride the expansion, trail stops
-   
+
 6. **HIGH_VOLATILITY** (Chaotic, high ATR)
    - Strategy: Mean Reversion (Counter-trend)
    - Characteristics: Smaller positions, wider stops

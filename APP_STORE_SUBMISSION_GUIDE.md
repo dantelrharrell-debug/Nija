@@ -434,11 +434,11 @@ and risk disclosures are shown. See included documentation for details.
    APP_STORE_MODE=false  # Disable review mode
    LIVE_CAPITAL_VERIFIED=false  # Still require explicit user enable
    DRY_RUN_MODE=false
-   
+
    # Production credentials
    KRAKEN_PLATFORM_API_KEY=your_production_key
    KRAKEN_PLATFORM_API_SECRET=your_production_secret
-   
+
    # Security
    JWT_SECRET_KEY=your_production_jwt_secret
    ALLOWED_ORIGINS=https://app.yourdomain.com

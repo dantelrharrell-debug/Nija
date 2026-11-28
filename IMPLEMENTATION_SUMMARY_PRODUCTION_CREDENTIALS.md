@@ -116,7 +116,7 @@ REQUIRED ACTIONS:
 1. **`config/yaml_user_loader.py`** (+11 lines)
    - Import environment detection
    - Auto-detect production in singleton function
-   
+
 2. **`config/individual_user_loader.py`** (+11 lines)
    - Import environment detection
    - Auto-detect production in singleton function
