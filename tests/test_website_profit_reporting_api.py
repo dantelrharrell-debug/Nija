@@ -5,6 +5,8 @@ import json
 import os
 import tempfile
 import unittest
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +29,7 @@ class WebsiteProfitApiTests(unittest.TestCase):
             "NIJA_PROFIT_DASHBOARD_TOKEN": self.token,
             "NIJA_PROFIT_EVIDENCE_HMAC_KEY": self.key,
             "NIJA_PROFIT_EVIDENCE_DIR": self.tempdir.name,
+            "NIJA_PROFIT_REPORTING_TIMEZONE": "UTC",
         }
         env = patch.dict(os.environ, config)
         env.start()
@@ -105,6 +108,107 @@ class WebsiteProfitApiTests(unittest.TestCase):
         self.assertIs(data["visitor_target_met"], True)
         self.assertNotIn("visitor-1", response.get_data(as_text=True))
         self.assertEqual(response.headers["Cache-Control"], "no-store, private")
+
+    def scoped_evidence(self, period, *, start, end, reconciled_at):
+        record = self.evidence(period)
+        scope = {
+            "timezone": "America/Los_Angeles",
+            "start_utc": start,
+            "end_utc": end,
+        }
+        record["reporting_window"] = scope
+        record["reconciliation"]["source_windows"] = deepcopy({
+            "analytics": scope,
+            "bank": scope,
+            "qualified_leads": scope,
+            "revenue_sources": dict.fromkeys(REVENUE_SOURCES, scope),
+            "cost_categories": dict.fromkeys(COST_CATEGORIES, scope),
+        })
+        record["reconciled_at"] = reconciled_at
+        self.save_evidence(record)
+        return record
+
+    def october_scope(self, reconciled_at="2026-11-01T07:00:00Z"):
+        return self.scoped_evidence(
+            "2026-10", start="2026-10-01T07:00:00Z", end="2026-11-01T07:00:00Z",
+            reconciled_at=reconciled_at,
+        )
+
+    def pacific_request(self, period, now):
+        with (
+            patch.dict(os.environ, {"NIJA_PROFIT_REPORTING_TIMEZONE": "America/Los_Angeles"}),
+            patch("website_profit_reporting_api.datetime", wraps=datetime) as clock,
+        ):
+            clock.now.return_value = datetime.fromisoformat(now)
+            return self.request(period=period).get_json()
+
+    def test_pacific_month_is_open_after_utc_month_rollover(self):
+        self.october_scope("2026-11-01T03:00:00Z")
+        result = self.pacific_request("2026-10", "2026-11-01T03:00:00+00:00")
+        self.assertEqual(result["status"], "reporting_period_open")
+        self.assertIsNone(result["net_profit_usd"])
+        result = self.pacific_request("2026-10", "2026-11-01T08:00:00+00:00")
+        self.assertFalse(result["source_status"]["reconciliation_complete"])
+        self.assertIsNone(result["net_profit_usd"])
+
+    def test_pacific_closed_period_requires_matching_signed_sources(self):
+        self.october_scope()
+        result = self.pacific_request("2026-10", "2026-11-01T07:00:00+00:00")
+        self.assertEqual(result["verification_status"], "VERIFIED")
+        self.assertEqual(result["reporting_window"]["end_utc"], "2026-11-01T07:00:00Z")
+        self.assertEqual(result["net_profit_per_visitor_usd"], "3.00")
+
+    def test_pacific_november_scope_crosses_daylight_saving_change(self):
+        self.scoped_evidence(
+            "2026-11", start="2026-11-01T07:00:00Z", end="2026-12-01T08:00:00Z",
+            reconciled_at="2026-12-01T08:00:00Z",
+        )
+        self.assertEqual(self.pacific_request(
+            "2026-11", "2026-12-01T07:59:59+00:00",
+        )["status"], "reporting_period_open")
+        self.assertEqual(self.pacific_request(
+            "2026-11", "2026-12-01T08:00:00+00:00",
+        )["verification_status"], "VERIFIED")
+
+    def test_wrong_or_missing_source_scope_hides_profit_and_counts(self):
+        for source in ("analytics", "bank", "qualified_leads", "revenue_sources", "cost_categories"):
+            with self.subTest(source=source):
+                record = self.october_scope()
+                windows = record["reconciliation"]["source_windows"]
+                if source in {"revenue_sources", "cost_categories"}:
+                    del windows[source][next(iter(windows[source]))]
+                else:
+                    windows[source] = dict(windows[source], start_utc="2026-10-01T00:00:00Z")
+                self.save_evidence(record)
+                result = self.pacific_request("2026-10", "2026-11-02T00:00:00+00:00")
+                self.assertEqual(result["reason"], "signed_reporting_scope_unverified")
+                self.assertIsNone(result["unique_visitors"])
+                self.assertIsNone(result["net_profit_usd"])
+
+    def test_legacy_evidence_only_certifies_as_utc_and_cannot_partially_upgrade(self):
+        record = self.evidence()
+        self.assertEqual(self.request().get_json()["reporting_window"]["timezone"], "UTC")
+        result = self.pacific_request(self.period, "2026-11-02T00:00:00+00:00")
+        self.assertEqual(result["reason"], "signed_reporting_scope_unverified")
+        self.assertIsNone(result["net_profit_usd"])
+        record["reconciliation"]["source_windows"] = None
+        self.save_evidence(record)
+        self.assertEqual(self.request().get_json()["reason"], "signed_reporting_scope_unverified")
+
+    def test_scope_is_signed_and_must_match_configured_timezone(self):
+        record = self.october_scope()
+        self.assertEqual(self.request(period="2026-10").get_json()["reason"],
+                         "signed_reporting_scope_unverified")
+        record["reporting_window"]["timezone"] = "UTC"
+        Path(self.tempdir.name, "2026-10.json").write_text(json.dumps(record), encoding="utf-8")
+        output = self.pacific_request("2026-10", "2026-11-02T00:00:00+00:00")
+        self.assertEqual(output["reason"], "signed_reconciliation_evidence_not_available")
+
+    def test_invalid_timezone_and_unrepresentable_month_fail_closed(self):
+        with patch.dict(os.environ, {"NIJA_PROFIT_REPORTING_TIMEZONE": "PST"}):
+            self.assertEqual(self.request().status_code, 503)
+        self.assertEqual(self.request(period="0000-01").status_code, 400)
+        self.assertEqual(self.request(period="9999-12").status_code, 400)
 
     def test_rejects_unknown_token(self):
         self.evidence()
