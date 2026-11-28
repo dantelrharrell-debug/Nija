@@ -16,6 +16,12 @@ logs, email, or the visitor form:
 - `NIJA_PROFIT_EVIDENCE_HMAC_KEY`: separate high-entropy HMAC key, >=32 characters.
 - `NIJA_PROFIT_EVIDENCE_DIR`: restricted private directory containing signed `YYYY-MM.json` files.
 
+Optional reporting policy: `NIJA_PROFIT_REPORTING_TIMEZONE` supports `UTC`
+(default, legacy-compatible) or `America/Los_Angeles`. Select Pacific only after
+matching authoritative provider and finance evidence exists. A Pacific instance
+will not certify an older signed file without explicit scope. No production setting is changed
+by the source update.
+
 Do not send these values to clients or public pages. Restrict directory ownership and
 permissions. Use encrypted, durable private storage and independent evidence custody.
 Render's default ephemeral filesystem is **not** sufficient for durable evidence custody.
@@ -49,6 +55,22 @@ deployment. Do not label those unavailable surfaces as verified.
 Each `YYYY-MM.json` must include:
 
 - `reporting_period`: same YYYY-MM as filename.
+- For all new Pacific evidence, a signed `reporting_window` object:
+  `timezone`, `start_utc`, and `end_utc` as whole-second ISO UTC strings
+  ending in `Z`. The interval is half-open and derived from local midnight
+  at each month boundary in the configured zone. For October 2026 Pacific,
+  use `2026-10-01T07:00:00Z` and `2026-11-01T07:00:00Z`. For November,
+  the closing boundary is `2026-12-01T08:00:00Z`.
+- With `reporting_window`, include signed `reconciliation.source_windows`:
+  `analytics` and `bank` each carry their reviewed window object;
+  `revenue_sources` and `cost_categories` map each covered key to its verified
+  window object. Include `qualified_leads` when certifying CRM counts.
+  All must exactly match the computed window, including zero-activity sources.
+  Build these attestations from corresponding authenticated input records,
+  not by copying the selected report window onto unmatched data. Missing
+  or conflicting windows suppress the figures. Existing envelopes without
+  any scope metadata retain UTC-only interpretation on a UTC instance;
+  new UTC envelopes may use the same explicit window format.
 - `revenue_events`: array of deduplicated `visit`, `qualified_lead`,
   `revenue`, and `refund` events, each with `event_id` and matching `period`.
   Revenue/refund events additionally contain `source` from

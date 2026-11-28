@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Blueprint, jsonify, request
 
@@ -24,6 +25,7 @@ from website_revenue_attribution import REVENUE_SOURCES
 _PERIOD = re.compile(r"^[0-9]{4}-(?:0[1-9]|1[0-2])$")
 _MAX_BYTES = 8 * 1024 * 1024
 _ROUTE = "/api/admin/website-profit"
+_REPORTING_TIMEZONES = frozenset({"UTC", "America/Los_Angeles"})
 
 
 def _canonical(data: dict[str, Any]) -> bytes:
@@ -82,8 +84,44 @@ def _load_signed_evidence(period: str, folder: str, signing_key: str) -> dict[st
     return envelope
 
 
+def _reporting_window(period: str, zone: ZoneInfo) -> tuple[dict[str, str], datetime]:
+    """Calculate one half-open month from local midnights, including DST."""
+    year, month = map(int, period.split("-"))
+    start = datetime(year, month, 1, tzinfo=zone).astimezone(timezone.utc)
+    end = datetime(year + (month == 12), month % 12 + 1, 1, tzinfo=zone).astimezone(timezone.utc)
+    return {
+        "timezone": zone.key,
+        "start_utc": start.isoformat().replace("+00:00", "Z"),
+        "end_utc": end.isoformat().replace("+00:00", "Z"),
+    }, end
+
+
+def _source_windows_match(
+    evidence: dict[str, Any], window: dict[str, str], *, verified_leads: bool
+) -> bool:
+    reconciliation = evidence.get("reconciliation")
+    sources = reconciliation.get("source_windows") if isinstance(reconciliation, dict) else None
+    # Legacy envelopes are UTC-only. Partial new metadata is never interpreted as legacy.
+    if "reporting_window" not in evidence:
+        return window["timezone"] == "UTC" and (
+            not isinstance(reconciliation, dict) or "source_windows" not in reconciliation
+        )
+    if evidence["reporting_window"] != window or not isinstance(sources, dict):
+        return False
+    expected = {"analytics", "bank", "revenue_sources", "cost_categories"}
+    if verified_leads or "qualified_leads" in sources:
+        expected.add("qualified_leads")
+    return (
+        set(sources) == expected
+        and sources.get("analytics") == window and sources.get("bank") == window
+        and ("qualified_leads" not in expected or sources.get("qualified_leads") == window)
+        and sources.get("revenue_sources") == dict.fromkeys(REVENUE_SOURCES, window)
+        and sources.get("cost_categories") == dict.fromkeys(COST_CATEGORIES, window)
+    )
+
+
 def _reconciliation_is_complete(
-    evidence: dict[str, Any], period: str, now: datetime
+    evidence: dict[str, Any], month_close: datetime, now: datetime
 ) -> bool:
     """Require explicit signed coverage for each source and the bank close."""
     reconciliation = evidence.get("reconciliation")
@@ -116,17 +154,10 @@ def _reconciliation_is_complete(
         return False
 
     try:
-        month_start = datetime.strptime(period, "%Y-%m").replace(tzinfo=timezone.utc)
-        next_month = datetime(
-            month_start.year + (month_start.month == 12),
-            month_start.month % 12 + 1,
-            1,
-            tzinfo=timezone.utc,
-        )
         reconciled = reconciled.astimezone(timezone.utc)
     except (OverflowError, ValueError):
         return False
-    return next_month <= reconciled <= now
+    return month_close <= reconciled <= now
 
 
 def create_profit_blueprint() -> Blueprint:
@@ -154,6 +185,22 @@ def create_profit_blueprint() -> Blueprint:
 
         period = request.args.get("period", "")
         if not isinstance(period, str) or not _PERIOD.fullmatch(period):
+            response = jsonify({"error": "valid_reporting_period_required", "format": "YYYY-MM"})
+            response.headers["Cache-Control"] = "no-store"
+            return response, 400
+
+        zone_name = os.getenv("NIJA_PROFIT_REPORTING_TIMEZONE", "UTC").strip()
+        try:
+            if zone_name not in _REPORTING_TIMEZONES:
+                raise ValueError
+            zone = ZoneInfo(zone_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            response = jsonify({"status": "unavailable", "reason": "profit_reporting_timezone_invalid"})
+            response.headers["Cache-Control"] = "no-store"
+            return response, 503
+        try:
+            window, month_close = _reporting_window(period, zone)
+        except (ValueError, OverflowError):
             response = jsonify({"error": "valid_reporting_period_required", "format": "YYYY-MM"})
             response.headers["Cache-Control"] = "no-store"
             return response, 400
@@ -194,6 +241,21 @@ def create_profit_blueprint() -> Blueprint:
         verified_revenue = certifications.get("provider_revenue_verified") is True
         verified_expenses = certifications.get("all_costs_verified") is True
         verified_leads = certifications.get("qualified_leads_verified") is True
+        if not _source_windows_match(evidence, window, verified_leads=verified_leads):
+            response = jsonify({
+                "status": "unverified",
+                "verification_status": "UNVERIFIED",
+                "reason": "signed_reporting_scope_unverified",
+                "reporting_period": period,
+                "reporting_window": window,
+                "unique_visitors": None,
+                "unique_qualified_leads": None,
+                "net_profit_usd": None,
+                "net_profit_per_visitor_usd": None,
+                "visitor_target_met": None,
+            })
+            response.headers["Cache-Control"] = "no-store, private"
+            return response, 200
         aggregates = evidence.get("aggregate_counts")
         if aggregates is not None and not isinstance(aggregates, dict):
             response = jsonify({"status": "invalid_evidence", "reporting_period": period})
@@ -202,9 +264,9 @@ def create_profit_blueprint() -> Blueprint:
         if aggregates is None:
             aggregates = {}
         now = datetime.now(timezone.utc)
-        period_closed = period < now.strftime("%Y-%m")
+        period_closed = month_close <= now
         reconciliation_complete = period_closed and _reconciliation_is_complete(
-            evidence, period, now
+            evidence, month_close, now
         )
         revenue_complete = (
             reconciliation_complete and verified_visitors and verified_revenue
@@ -260,6 +322,7 @@ def create_profit_blueprint() -> Blueprint:
         else:
             verification_status = "VERIFIED"
 
+        result["reporting_window"] = window
         result["verification_status"] = verification_status
         result["reconciliation_freshness"] = evidence.get("reconciled_at")
         result["target_usd_per_visitor"] = "1.00"
