@@ -12,6 +12,9 @@ This example shows a complete user journey from invitation to active trading.
 
 import logging
 from datetime import datetime
+from secrets import token_urlsafe
+
+from argon2 import PasswordHasher
 
 # Import NIJA components
 from alpha_onboarding import get_onboarding_system
@@ -57,7 +60,7 @@ def demo_alpha_user_onboarding():
     success, error, user_id = onboarding.register_user(
         invitation_code=invitation.code,
         email="alice@trader.com",
-        password_hash="hashed_password_here"
+        password_hash=PasswordHasher().hash(token_urlsafe(32))
     )
 
     if success:
