@@ -97,6 +97,8 @@ payload schema with `status: "diagnostic"` and only the `protected_source` diges
 that exact source, checks the canonical provider bindings, and samples the read-only providers at startup. It logs
 the individual outcomes using fixed field names and reasons. No raw exchange response is logged. A field with
 no specific failure reported is not certified by itself.
+The startup result distinguishes `recovery_diagnostics_sampled`,
+`recovery_diagnostics_incomplete`, and `recovery_diagnostics_unavailable`.
 
 The diagnostic signature never satisfies the release verifier. Even when all 13 samples validate, diagnostics do
 not publish an admission collector or authorize orders. To commission the release, replace the diagnostic

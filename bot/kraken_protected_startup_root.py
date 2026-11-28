@@ -27,7 +27,7 @@ from bot.kraken_canonical_startup_factory import (
     register_canonical_kraken_collector_startup,
 )
 from bot.kraken_startup_evidence_binding import (
-    ReviewedStartupBinding, protected_source_import_guard, report_recovery_observations,
+    RecoveryDiagnosticResult, protected_source_import_guard, report_recovery_observations,
     startup_binding_registration_state,
 )
 from bot.kraken_startup_receipts import (
@@ -214,16 +214,15 @@ def register_from_protected_root() -> str:
                 trust=trust, resolve_sources=resolve_sources, review_sources=review_sources,
             )
 
-            def recovery_factory(**canonical: Any) -> ReviewedStartupBinding:
+            def recovery_factory(**canonical: Any) -> RecoveryDiagnosticResult:
                 if not verify_owner_diagnostic_receipt(receipts, trust):
                     raise ProtectedStartupDenied("protected_diagnostic_receipt_denied")
                 binding = factory(**canonical)
                 if not verify_owner_diagnostic_receipt(receipts, trust):
                     raise ProtectedStartupDenied("protected_diagnostic_receipt_denied")
-                report_recovery_observations(binding)
-                return binding
+                return report_recovery_observations(binding)
 
-            # Its normal verifier rejects diagnostic receipts regardless of sample results.
+            # Diagnostics return only a status. The release verifier also rejects the diagnostic receipt.
             register_signed_kraken_startup(recovery_factory, trust)
             registered_here = True
             return "protected_startup_recovery_diagnostics_registered"

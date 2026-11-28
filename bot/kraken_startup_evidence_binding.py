@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 import logging
 import threading
 from types import MappingProxyType
@@ -19,6 +20,14 @@ OWNER_RELEASE = "owner_release"
 RECEIPTS = frozenset({"independent_review", "backup_restore", "broker_ledger_exits"})
 
 STARTUP_RECEIPT_SETS = (RECEIPTS, frozenset({OWNER_RELEASE}))
+
+
+class RecoveryDiagnosticResult(Enum):
+    """Status from a read-only sample, with no installable binding."""
+
+    SAMPLED = "recovery_diagnostics_sampled"
+    INCOMPLETE = "recovery_diagnostics_incomplete"
+    UNAVAILABLE = "recovery_diagnostics_unavailable"
 
 
 @dataclass(frozen=True)
@@ -93,7 +102,7 @@ def register_reviewed_startup_binding(
         _factory, _verify_receipts = factory, verify_receipts
 
 
-def report_recovery_observations(binding: ReviewedStartupBinding) -> None:
+def report_recovery_observations(binding: ReviewedStartupBinding) -> RecoveryDiagnosticResult:
     """Sample authenticated providers for logs without publishing an admission registry."""
     from bot.pretrade_attestation_validation_v452 import IndependentEvidenceRejected, REQUIRED
     from bot.pretrade_composition_bridge_v465 import make_collector
@@ -110,13 +119,16 @@ def report_recovery_observations(binding: ReviewedStartupBinding) -> None:
                 "KRAKEN_RECOVERY_OBSERVATION field=%s status=%s authorizes_orders=false",
                 field, exc.failure_reasons.get(field) or "no_field_failure_reported",
             )
+        return RecoveryDiagnosticResult.INCOMPLETE
     except Exception:
         LOGGER.warning("KRAKEN_RECOVERY_OBSERVATIONS status=observation_batch_unavailable authorizes_orders=false")
+        return RecoveryDiagnosticResult.UNAVAILABLE
     else:
         for field in REQUIRED:
             LOGGER.info(
                 "KRAKEN_RECOVERY_OBSERVATION field=%s status=validated authorizes_orders=false", field,
             )
+        return RecoveryDiagnosticResult.SAMPLED
 
 
 def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
@@ -137,6 +149,8 @@ def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
 
         failure_status = "startup_binding_factory_failed"
         binding = factory(manager=manager, strategy=strategy)
+        if type(binding) is RecoveryDiagnosticResult:
+            return binding.value
         failure_status = "reviewed_startup_binding_denied"
         if (type(binding) is not ReviewedStartupBinding
                 or binding.manager is not manager or binding.strategy is not strategy
