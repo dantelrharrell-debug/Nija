@@ -15,6 +15,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from types import ModuleType
 from typing import Any
 
@@ -171,6 +172,10 @@ def _capital_reporting(authority: Any) -> dict[str, Any]:
             or type(count) is not int or type(expected) is not int or not 0 < expected <= count
             or type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0
         ):
+            return unavailable
+        published_at = datetime.fromisoformat(publication["timestamp"])
+        expires_at = datetime.fromisoformat(publication["expiry"])
+        if not published_at <= datetime.now(timezone.utc) < expires_at:
             return unavailable
         if amount == 0:
             # Current coordinator snapshots can contain placeholder balances.

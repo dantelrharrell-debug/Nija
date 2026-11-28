@@ -141,7 +141,8 @@ class ShadowOutcomesTest(unittest.TestCase):
         self.assertFalse(report["authorizes_orders"])
         self.assertEqual(report["metrics"], {
             "status": "reconciled_sample", "net_realized_pnl_usd": "1", "execution_cost_usd": "2",
-            "realized_drawdown_usd": "1", "profit_factor": "2",
+            "realized_drawdown_usd": "1", "profit_factor": "2", "gross_realized_pnl_usd": "3",
+            "net_win_fraction": "0.5", "mean_net_pnl_usd_per_closed_lot": "0.5",
         })
         decision = OwnerDecision("test:a", "evaluation-1", "owner-fixture", report["snapshot_sha256"], "retain_for_review", 250)
         self.assertEqual(self.inbox.record_owner_decision(decision, authenticate=lambda _: False), "unverified")
@@ -157,6 +158,170 @@ class ShadowOutcomesTest(unittest.TestCase):
         report = evaluate(self.reopen(), "test:a")
         self.assertEqual(report["owner_decisions"], [])
         self.assertEqual(report["metrics"]["net_realized_pnl_usd"], "-1")
+
+    def test_realized_metrics_count_zero_net_as_nonwin_and_do_not_impute_unavailable(self):
+        from bot.kraken_offline_strategy_review import _realized_metrics
+
+        def row(gross, cost):
+            return {"economics": {
+                "gross_pnl_usd": gross, "execution_cost_usd": cost, "closed_at_epoch": 100,
+            }}
+
+        rows = [row("3", "1"), row("1", "1"), row("0", "1")]
+        metrics = _realized_metrics(rows)
+        self.assertEqual(metrics["gross_realized_pnl_usd"], "4")
+        self.assertEqual(metrics["net_win_fraction"], "0.333333")
+        self.assertEqual(metrics["mean_net_pnl_usd_per_closed_lot"], "0.333333")
+        self.assertEqual(metrics["realized_drawdown_usd"], "0")
+        for incomplete in ([], rows + [{"economics": None}]):
+            metrics = _realized_metrics(incomplete)
+            self.assertEqual(metrics["status"], "unavailable")
+            self.assertIsNone(metrics["gross_realized_pnl_usd"])
+            self.assertIsNone(metrics["net_win_fraction"])
+            self.assertIsNone(metrics["mean_net_pnl_usd_per_closed_lot"])
+
+    def test_strategy_rollup_uses_observed_lots_without_ranking_or_imputing(self):
+        from bot.kraken_offline_strategy_review import _observed_performance_by_strategy
+
+        rows = [
+            {"strategy": "z", "economics": None},
+            {"strategy": "a", "economics": {
+                "gross_pnl_usd": "3", "execution_cost_usd": "1", "closed_at_epoch": 100,
+            }},
+            {"strategy": "a", "economics": {
+                "gross_pnl_usd": "0", "execution_cost_usd": "1", "closed_at_epoch": 101,
+            }},
+        ]
+        a, z = _observed_performance_by_strategy(rows)
+        self.assertEqual((a["admitted_strategy_label"], z["admitted_strategy_label"]), ("a", "z"))
+        self.assertEqual(a["sample_count"], 2)
+        self.assertEqual(a["observed_metrics"]["net_realized_pnl_usd"], "1")
+        self.assertEqual(a["observed_metrics"]["realized_drawdown_usd"], "1")
+        self.assertEqual(z["observed_metrics"]["status"], "unavailable")
+        self.assertIsNone(z["observed_metrics"]["net_realized_pnl_usd"])
+
+    def test_offline_cutoff_keeps_future_and_same_second_lots_out_of_the_wrong_sample(self):
+        from bot.kraken_offline_strategy_review import evaluate
+        from bot.kraken_shadow_outcomes import CloseEconomics, OwnerDecision
+
+        for lot, epoch, gross in (("early", 99, "3"), ("boundary-a", 100, "3"),
+                                  ("boundary-b", 100, "3"), ("holdout", 101, "21")):
+            income = Decimal(gross)
+            self.proofs[("test:a", lot)] = close(
+                lot=lot, closing_fill_ids=(lot + "-fill",), net_return=(income - 1) / 100,
+                economics=CloseEconomics(Decimal("100"), income, Decimal("1"), epoch),
+            )
+            self.assertEqual(self.inbox.observe("test:a", lot), "accepted")
+        cut = 100
+        with patch.object(RegimePerformanceCalibrator, "record_closed_trade", autospec=True) as record:
+            report = evaluate(self.inbox, "test:a", training_through_epoch=cut)
+        self.assertEqual(record.call_count, 3)
+        self.assertTrue(all(call.kwargs["net_return"] == 0.02 for call in record.call_args_list))
+        self.assertEqual(report["recommendation_basis"], "training_samples_only")
+        chronology = report["chronological_review"]
+        self.assertEqual(chronology["status"], "separate_samples")
+        self.assertEqual(chronology["holdout_sample_count"], 1)
+        self.assertEqual(chronology["observed_holdout_metrics"]["net_realized_pnl_usd"], "20")
+        grouped = chronology["observed_holdout_performance_by_strategy"]
+        self.assertEqual(sum(group["sample_count"] for group in grouped), 1)
+        self.assertEqual(grouped[0]["observed_metrics"]["net_realized_pnl_usd"], "20")
+        self.assertEqual(chronology["candidate_comparison_status"], "not_evaluated")
+        self.assertIsNone(chronology["candidate_comparison"])
+        self.assertFalse(report["authorizes_orders"])
+
+        decision = OwnerDecision("test:a", "decision-for-cutoff", "fixture-owner",
+                                 report["snapshot_sha256"], "retain_for_review", 110)
+        self.assertEqual(self.inbox.record_owner_decision(decision, authenticate=lambda _: True), "recorded")
+        changed = evaluate(self.inbox, "test:a", training_through_epoch=cut - 1)
+        self.assertNotEqual(report["snapshot_sha256"], changed["snapshot_sha256"])
+        self.assertEqual(changed["owner_decisions"], [])
+        same = evaluate(self.inbox, "test:a", training_through_epoch=cut)
+        self.assertEqual(len(same["owner_decisions"]), 1)
+
+    def test_offline_missing_excursion_withholds_calibration_and_size_recommendations(self):
+        from bot.kraken_offline_strategy_review import evaluate
+        from bot.kraken_shadow_outcomes import CloseEconomics, _evidence_digest
+
+        for epoch in range(100, 122):
+            proof = close(
+                lot=f"lot-{epoch}", closing_fill_ids=(f"fill-{epoch}",),
+                economics=CloseEconomics(Decimal("100"), Decimal("3"), Decimal("1"), epoch),
+            )
+            self.assertEqual(self.put(proof), "accepted")
+        rows = self.inbox.evaluation_snapshot("test:a")
+        for cutoff, old_schema in ((None, 1), (121, 3)):
+            with self.subTest(cutoff=cutoff):
+                prior = {"scope": "test:a", "rows": rows, "evaluation_schema": old_schema}
+                if cutoff is not None:
+                    prior["training_through_epoch"] = cutoff
+                report = evaluate(self.inbox, "test:a", training_through_epoch=cutoff)
+                self.assertNotEqual(report["snapshot_sha256"], _evidence_digest(prior))
+                self.assertEqual(report["metrics"]["net_realized_pnl_usd"], "44")
+                self.assertFalse(report["authorizes_orders"])
+                self.assertEqual(len(report["recommendations"]), 1)
+                group = report["recommendations"][0]
+                self.assertEqual(group["sample_size"], 22)
+                self.assertEqual(group["score_status"], "unavailable_no_in_position_price_path")
+                for field in ("avg_mfe", "mfe_capture", "calibration_score",
+                              "position_size_multiplier", "confidence_threshold_delta", "freeze_recommended"):
+                    self.assertIsNone(group[field])
+                self.assertFalse(group["eligible_for_review"])
+
+    def test_offline_cutoff_is_explicit_and_empty_samples_remain_uncertified(self):
+        from bot.kraken_offline_strategy_review import evaluate
+
+        default = evaluate(self.inbox, "test:a")
+        self.assertEqual(default["recommendation_basis"], "in_sample_shadow_only")
+        self.assertEqual(default["chronological_review"]["status"], "cutoff_not_set")
+        report = evaluate(self.inbox, "test:a", training_through_epoch=100)
+        self.assertEqual(report["chronological_review"]["status"], "insufficient_dated_samples")
+        self.assertIsNone(report["chronological_review"]["observed_holdout_metrics"])
+        self.assertIsNone(report["chronological_review"]["observed_holdout_cost_by_regime"])
+        self.assertIsNone(report["chronological_review"]["candidate_comparison"])
+        self.assertFalse(report["authorizes_orders"])
+        for invalid in (True, 0, -1, "100", 100.5, 253402300800):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "training cutoff"):
+                evaluate(self.inbox, "test:a", training_through_epoch=invalid)
+
+    def test_cost_attribution_uses_only_admitted_dated_holdout_economics(self):
+        from bot.kraken_offline_strategy_review import evaluate
+        from bot.kraken_shadow_outcomes import CloseEconomics
+
+        cases = (
+            ("training", "trending", 100, "40", "0"),
+            ("turns-negative", "trending", 101, "1.2", "2.5"),
+            ("break-even", "trending", 102, "1", "1"),
+            ("gross-loss", "ranging", 103, "-2", "0.5"),
+            ("still-positive", "ranging", 104, "5", "1"),
+        )
+        for lot, regime, stamp, gross, cost in cases:
+            gross, cost = Decimal(gross), Decimal(cost)
+            self.assertEqual(self.put(close(
+                lot=lot, regime=regime, closing_fill_ids=(lot + "-fill",),
+                net_return=(gross - cost) / 100,
+                economics=CloseEconomics(Decimal("100"), gross, cost, stamp),
+            )), "accepted")
+        self.assertEqual(self.put(close(lot="undated", regime="trending")), "accepted")
+        # A different account must have no influence on this report.
+        self.assertEqual(self.put(close(
+            "test:b", economics=CloseEconomics(Decimal("100"), Decimal("3"), Decimal("1"), 105),
+        )), "accepted")
+        report = evaluate(self.reopen(), "test:a", training_through_epoch=100)
+        chronology = report["chronological_review"]
+        self.assertEqual(chronology["holdout_sample_count"], 4)
+        self.assertEqual(chronology["lots_without_economics"], 1)
+        self.assertIsNone(report["metrics"]["net_realized_pnl_usd"])
+        self.assertEqual(chronology["observed_holdout_cost_by_regime"], [
+            {"admitted_regime_label": "ranging", "gross_realized_pnl_usd": "3",
+             "recorded_execution_cost_usd": "1.5", "net_realized_pnl_usd": "1.5",
+             "sample_count": 2, "gross_winner_lots_erased_by_cost": 0},
+            {"admitted_regime_label": "trending", "gross_realized_pnl_usd": "2.2",
+             "recorded_execution_cost_usd": "3.5", "net_realized_pnl_usd": "-1.3",
+             "sample_count": 2, "gross_winner_lots_erased_by_cost": 2},
+        ])
+        self.assertEqual(chronology["slippage_status"], "unavailable_no_benchmark_evidence")
+        self.assertIsNone(chronology["candidate_comparison"])
+        self.assertFalse(report["authorizes_orders"])
 
     def test_reject_wrong_or_missing_cost_reconciliation(self):
         from bot.kraken_shadow_outcomes import CloseEconomics

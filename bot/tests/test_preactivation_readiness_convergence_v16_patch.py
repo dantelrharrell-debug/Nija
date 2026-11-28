@@ -4,6 +4,7 @@ import importlib
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from types import ModuleType, SimpleNamespace
 import logging
 
@@ -220,11 +221,13 @@ def test_retries_activation_after_strategy_publication(monkeypatch, caplog):
 def test_capital_reporting_does_not_treat_missing_or_placeholder_as_verified_zero():
     v16 = _module()
     assert v16._capital_reporting(SimpleNamespace())["real_capital_usd"] is None
-    stamp = "2026-11-27T16:00:00+00:00"
+    now = datetime.now(timezone.utc)
+    stamp = (now - timedelta(seconds=30)).isoformat()
+    expiry = (now + timedelta(seconds=60)).isoformat()
     snapshot = {
         "real_capital": 0.0, "broker_count": 1, "expected_brokers": 1,
         "last_updated": stamp, "is_fresh": True,
-        "snapshot_publication": {"timestamp": stamp, "accepted": False, "stale": False},
+        "snapshot_publication": {"timestamp": stamp, "expiry": expiry, "accepted": False, "stale": False},
     }
     authority = SimpleNamespace(get_snapshot=lambda: snapshot)
     report = v16._capital_reporting(authority)
@@ -237,4 +240,15 @@ def test_capital_reporting_does_not_treat_missing_or_placeholder_as_verified_zer
     assert v16._capital_reporting(authority)["real_capital_usd"] is None
     snapshot["expected_brokers"] = 1
     snapshot["snapshot_publication"]["timestamp"] = "different"
+    assert v16._capital_reporting(authority)["real_capital_usd"] is None
+
+    publication = snapshot["snapshot_publication"]
+    publication["timestamp"] = stamp
+    for invalid_expiry in (None, "invalid", (now - timedelta(seconds=1)).isoformat()):
+        publication["expiry"] = invalid_expiry
+        assert v16._capital_reporting(authority)["real_capital_usd"] is None
+
+    publication["expiry"] = expiry
+    future = (now + timedelta(seconds=15)).isoformat()
+    snapshot["last_updated"] = publication["timestamp"] = future
     assert v16._capital_reporting(authority)["real_capital_usd"] is None
