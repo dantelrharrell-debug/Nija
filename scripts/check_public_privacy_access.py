@@ -29,18 +29,19 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def _read_status(url: str, method: str, limit: int = 0) -> tuple[int, bytes]:
+def _read_status(url: str, method: str, limit: int = 0, *,
+                 range_request: bool = False) -> tuple[int, bytes]:
     headers = {"User-Agent": "NIJA-Privacy-ReadOnly-Acceptance/1.0",
                "Cache-Control": "no-cache"}
-    if method == "GET" and limit == 16:
+    if method == "GET" and range_request:
         headers["Range"] = "bytes=0-15"
     request = urllib.request.Request(url, method=method, headers=headers)
     try:
         with OPENER.open(request, timeout=12) as response:
-            return response.status, response.read(limit)
+            return response.status, response.read(limit) if limit else b""
     except urllib.error.HTTPError as error:
         with error:
-            return error.code, error.read(limit)
+            return error.code, error.read(limit) if limit else b""
 
 
 def _visible(source: bytes) -> str:
@@ -77,10 +78,11 @@ def evaluate_deletion(status: int, body: bytes) -> tuple[bool, str]:
     return True, "deletion_content_candidate_only"
 
 
-def evaluate_private(head: int, range_get: int) -> tuple[bool, str]:
-    if head in DENIED and range_get in DENIED:
+def evaluate_private(head: int, ordinary_get: int, range_get: int) -> tuple[bool, str]:
+    statuses = (head, ordinary_get, range_get)
+    if all(status in DENIED for status in statuses):
         return True, "anonymous_access_denied"
-    if head in (200, 206) or range_get in (200, 206):
+    if any(200 <= status < 300 for status in statuses):
         return False, "anonymous_asset_accessible"
     return False, "asset_access_unverified"
 
@@ -138,8 +140,9 @@ def verify(site: str, manifest: Path | None, free_path: str | None) -> dict[str,
         for url in urls:
             try:
                 head, _ = _read_status(url, "HEAD")
-                partial, _ = _read_status(url, "GET", 16)
-                ok, _ = evaluate_private(head, partial)
+                ordinary, _ = _read_status(url, "GET")
+                partial, _ = _read_status(url, "GET", range_request=True)
+                ok, _ = evaluate_private(head, ordinary, partial)
             except (OSError, TimeoutError, ValueError):
                 ok = False
             private["denied" if ok else "failures"] += 1
@@ -149,7 +152,7 @@ def verify(site: str, manifest: Path | None, free_path: str | None) -> dict[str,
         url = _same_origin(site, free_path)
         try:
             head, _ = _read_status(url, "HEAD")
-            partial, prefix = _read_status(url, "GET", 16)
+            partial, prefix = _read_status(url, "GET", 16, range_request=True)
             ok, reason = evaluate_free(head, partial, prefix)
         except (OSError, TimeoutError, ValueError):
             ok, reason = False, "free_asset_request_failed"

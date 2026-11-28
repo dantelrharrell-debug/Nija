@@ -37,9 +37,10 @@ class PublicAcceptanceTests(unittest.TestCase):
         self.assertTrue(evaluate_deletion(
             200, b"Delete Your Account. Support. This does not cover all data.")[0])
 
-    def test_private_requires_both_methods(self):
-        self.assertTrue(evaluate_private(403, 404)[0])
-        for statuses in ((200, 403), (403, 206), (302, 302), (405, 416)):
+    def test_private_requires_all_three_requests(self):
+        self.assertTrue(evaluate_private(403, 404, 410)[0])
+        for statuses in ((200, 403, 403), (403, 200, 403), (403, 403, 206),
+                         (403, 204, 403), (403, 302, 403), (405, 403, 416)):
             with self.subTest(statuses=statuses):
                 self.assertFalse(evaluate_private(*statuses)[0])
 
@@ -68,7 +69,7 @@ class PublicAcceptanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "private.json")
             path.write_text(json.dumps(["/private/owner-not-for-public.mp4"]))
-            def stub(url, method, limit=0):
+            def stub(url, method, limit=0, *, range_request=False):
                 if url.endswith("/privacy-policy"):
                     return 200, b"Privacy retention account request. Effective 2026-11-27"
                 if url.endswith("/account-deletion"):
@@ -84,6 +85,31 @@ class PublicAcceptanceTests(unittest.TestCase):
             self.assertEqual(result["private_assets"]["failures"], 1)
             self.assertNotIn("owner-not-for-public", json.dumps(result))
             self.assertEqual(result["authorized_purchaser_access"], "not_tested")
+
+    def test_ordinary_get_exposure_detected_without_reading_paid_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "private.json")
+            path.write_text(json.dumps(["/private/synthetic.mp4"]))
+            requests = []
+
+            def stub(url, method, limit=0, *, range_request=False):
+                if url.endswith("/privacy-policy"):
+                    return 200, b"Privacy retention account request. Effective 2026-11-27"
+                if url.endswith("/account-deletion"):
+                    return 200, b"Delete account support. This does not cover other data."
+                if url.endswith("/NIJA_Starter_Kit.pdf"):
+                    return (206, b"%PDF-1.7") if range_request else (200, b"")
+                requests.append((method, limit, range_request))
+                return (403, b"") if method == "HEAD" or range_request else (200, b"")
+
+            with patch("scripts.check_public_privacy_access._read_status",
+                       side_effect=stub):
+                result = verify("https://nijaaitrading.com", path,
+                                "/NIJA_Starter_Kit.pdf")
+            self.assertEqual(requests, [("HEAD", 0, False), ("GET", 0, False),
+                                        ("GET", 0, True)])
+            self.assertEqual(result["outcome"], "fail")
+            self.assertEqual(result["private_assets"]["failures"], 1)
 
     def test_missing_asset_manifest_is_partial_only(self):
         with patch("scripts.check_public_privacy_access._read_status",

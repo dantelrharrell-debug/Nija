@@ -30,7 +30,7 @@ To also verify private paid files and the free PDF, supply an **owner-held local
 python scripts/check_public_privacy_access.py --private-manifest /private/paid-paths.json --free-url /VERIFIED_FREE_PATH/NIJA_Starter_Kit.pdf
 ```
 
-The manifest example `["/private/synthetic.mp4"]` is fictitious; never enter real paths in a public PR. The script sends bounded GET/HEAD requests, refuses redirects, records only aggregate success/failure, and treats anonymous 200/206 responses to paid content as a failure. For public files it requires denial of both HEAD and Range GET, while the free PDF must remain readable and have a PDF signature.
+The manifest example `["/private/synthetic.mp4"]` is fictitious; never enter real paths in a public PR. The script sends bounded GET/HEAD requests, refuses redirects, records only aggregate success/failure, and treats any anonymous 2xx response to paid content as a failure. For paid/internal files it requires denial of HEAD, ordinary GET and Range GET, without reading paid response bodies. The free PDF must remain readable and have a PDF signature.
 
 Exit code `0`: all *public-only* probes passed; purchaser entitlement remains UNTESTED. Exit `1`: failed public test. Exit `2`: partial input or result; do not certify. Provider failures and uncertain redirects fail closed.
 
