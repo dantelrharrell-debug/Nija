@@ -1,6 +1,5 @@
 # Public crawl policy. Authentication, not robots.txt, protects private resources.
 User-agent: *
-Allow: /
 Disallow: /dashboard
 Disallow: /admin
 Disallow: /founder-dashboard
