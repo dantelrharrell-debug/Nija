@@ -14,6 +14,9 @@ class ProfitProbeTests(unittest.TestCase):
         self.assertEqual(classify_profit_probe(200, {"net_profit_usd":1}), "failed")
     def test_wrong_401_fails(self):
         self.assertEqual(classify_profit_probe(401, {}), "failed")
+    def test_401_with_unexpected_response_fields_fails(self):
+        payload = {"error": "administrator_authorization_required", "net_profit_usd": "100"}
+        self.assertEqual(classify_profit_probe(401, payload), "failed")
 
 if __name__ == "__main__":
     unittest.main()
