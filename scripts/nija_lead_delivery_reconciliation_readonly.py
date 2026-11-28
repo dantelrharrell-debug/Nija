@@ -17,7 +17,9 @@ from typing import Callable, Mapping
 
 REVIEW_CATEGORIES = frozenset(("HTTP_422_email", "HTTP_422_phone", "HTTP_422_review"))
 LEAD_STATES = frozenset(("synced", "pending", "needs_review"))
-FORWARD_STATES = frozenset(("pending", "sending", "sent"))
+# "sent" records webhook transport acceptance, not downstream delivery.
+# "uncertain" remains held for reconciliation; the audit never retries it.
+FORWARD_STATES = frozenset(("pending", "sending", "sent", "uncertain"))
 
 
 
