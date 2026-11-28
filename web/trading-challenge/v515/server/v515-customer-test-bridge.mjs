@@ -31,7 +31,8 @@ export function createTiq72CustomerTestBridge({
     // browser's submitted age, user ID, report ID, or payment session.
     const value=await verifyBuyer(req);
     if(value?.active!==true || value.adultVerified!==true ||
-       !OWNER.test(value.ownerId??"") || !CSRF.test(value.csrfToken??""))
+       typeof value.ownerId!=="string" || !OWNER.test(value.ownerId) ||
+       typeof value.csrfToken!=="string" || !CSRF.test(value.csrfToken))
       return null;
     return {ownerId:value.ownerId,csrfToken:value.csrfToken};
   };
@@ -49,6 +50,19 @@ export function createTiq72CustomerTestBridge({
         return SEND(res,403,{error:"request_not_authorized"});
       if(url.pathname==="/sandbox/checkout" && !url.search)
         return await checkout(req,res);
+      if(url.pathname==="/sandbox/checkout/session"){
+        if(req.method!=="GET") return SEND(res,405,{error:"method_not_allowed"});
+        if(url.search) return SEND(res,400,{error:"invalid_checkout_session_request"});
+        // Bootstrap only a browser-initiated same-origin JSON request. A
+        // direct navigation or same-site sibling is not a token recipient.
+        if(req.headers?.["sec-fetch-site"]!=="same-origin"||req.headers?.accept!=="application/json")
+          return SEND(res,403,{error:"request_not_authorized"});
+        if(!await takeRateLimit(req,"authenticated_commerce"))
+          return SEND(res,429,{error:"rate_limited"});
+        const buyer=await authenticate(req);
+        if(!buyer) return SEND(res,401,{error:"eligible_sign_in_required"});
+        return SEND(res,200,{csrfToken:buyer.csrfToken});
+      }
       if(url.pathname!=="/sandbox/report/return")
         return SEND(res,404,{error:"not_found"});
       if(req.method!=="GET") return SEND(res,405,{error:"method_not_allowed"});
