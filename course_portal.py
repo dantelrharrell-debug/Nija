@@ -21,9 +21,10 @@ from urllib.parse import quote
 import requests
 from flask import Blueprint, current_app, jsonify, make_response, redirect, request, send_file
 from sqlalchemy import Boolean, Column, DateTime, Integer, LargeBinary, MetaData, String, Table, Text, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from course_fulfillment import expected_course_link, CourseLedger, reconcile_session
 from course_fulfillment import expected_course_identity, expected_course_link, CourseLedger, reconcile_session
 from course_private_video import configured_catalog, video_response
 
@@ -327,35 +328,28 @@ class PortalStore:
     def consume(self, token):
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         with self.engine.begin() as conn:
-            row = conn.execute(select(self.tokens).where(self.tokens.c.token_hash == token_hash)).first()
-            if not row:
-                return None
-            data = dict(row._mapping)
-            expires = data["expires_at"]
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=timezone.utc)
-            if data["consumed_at"] or expires <= utcnow():
-                return None
-            updated = conn.execute(update(self.tokens).where(
-                (self.tokens.c.token_hash == token_hash) &
-                self.tokens.c.consumed_at.is_(None)
-            ).values(consumed_at=utcnow()))
-            return data["session_id"] if updated.rowcount == 1 else None
+            now = utcnow()
+            claimed = conn.execute(update(self.tokens).where(
+                self.tokens.c.token_hash == token_hash,
+                self.tokens.c.consumed_at.is_(None),
+                self.tokens.c.expires_at > now,
+            ).values(consumed_at=now).returning(self.tokens.c.session_id))
+            return claimed.scalar_one_or_none()
 
     def allow_recovery(self, email, ip):
         window = int(time.time() // 3600)
         key = hashlib.sha256((email + "|" + ip + "|" + str(window)).encode()).hexdigest()
         with self.engine.begin() as conn:
-            row = conn.execute(select(self.ratelimits).where(self.ratelimits.c.key == key)).first()
-            if row is None:
-                conn.execute(insert(self.ratelimits).values(key=key, attempts=1, updated_at=utcnow()))
-                return True
-            attempts = row._mapping["attempts"]
-            if attempts >= 3:
-                return False
-            conn.execute(update(self.ratelimits).where(self.ratelimits.c.key == key).values(
-                attempts=attempts+1, updated_at=utcnow()))
-            return True
+            # Both supported billing databases serialize competing inserts on the key.
+            upsert = {"postgresql": pg_insert, "sqlite": sqlite_insert}[conn.dialect.name]
+            now = utcnow()
+            statement = upsert(self.ratelimits).values(key=key, attempts=1, updated_at=now)
+            result = conn.execute(statement.on_conflict_do_update(
+                index_elements=[self.ratelimits.c.key],
+                set_={"attempts": self.ratelimits.c.attempts + 1, "updated_at": now},
+                where=self.ratelimits.c.attempts < 3,
+            ).returning(self.ratelimits.c.key))
+            return result.scalar_one_or_none() is not None
 
 
 def _enabled(app):
@@ -507,7 +501,8 @@ def register_course_portal(app, billing_store):
         return _layout("Course Access", '<div class="card"><p>Already purchased? '
             'Enter the email used at checkout to receive a secure access link.</p>'
             '<form method="post" action="/course-portal/recover">'
-            '<input type="email" name="email" autocomplete="email" required maxlength="320">'
+            '<label for="recovery-email">Checkout email</label> '
+            '<input id="recovery-email" type="email" name="email" autocomplete="email" required maxlength="320">'
             '<button type="submit">Email My Access Link</button></form></div>')
 
     @portal.post("/recover")
@@ -535,6 +530,9 @@ def register_course_portal(app, billing_store):
 
     @portal.get("/claim")
     def claim():
+        # Mail clients can inspect link metadata before the purchaser opens it.
+        if request.method == "HEAD":
+            return "", 204
         token = request.args.get("token", "")
         if not token or len(token) > 128:
             return _layout("Access Link Invalid", "<p>Request a new access link from the course portal.</p>"), 403
