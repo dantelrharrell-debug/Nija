@@ -77,11 +77,17 @@ class KrakenSubmissionJournal:
             raise SubmissionDenied("submission journal account scope mismatch")
 
     def _check_resolution_links(self, db: sqlite3.Connection) -> None:
-        if db.execute(
-            """SELECT 1 FROM submission_resolution AS r WHERE NOT EXISTS
-               (SELECT 1 FROM submission AS s WHERE s.intent_id=r.intent_id) LIMIT 1"""
-        ).fetchone():
+        invalid = db.execute(
+            """SELECT s.intent_id FROM submission_resolution AS r
+               LEFT JOIN submission AS s ON s.intent_id=r.intent_id
+               WHERE s.intent_id IS NULL OR typeof(s.broker_order_id) != 'text'
+                  OR trim(s.broker_order_id, char(9,10,11,12,13,32)) = ''
+               LIMIT 1"""
+        ).fetchone()
+        if invalid == (None,):
             raise SubmissionDenied("submission journal contains terminal evidence without a reservation")
+        if invalid is not None:
+            raise SubmissionDenied("submission journal contains terminal evidence without a broker order reference")
 
     def _client_order_id(self, intent_id: str) -> str:
         namespace = uuid.uuid5(uuid.NAMESPACE_URL, f"nija:kraken:{self.account_scope}")

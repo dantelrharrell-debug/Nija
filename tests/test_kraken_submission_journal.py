@@ -114,6 +114,30 @@ def test_terminal_reconciliation_releases_fence_but_retains_replay_protection(tm
     restarted.reserve("next")
 
 
+@pytest.mark.parametrize("stored_order_id", [None, "", "   "])
+def test_restored_terminal_record_requires_stored_order_reference(tmp_path, stored_order_id):
+    path = tmp_path / "submission.db"
+    initialize_journal(path, SCOPE)
+    journal = KrakenSubmissionJournal(path, SCOPE)
+    journal.reserve("existing")
+    journal.record_ack("existing", "order")
+    journal.reconcile_submission("existing", verify_terminal_order=reconciliation)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("UPDATE submission SET broker_order_id=?", (stored_order_id,))
+
+    restarted = KrakenSubmissionJournal(path, SCOPE)
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a broker order reference"):
+        restarted.unresolved_count()
+    with pytest.raises(SubmissionDenied, match="terminal evidence without a broker order reference"):
+        restarted.reserve("next")
+
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("SELECT intent_id, broker_order_id FROM submission").fetchall() == [
+            ("existing", stored_order_id)
+        ]
+        assert db.execute("SELECT intent_id FROM submission_resolution").fetchall() == [("existing",)]
+
+
 @pytest.mark.parametrize("change", [
     {"broker_order_id": "different"},
     {"terminal_status": "open"},
