@@ -38,3 +38,8 @@ Send2Trash==1.8.3
 stack-data==0.6.3
 terminado==0.18.1
 traitlets==5.14.3
+
+# Keep nbdime Git dependencies in the notebook tooling profile.
+gitdb==4.0.12
+GitPython==3.2.1
+smmap==5.0.2

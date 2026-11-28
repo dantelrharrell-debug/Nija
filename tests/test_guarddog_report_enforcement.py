@@ -118,12 +118,21 @@ def test_all_ci_requirement_files_are_supported():
         assert checker.required_packages(ROOT / filename)
 
 
+def test_notebook_git_dependencies_remain_pinned_and_scanned_outside_runtime():
+    runtime = checker.required_packages(ROOT / "requirements.txt")
+    notebooks = checker.required_packages(ROOT / "requirements-notebook.txt")
+    notebook_git_packages = {"gitpython", "gitdb", "smmap"}
+    assert notebook_git_packages.isdisjoint(runtime)
+    assert notebook_git_packages <= notebooks.keys()
+
+
 def test_workflow_preserves_status_and_requires_coverage():
     workflow = yaml.safe_load((ROOT / ".github/workflows/artifact-scanning.yml").read_text())
     job = workflow["jobs"]["python-package-scan"]
     assert job["env"]["NIJA_DEFER_RUNTIME_SITE_HOOKS"] == "1"
     step = next(s for s in job["steps"] if s.get("name") == "Scan for malicious packages with PyPI Guardian")
     assert job["strategy"]["max-parallel"] == 1
+    assert "requirements-notebook.txt" in job["strategy"]["matrix"]["requirements"]
     assert step["env"]["GUARDDOG_PARALLELISM"] == "1"
     assert "guarddog==3.2.0" in step["run"]
     assert 'else\n  guarddog_status=$?\nfi' in step["run"]
