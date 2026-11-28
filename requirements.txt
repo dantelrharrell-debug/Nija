@@ -125,7 +125,7 @@ qrcode==8.2
 # WebSocket support for real-time mobile updates
 python-socketio==5.18.0
 Flask-SocketIO==5.7.2
-eventlet==0.40.3
+simple-websocket==1.1.0
 
 # Google API client for Play Store IAP verification
 google-auth==2.27.0

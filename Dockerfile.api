@@ -45,6 +45,6 @@ RUN chmod +x /app/docker-entrypoint.sh
 # Run with entrypoint for database initialization
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Default command: Run mobile backend server with Socket.IO support
-# For WebSocket support, use eventlet worker
-CMD ["gunicorn", "mobile_backend_server:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "eventlet", "--timeout", "120"]
+# Match the application's explicit Socket.IO threading mode. One worker
+# keeps polling and WebSocket requests in the same Engine.IO process.
+CMD ["gunicorn", "mobile_backend_server:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "gthread", "--threads", "32", "--timeout", "120"]
