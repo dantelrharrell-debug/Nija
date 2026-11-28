@@ -13,6 +13,7 @@ from typing import Any
 COUNTS = ("unique_visitors", "qualified_leads", "waitlist_signups", "course_purchases")
 MONEY = ("attributable_revenue_usd", "attributable_costs_usd")
 FIELDS = COUNTS + MONEY
+WEEKLY_UNIQUE_FIELDS = ("unique_visitors", "qualified_leads", "waitlist_signups")
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -51,27 +52,32 @@ def summarize_week(days: list[dict[str, Any]], end: date, weekly_unique_counts: 
     if not all(item.get("certified") is True and item.get("source_reconciled") is True
                and item.get("analytics_consent_verified") is True for item in days):
         return result
-    totals = {}
+    totals: dict[str, Decimal] = {}
+    lower_bounds: dict[str, Decimal] = {}
     for field in FIELDS:
-        values = [_decimal(item.get(field)) for item in days]
-        if any(value is None or value < 0 for value in values):
+        parsed = [_decimal(item.get(field)) for item in days]
+        values = [value for value in parsed if value is not None and value >= 0]
+        if len(values) != len(days):
             continue
         if field in COUNTS and any(value != value.to_integral_value() for value in values):
             continue
         totals[field] = sum(values, Decimal(0))
+        if field in WEEKLY_UNIQUE_FIELDS:
+            lower_bounds[field] = max(values)
         result[field] = int(totals[field]) if field in COUNTS else str(totals[field])
-    # Daily unique counts are not additive across a week.
-    for field in ("unique_visitors", "qualified_leads", "waitlist_signups"):
-        daily_counts_valid = field in totals
-        totals.pop(field, None)
+    # The union can be no smaller than any day or larger than the sum of all days.
+    # These are consistency checks; the deduplicated weekly count still needs its own evidence.
+    for field in WEEKLY_UNIQUE_FIELDS:
+        upper_bound = totals.pop(field, None)
         result[field] = None
-        if (daily_counts_valid and isinstance(weekly_unique_counts, dict)
+        if (upper_bound is not None and isinstance(weekly_unique_counts, dict)
                 and weekly_unique_counts.get("period_start") == result["start"]
                 and weekly_unique_counts.get("period_end") == result["end"]
                 and weekly_unique_counts.get("certified") is True
                 and weekly_unique_counts.get("source_reconciled") is True):
             value = _decimal(weekly_unique_counts.get(field))
-            if value is not None and value >= 0 and value == value.to_integral_value():
+            if (value is not None and lower_bounds[field] <= value <= upper_bound
+                    and value == value.to_integral_value()):
                 totals[field] = value
                 result[field] = int(value)
     if len(totals) == len(FIELDS):
