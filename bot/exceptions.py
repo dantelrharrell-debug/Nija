@@ -132,6 +132,3 @@ class ReconciliationGateError(ExecutionError):
     trading is permitted to resume.
     """
     pass
-
-
-

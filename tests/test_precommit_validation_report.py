@@ -96,6 +96,15 @@ class PrecommitReportTests(unittest.TestCase):
             execute.return_value = subprocess.CompletedProcess([], 1, output, b"PRIVATE_DETAIL")
             self.assertEqual(formatting_paths(), [])
 
+    def test_large_hook_patch_still_reports_a_bounded_sample(self):
+        paths = b"".join(f"docs/file-{i:04}.md".encode() + b"\0" for i in range(300))
+        with patch("scripts.run_precommit_validation.subprocess.run") as execute:
+            execute.return_value = subprocess.CompletedProcess([], 0, paths, b"")
+            actual = formatting_paths()
+        self.assertEqual(len(actual), 250)
+        self.assertEqual(actual[0], "docs/file-0000.md")
+        self.assertEqual(actual[-1], "docs/file-0249.md")
+
     def test_reported_failure_with_zero_exit_is_rejected(self):
         status, _, _ = self.invoke(output="Detect secrets...Failed\n")
         self.assertEqual(status, 2)

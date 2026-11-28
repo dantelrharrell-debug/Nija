@@ -38,7 +38,7 @@ def display_feature_flag_banner():
     This provides immediate visibility into the bot's configuration.
     """
     import os
-    
+
     # Check for dry-run mode FIRST and display banner if enabled
     dry_run_str = os.getenv("DRY_RUN_MODE", "false").lower()
     dry_run_mode = dry_run_str in ("true", "1", "yes")
@@ -47,7 +47,7 @@ def display_feature_flag_banner():
         logger.info("ℹ️ Feature flag banner already emitted for this process; skipping duplicate output")
         return
     os.environ["NIJA_FEATURE_FLAGS_BANNER_EMITTED"] = "1"
-    
+
     if dry_run_mode:
         # Import and display dry-run banner
         try:
@@ -55,51 +55,51 @@ def display_feature_flag_banner():
             print_dry_run_startup_banner()
         except ImportError:
             logger.warning("⚠️ Could not import dry_run_engine for banner display")
-    
+
     # Display institutional disclaimer
     print_validation_banner()
-    
+
     # Import and check all feature flags
     flags = {}
-    
+
     # Dry-Run Mode (Paper Trading)
     flags['Dry-Run Mode (Paper Trading)'] = dry_run_mode
-    
+
     # Profit Confirmation Feature
     try:
         from config.feature_flags import PROFIT_CONFIRMATION_AVAILABLE
         flags['Profit Confirmation Logging'] = PROFIT_CONFIRMATION_AVAILABLE
     except ImportError:
         flags['Profit Confirmation Logging'] = False
-    
+
     # Execution Intelligence
     try:
         from bot.execution_engine import EXECUTION_INTELLIGENCE_AVAILABLE
         flags['Execution Intelligence'] = EXECUTION_INTELLIGENCE_AVAILABLE
     except (ImportError, AttributeError):
         flags['Execution Intelligence'] = False
-    
+
     # Hard Controls / Live Capital Verified
     try:
         from bot.execution_engine import HARD_CONTROLS_AVAILABLE
         flags['Hard Controls (LIVE_CAPITAL_VERIFIED)'] = HARD_CONTROLS_AVAILABLE
     except (ImportError, AttributeError):
         flags['Hard Controls (LIVE_CAPITAL_VERIFIED)'] = False
-    
+
     # Trade Ledger
     try:
         from bot.execution_engine import TRADE_LEDGER_ENABLED
         flags['Trade Ledger Database'] = TRADE_LEDGER_ENABLED
     except (ImportError, AttributeError):
         flags['Trade Ledger Database'] = False
-    
+
     # Fee-Aware Mode
     try:
         from bot.execution_engine import FEE_AWARE_MODE
         flags['Fee-Aware Profit Calculations'] = FEE_AWARE_MODE
     except (ImportError, AttributeError):
         flags['Fee-Aware Profit Calculations'] = False
-    
+
     # D: structured snapshot — one INFO line instead of N per-flag INFO lines
     try:
         from bot.startup_event_buffer import StartupSnapshot
@@ -147,10 +147,10 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     logger.info("=" * 70)
     logger.info("🔍 TRADING CAPABILITY VERIFICATION")
     logger.info("=" * 70)
-    
+
     checks = []
     issues = []
-    
+
     # Check 1: ExecutionEngine can be imported
     try:
         from bot.execution_engine import ExecutionEngine
@@ -158,7 +158,7 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     except Exception as e:
         checks.append(("ExecutionEngine Module", False, str(e)))
         issues.append(f"ExecutionEngine import failed: {e}")
-    
+
     # Check 2: Broker integration available
     try:
         from bot.broker_manager import BrokerManager
@@ -166,7 +166,7 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     except Exception as e:
         checks.append(("BrokerManager Module", False, str(e)))
         issues.append(f"BrokerManager import failed: {e}")
-    
+
     # Check 3: Trading strategy can be imported
     try:
         from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
@@ -174,7 +174,7 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     except Exception as e:
         checks.append(("Trading Strategy (APEX v7.1)", False, str(e)))
         issues.append(f"Trading strategy import failed: {e}")
-    
+
     # Check 4: Risk manager available
     try:
         from bot.user_risk_manager import UserRiskManager
@@ -182,7 +182,7 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     except Exception as e:
         checks.append(("Risk Manager", False, str(e)))
         issues.append(f"Risk manager import failed: {e}")
-    
+
     # Check 5: Position manager available
     try:
         from bot.position_manager import PositionManager
@@ -190,7 +190,7 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     except Exception as e:
         checks.append(("Position Manager", False, str(e)))
         issues.append(f"Position manager import failed: {e}")
-    
+
     all_passed = len(issues) == 0
 
     # D: structured snapshot — one INFO line instead of N per-check INFO lines
@@ -216,7 +216,7 @@ def verify_trading_capability() -> Tuple[bool, List[str]]:
     else:
         logger.warning("⚠️  %d critical check(s) failed — bot may not trade properly", len(issues))
     logger.info("=" * 70)
-    
+
     return all_passed, issues
 
 
@@ -226,7 +226,7 @@ class StartupRetryManager:
     
     Prevents permanent failure from transient errors during bot initialization.
     """
-    
+
     def __init__(self, max_retries: int = 3, initial_delay: int = 5):
         """
         Initialize retry manager.
@@ -238,7 +238,7 @@ class StartupRetryManager:
         self.max_retries = max_retries
         self.initial_delay = initial_delay
         self.current_attempt = 0
-    
+
     def should_retry(self, error: Exception) -> bool:
         """
         Determine if we should retry after this error.
@@ -253,10 +253,10 @@ class StartupRetryManager:
         fatal_error_types = (KeyboardInterrupt, SystemExit)
         if isinstance(error, fatal_error_types):
             return False
-        
+
         # Check if we have retries left
         return self.current_attempt < self.max_retries
-    
+
     def get_retry_delay(self) -> int:
         """
         Calculate delay before next retry using exponential backoff.
@@ -273,11 +273,11 @@ class StartupRetryManager:
         if self.current_attempt == 0:
             return self.initial_delay
         return self.initial_delay * (2 ** (self.current_attempt - 1))
-    
+
     def record_attempt(self):
         """Record that we've made another attempt."""
         self.current_attempt += 1
-    
+
     def log_retry_attempt(self, error: Exception, delay: int):
         """
         Log information about the retry attempt.
@@ -292,7 +292,7 @@ class StartupRetryManager:
         logger.warning(f"Error: {type(error).__name__}: {str(error)}")
         logger.warning(f"Retrying in {delay} seconds...")
         logger.warning("=" * 70)
-    
+
     def log_final_failure(self, error: Exception):
         """
         Log final failure after all retries exhausted.

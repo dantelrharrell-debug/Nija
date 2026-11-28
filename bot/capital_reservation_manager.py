@@ -36,7 +36,7 @@ class PositionReservation:
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     account_id: str = "default"
     broker: str = "unknown"
-    
+
     def __repr__(self):
         return (
             f"PositionReservation({self.symbol}, "
@@ -54,7 +54,7 @@ class CapitalReservationManager:
     3. Safety buffer always maintained
     4. No silent leverage through fragmentation
     """
-    
+
     def __init__(
         self,
         safety_buffer_pct: float = 0.20,  # 20% safety buffer
@@ -69,17 +69,17 @@ class CapitalReservationManager:
         """
         self.safety_buffer_pct = safety_buffer_pct
         self.min_free_capital_usd = min_free_capital_usd
-        
+
         # Track reservations
         self._reservations: Dict[str, PositionReservation] = {}
         self._lock = threading.Lock()
-        
+
         logger.info(
             f"✅ Capital Reservation Manager initialized: "
             f"{self.safety_buffer_pct * 100:.1f}% safety buffer, "
             f"${self.min_free_capital_usd:.2f} min free capital"
         )
-    
+
     def reserve_capital(
         self,
         position_id: str,
@@ -108,7 +108,7 @@ class CapitalReservationManager:
                     f"{self._reservations[position_id]}"
                 )
                 return False
-            
+
             reservation = PositionReservation(
                 position_id=position_id,
                 symbol=symbol,
@@ -116,15 +116,15 @@ class CapitalReservationManager:
                 account_id=account_id,
                 broker=broker
             )
-            
+
             self._reservations[position_id] = reservation
-            
+
             logger.info(
                 f"✅ Reserved ${amount:.2f} for position {position_id} ({symbol})"
             )
-            
+
             return True
-    
+
     def release_capital(self, position_id: str) -> Optional[float]:
         """
         Release capital reservation for a closed position.
@@ -141,16 +141,16 @@ class CapitalReservationManager:
                     f"⚠️ No reservation found for position {position_id}"
                 )
                 return None
-            
+
             reservation = self._reservations.pop(position_id)
-            
+
             logger.info(
                 f"✅ Released ${reservation.reserved_amount:.2f} "
                 f"from position {position_id} ({reservation.symbol})"
             )
-            
+
             return reservation.reserved_amount
-    
+
     def update_reservation(
         self,
         position_id: str,
@@ -172,17 +172,17 @@ class CapitalReservationManager:
                     f"⚠️ Cannot update - no reservation for position {position_id}"
                 )
                 return False
-            
+
             old_amount = self._reservations[position_id].reserved_amount
             self._reservations[position_id].reserved_amount = new_amount
-            
+
             logger.info(
                 f"📊 Updated reservation for {position_id}: "
                 f"${old_amount:.2f} → ${new_amount:.2f}"
             )
-            
+
             return True
-    
+
     def get_total_reserved(self) -> float:
         """
         Get total reserved capital across all positions.
@@ -192,7 +192,7 @@ class CapitalReservationManager:
         """
         with self._lock:
             return sum(r.reserved_amount for r in self._reservations.values())
-    
+
     def get_reserved_by_account(self, account_id: str) -> float:
         """
         Get total reserved capital for specific account.
@@ -209,7 +209,7 @@ class CapitalReservationManager:
                 for r in self._reservations.values()
                 if r.account_id == account_id
             )
-    
+
     def get_free_capital(
         self,
         total_balance: float,
@@ -229,10 +229,10 @@ class CapitalReservationManager:
             reserved = self.get_reserved_by_account(account_id)
         else:
             reserved = self.get_total_reserved()
-        
+
         free = total_balance - reserved
         return max(0, free)  # Never negative
-    
+
     def can_open_position(
         self,
         total_balance: float,
@@ -252,22 +252,22 @@ class CapitalReservationManager:
         """
         # Calculate free capital
         free_capital = self.get_free_capital(total_balance, account_id)
-        
+
         # Calculate what free capital would be after opening position
         free_capital_after = free_capital - new_position_size
-        
+
         # Calculate required safety buffer
         safety_buffer_required = total_balance * self.safety_buffer_pct
-        
+
         # Ensure minimum free capital
         effective_min_free = max(
             safety_buffer_required,
             self.min_free_capital_usd
         )
-        
+
         # Check if we'd maintain sufficient free capital
         can_open = free_capital_after >= effective_min_free
-        
+
         details = {
             'total_balance': total_balance,
             'current_free_capital': free_capital,
@@ -279,7 +279,7 @@ class CapitalReservationManager:
             'total_reserved': self.get_total_reserved(),
             'open_positions': len(self._reservations)
         }
-        
+
         if can_open:
             message = (
                 f"✅ Can open position: "
@@ -295,9 +295,9 @@ class CapitalReservationManager:
                 f"need ${effective_min_free:.2f} (deficit: ${deficit:.2f})"
             )
             logger.warning(message)
-        
+
         return can_open, message, details
-    
+
     def get_max_position_size(
         self,
         total_balance: float,
@@ -315,21 +315,21 @@ class CapitalReservationManager:
         """
         # Calculate free capital
         free_capital = self.get_free_capital(total_balance, account_id)
-        
+
         # Calculate required safety buffer
         safety_buffer_required = total_balance * self.safety_buffer_pct
-        
+
         # Ensure minimum free capital
         effective_min_free = max(
             safety_buffer_required,
             self.min_free_capital_usd
         )
-        
+
         # Max position = free capital - safety buffer
         max_position = free_capital - effective_min_free
-        
+
         return max(0, max_position)  # Never negative
-    
+
     def get_reservations(
         self,
         account_id: Optional[str] = None
@@ -351,7 +351,7 @@ class CapitalReservationManager:
                 ]
             else:
                 return list(self._reservations.values())
-    
+
     def get_reservation_summary(self) -> Dict:
         """
         Get summary of capital reservations.
@@ -361,7 +361,7 @@ class CapitalReservationManager:
         """
         with self._lock:
             reservations = list(self._reservations.values())
-            
+
             if not reservations:
                 return {
                     'total_reserved': 0.0,
@@ -369,7 +369,7 @@ class CapitalReservationManager:
                     'accounts': 0,
                     'symbols': 0
                 }
-            
+
             return {
                 'total_reserved': sum(r.reserved_amount for r in reservations),
                 'open_positions': len(reservations),
@@ -409,7 +409,7 @@ def get_capital_reservation_manager(
         CapitalReservationManager: Global instance
     """
     global _manager
-    
+
     with _lock:
         if _manager is None:
             _manager = CapitalReservationManager(
@@ -451,43 +451,43 @@ def can_open_position(
 # Example usage
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    
+
     print("\n=== Capital Reservation Manager Test ===\n")
-    
+
     # Initialize manager
     manager = get_capital_reservation_manager(
         safety_buffer_pct=0.20,  # 20% safety buffer
         min_free_capital_usd=5.0
     )
-    
+
     # Simulate account with $100 balance
     balance = 100.0
     print(f"Account Balance: ${balance:.2f}")
     print(f"Safety Buffer: {manager.safety_buffer_pct * 100:.0f}%")
     print()
-    
+
     # Try to open first position
     print("--- Opening Position 1 ---")
     size1 = 30.0
     can_open, msg, details = manager.can_open_position(balance, size1)
     print(msg)
     print(f"Details: {details}")
-    
+
     if can_open:
         manager.reserve_capital("pos1", size1, "BTC-USD")
     print()
-    
+
     # Try to open second position
     print("--- Opening Position 2 ---")
     size2 = 40.0
     can_open, msg, details = manager.can_open_position(balance, size2)
     print(msg)
     print(f"Details: {details}")
-    
+
     if can_open:
         manager.reserve_capital("pos2", size2, "ETH-USD")
     print()
-    
+
     # Try to open third position (should fail)
     print("--- Opening Position 3 ---")
     size3 = 20.0
@@ -495,23 +495,23 @@ if __name__ == "__main__":
     print(msg)
     print(f"Details: {details}")
     print()
-    
+
     # Show summary
     print("--- Reservation Summary ---")
     summary = manager.get_reservation_summary()
     for key, value in summary.items():
         print(f"  {key}: {value}")
     print()
-    
+
     # Close position 1
     print("--- Closing Position 1 ---")
     released = manager.release_capital("pos1")
     print(f"Released: ${released:.2f}")
     print()
-    
+
     # Now try position 3 again
     print("--- Retry Opening Position 3 ---")
     can_open, msg, details = manager.can_open_position(balance, size3)
     print(msg)
-    
+
     print("\n=== Test Complete ===\n")

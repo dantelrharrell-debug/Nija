@@ -91,7 +91,7 @@ def formatting_paths() -> list[str]:
         )
     except (OSError, subprocess.SubprocessError):
         return []
-    if result.returncode or result.stdout.count(b"\0") > 250:
+    if result.returncode:
         return []
     paths = result.stdout.decode("utf-8", errors="replace").split("\0")
     # Keep unusual names, terminal escape sequences, and private-key files out
@@ -100,7 +100,7 @@ def formatting_paths() -> list[str]:
         path for path in paths
         if re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.(?:py|sh|yml|yaml|md|mjs|js|ts|tsx|json|toml|txt|html|css)", path)
         and not any(part.startswith(".") for part in path.split("/"))
-    })
+    })[:250]
 
 
 def run(report_path: Path) -> int:

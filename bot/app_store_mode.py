@@ -35,12 +35,12 @@ class AppStoreSafetyLayer:
     - Enables simulation and read-only API access
     - Provides clear messaging about the block
     """
-    
+
     def __init__(self):
         """Initialize App Store mode from environment."""
         self.mode = self._check_app_store_mode()
         self._log_initialization()
-    
+
     def _check_app_store_mode(self) -> AppStoreMode:
         """
         Check if APP_STORE_MODE is enabled in environment.
@@ -50,13 +50,13 @@ class AppStoreSafetyLayer:
         """
         # Check environment variable (must be explicitly set to 'true')
         mode_str = os.getenv('APP_STORE_MODE', 'false').lower().strip()
-        
+
         # Only accept explicit 'true', '1', 'yes', or 'enabled'
         if mode_str in ['true', '1', 'yes', 'enabled']:
             return AppStoreMode.ENABLED
-        
+
         return AppStoreMode.DISABLED
-    
+
     def _log_initialization(self):
         """Log initialization status with clear visual indicators."""
         if self.is_enabled():
@@ -70,7 +70,7 @@ class AppStoreSafetyLayer:
             logger.warning("=" * 80)
         else:
             logger.info("🍎 APP Store Mode: DISABLED (live execution allowed)")
-    
+
     def is_enabled(self) -> bool:
         """
         Check if App Store mode is currently enabled.
@@ -79,7 +79,7 @@ class AppStoreSafetyLayer:
             bool: True if App Store mode is active (live execution blocked)
         """
         return self.mode == AppStoreMode.ENABLED
-    
+
     def check_execution_allowed(self) -> Tuple[bool, Optional[str]]:
         """
         Check if live trade execution is allowed.
@@ -98,10 +98,10 @@ class AppStoreSafetyLayer:
                 "This is for Apple App Review compliance. "
                 "Set APP_STORE_MODE=false in .env to enable live trading."
             )
-        
+
         return True, None
-    
-    def block_execution_with_log(self, 
+
+    def block_execution_with_log(self,
                                  operation: str,
                                  symbol: Optional[str] = None,
                                  side: Optional[str] = None,
@@ -134,7 +134,7 @@ class AppStoreSafetyLayer:
         logger.warning("   Reason: App Store review mode active")
         logger.warning("   Action: Returning simulated success response")
         logger.warning("=" * 80)
-        
+
         # Return a simulated success response
         # This allows the UI to function but prevents real execution
         return {
@@ -147,7 +147,7 @@ class AppStoreSafetyLayer:
             'size': size,
             'blocked': True,
         }
-    
+
     def get_status(self) -> Dict[str, Any]:
         """
         Get current App Store mode status for API/dashboard display.
@@ -167,7 +167,7 @@ class AppStoreSafetyLayer:
                 else 'Normal mode - live execution allowed'
             ),
         }
-    
+
     def get_reviewer_info(self) -> Dict[str, Any]:
         """
         Get information for Apple reviewers about available functionality.
