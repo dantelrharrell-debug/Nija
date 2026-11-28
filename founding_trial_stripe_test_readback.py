@@ -90,6 +90,35 @@ class StripeTestInvoiceReader:
                 raise ValueError("invalid Stripe response")
             return decoded
 
+    def _has_confirmed_test_charge(self, customer):
+        """Bind this invoice to one real Stripe TEST tender, not bookkeeping."""
+        payments = self._get("/v1/invoice_payments", invoice=self._invoice, status="paid", limit=2)
+        if (payments["object"] != "list" or payments["has_more"] is not False
+                or not isinstance(payments["data"], list) or len(payments["data"]) != 1):
+            return False
+        payment = _test_entity(payments["data"][0], "invoice_payment")
+        if (payment["invoice"] != self._invoice or payment["status"] != "paid"
+                or payment["currency"] != "usd" or _minor(payment["amount_paid"]) != 5000
+                or _minor(payment["amount_requested"]) != 5000
+                or _timestamp(payment["status_transitions"]["paid_at"]) < self._due
+                or payment["payment"]["type"] != "payment_intent"):
+            return False
+        intent_id = _identifier(payment["payment"]["payment_intent"], "pi_")
+        intent = _test_entity(self._get("/v1/payment_intents/" + intent_id),
+                              "payment_intent", intent_id)
+        if (intent["status"] != "succeeded" or intent["customer"] != customer
+                or intent["currency"] != "usd" or _minor(intent["amount_received"]) != 5000):
+            return False
+        charge_id = _identifier(intent["latest_charge"], "ch_")
+        charge = _test_entity(self._get("/v1/charges/" + charge_id), "charge", charge_id)
+        return (
+            charge["payment_intent"] == intent_id and charge["customer"] == customer
+            and charge["currency"] == "usd" and charge["status"] == "succeeded"
+            and charge["paid"] is True and charge["captured"] is True
+            and _minor(charge["amount_captured"]) == 5000 and _minor(charge["amount_refunded"]) == 0
+            and charge["refunded"] is False and charge["disputed"] is False
+        )
+
     def read_invoice(self, invoice_id: str) -> SandboxInvoiceReadback | None:
         if invoice_id != self._invoice:
             return None
@@ -142,6 +171,8 @@ class StripeTestInvoiceReader:
                 seen.add(key)
                 if max(_minor(item["amount_due"]), _minor(item["amount_paid"])) > 0:
                     positives.append(key)
+            if positives != [self._invoice] or not self._has_confirmed_test_charge(customer):
+                return None
             return SandboxInvoiceReadback(
                 account["id"], False, self._clock, self._subscription, invoice["id"],
                 (line["pricing"]["price_details"]["price"],), tuple(positives),
