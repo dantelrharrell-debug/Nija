@@ -63,7 +63,7 @@ TRADE OUTCOME REASON CODES
    Entry Reasons:
       dual_rsi_oversold        42 trades (48.3%)
       rsi_9_oversold           23 trades (26.4%)
-   
+
    Exit Reasons:
       profit_target_1          28 trades (32.2%)
       trailing_stop_hit        19 trades (21.8%)
@@ -246,7 +246,7 @@ python generate_analytics_report.py --export-csv
 1. **Market Scan Timing** - Add to `trading_strategy.py`:
    ```python
    from bot.analytics_integration import MarketScanTimer
-   
+
    with MarketScanTimer(total_markets=732, batch_size=30) as timer:
        for symbol in markets_to_scan:
            # ... existing scan logic ...
@@ -256,7 +256,7 @@ python generate_analytics_report.py --export-csv
 2. **Capital Utilization** - Add after balance updates:
    ```python
    from bot.analytics_integration import log_capital_utilization
-   
+
    log_capital_utilization(total_capital, positions, broker)
    ```
 
@@ -265,12 +265,12 @@ python generate_analytics_report.py --export-csv
    from bot.analytics_integration import (
        infer_entry_reason, infer_signal_type, map_exit_reason_to_enum
    )
-   
+
    # On entry
    conditions = {'rsi_9': rsi_9, 'rsi_14': rsi_14}
    trade_record.entry_reason = infer_entry_reason(conditions)
    trade_record.entry_signal_type = infer_signal_type(conditions)
-   
+
    # On exit
    trade_record.exit_reason = map_exit_reason_to_enum(exit_reason_str)
    ```

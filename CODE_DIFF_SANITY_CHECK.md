@@ -192,7 +192,7 @@ def place_market_order(self, symbol, side, quantity, ...):
         'user_id': self.user_id
     }
     self.orders_placed.append(order)  # Track order
-    
+
     # Simulate balance change
     if side == 'buy':
         self.balance -= quantity
@@ -200,7 +200,7 @@ def place_market_order(self, symbol, side, quantity, ...):
     else:
         self.balance += quantity
         self.positions = [p for p in self.positions if p['symbol'] != symbol]
-    
+
     return order
 ```
 
