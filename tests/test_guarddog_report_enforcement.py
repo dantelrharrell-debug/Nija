@@ -121,7 +121,10 @@ def test_all_ci_requirement_files_are_supported():
 def test_notebook_dependencies_remain_pinned_and_scanned_outside_runtime():
     runtime = checker.required_packages(ROOT / "requirements.txt")
     notebooks = checker.required_packages(ROOT / "requirements-notebook.txt")
-    notebook_packages = {"gitpython", "gitdb", "smmap", "bleach", "defusedxml", "mistune", "pygments"}
+    notebook_packages = {
+        "gitpython", "gitdb", "smmap", "bleach", "defusedxml", "mistune", "pygments",
+        "tinycss2", "tornado", "webencodings",
+    }
     assert notebook_packages.isdisjoint(runtime)
     assert notebook_packages <= notebooks.keys()
 

@@ -41,7 +41,10 @@ pyzmq==27.1.0
 Send2Trash==1.8.3
 stack-data==0.6.3
 terminado==0.18.1
+tinycss2==1.4.0
+tornado==6.6.1
 traitlets==5.14.3
+webencodings==0.5.1
 
 # Keep nbdime Git dependencies in the notebook tooling profile.
 gitdb==4.0.12
