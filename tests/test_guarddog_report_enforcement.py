@@ -109,7 +109,12 @@ def test_invalid_scanner_status_denies(tmp_path, requirements, status):
 
 
 def test_all_ci_requirement_files_are_supported():
-    for filename in ("requirements.txt", "requirements-billing.txt", "requirements-member-broker.txt"):
+    for filename in (
+        "requirements.txt",
+        "requirements-billing.txt",
+        "requirements-member-broker.txt",
+        "requirements-notebook.txt",
+    ):
         assert checker.required_packages(ROOT / filename)
 
 
