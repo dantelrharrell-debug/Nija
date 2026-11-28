@@ -16,6 +16,8 @@ import sqlite3
 import time
 import uuid
 
+from scripts.nija_kraken_submission_validation import has_invalid_terminal_metadata
+
 
 class SubmissionDenied(RuntimeError):
     """The caller must skip dispatch when it cannot claim a durable reservation."""
@@ -76,7 +78,7 @@ class KrakenSubmissionJournal:
         if db.execute("SELECT scope FROM account").fetchall() != [(self.account_scope,)]:
             raise SubmissionDenied("submission journal account scope mismatch")
 
-    def _check_resolution_links(self, db: sqlite3.Connection) -> None:
+    def _check_resolutions(self, db: sqlite3.Connection) -> None:
         invalid = db.execute(
             """SELECT s.intent_id FROM submission_resolution AS r
                LEFT JOIN submission AS s ON s.intent_id=r.intent_id
@@ -88,6 +90,8 @@ class KrakenSubmissionJournal:
             raise SubmissionDenied("submission journal contains terminal evidence without a reservation")
         if invalid is not None:
             raise SubmissionDenied("submission journal contains terminal evidence without a broker order reference")
+        if has_invalid_terminal_metadata(db):
+            raise SubmissionDenied("submission journal contains invalid terminal evidence metadata")
 
     def _client_order_id(self, intent_id: str) -> str:
         namespace = uuid.uuid5(uuid.NAMESPACE_URL, f"nija:kraken:{self.account_scope}")
@@ -102,7 +106,7 @@ class KrakenSubmissionJournal:
                 db.execute("PRAGMA synchronous=FULL")
                 db.execute("BEGIN IMMEDIATE")
                 self._check_scope(db)
-                self._check_resolution_links(db)
+                self._check_resolutions(db)
                 if db.execute("SELECT 1 FROM submission WHERE intent_id=?", (intent_id,)).fetchone():
                     raise SubmissionDenied("intent already reserved")
                 if db.execute(
@@ -213,7 +217,7 @@ class KrakenSubmissionJournal:
         with closing(self._connect(readonly=True)) as db, db:
             db.execute("BEGIN")
             self._check_scope(db)
-            self._check_resolution_links(db)
+            self._check_resolutions(db)
             return db.execute(
                 """SELECT COUNT(*) FROM submission AS s WHERE NOT EXISTS
                    (SELECT 1 FROM submission_resolution WHERE intent_id=s.intent_id)"""

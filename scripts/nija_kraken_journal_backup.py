@@ -10,9 +10,9 @@ import sqlite3
 import stat
 import sys
 from tempfile import TemporaryDirectory
-import time
 
 from scripts import nija_trade_ledger_snapshot_v436 as snapshot
+from scripts.nija_kraken_submission_validation import has_invalid_terminal_metadata
 
 
 def _verify_account_journal(archive: Path, *, expected_sha256: str, exercise_restore: bool) -> None:
@@ -60,28 +60,7 @@ def _verify_account_journal(archive: Path, *, expected_sha256: str, exercise_res
                    LIMIT 1"""
             ).fetchone() is not None:
                 raise ValueError("submission journal contains terminal evidence without a broker order reference")
-            if db.execute(
-                """SELECT 1 FROM submission_resolution AS r
-                   JOIN submission AS s ON s.intent_id=r.intent_id
-                   WHERE NOT COALESCE(
-                       r.terminal_status IN ('closed', 'canceled', 'expired')
-                       AND typeof(s.reserved_at) IN ('integer', 'real')
-                       AND typeof(r.observed_at) IN ('integer', 'real')
-                       AND s.reserved_at > 0
-                       AND r.observed_at BETWEEN s.reserved_at AND ?
-                       AND typeof(r.broker_evidence_sha256) = 'text'
-                       AND length(r.broker_evidence_sha256) = 64
-                       AND length(CAST(r.broker_evidence_sha256 AS BLOB)) = 64
-                       AND r.broker_evidence_sha256 NOT GLOB '*[^0-9a-f]*'
-                       AND typeof(r.ledger_evidence_sha256) = 'text'
-                       AND length(r.ledger_evidence_sha256) = 64
-                       AND length(CAST(r.ledger_evidence_sha256 AS BLOB)) = 64
-                       AND r.ledger_evidence_sha256 NOT GLOB '*[^0-9a-f]*',
-                       0
-                   )
-                   LIMIT 1""",
-                (time.time(),),
-            ).fetchone() is not None:
+            if has_invalid_terminal_metadata(db):
                 raise ValueError("submission journal contains invalid terminal evidence metadata")
 
 
