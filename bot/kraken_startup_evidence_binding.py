@@ -13,7 +13,10 @@ import threading
 from types import MappingProxyType
 from typing import Any
 
+OWNER_RELEASE = "owner_release"
 RECEIPTS = frozenset({"independent_review", "backup_restore", "broker_ledger_exits"})
+
+STARTUP_RECEIPT_SETS = (RECEIPTS, frozenset({OWNER_RELEASE}))
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,7 @@ def register_reviewed_startup_binding(
 ) -> None:
     """Called once by the independently reviewed protected composition root.
 
-    The verifier must authenticate all three receipts against this exact binding
+    The verifier must authenticate the configured receipt set against this exact binding
     and deployed release. Returning True is an approval, never evidence by itself.
     There is intentionally no default verifier or permissive fallback.
     """
@@ -125,7 +128,7 @@ def install_from_canonical_startup(manager: Any, strategy: Any) -> str:
                 or _broker_account_scope(broker) != "platform:kraken"):
             return "canonical_kraken_binding_mismatch"
         failure_status = "release_receipt_verification_failed"
-        if (set(binding.receipts) != RECEIPTS
+        if (set(binding.receipts) not in STARTUP_RECEIPT_SETS
                 or any(value is None for value in binding.receipts.values())
                 or verifier(binding) is not True):
             return "authenticated_release_receipts_required"

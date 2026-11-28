@@ -18,17 +18,22 @@ from typing import Any
 
 from bot.kraken_operator_authorization import _canonical, _digest, _identifier, _verified_payload
 from bot.kraken_startup_evidence_binding import (
-    RECEIPTS, ReviewedStartupBinding, register_reviewed_startup_binding,
+    OWNER_RELEASE, RECEIPTS, STARTUP_RECEIPT_SETS, ReviewedStartupBinding,
+    register_reviewed_startup_binding,
 )
 from bot.pretrade_attestation_validation_v452 import REQUIRED
 
 CONTRACT = "nija.kraken-startup-certification.v1"
+OWNER_CONTRACT = "nija.kraken-owner-release-certification.v1"
 FIELDS = frozenset({
     "contract", "kind", "evidence_id", "artifact_sha256", "status",
     "service_id", "release_id", "image_sha256", "account",
     "account_iiban_sha256", "api_key_sha256", "provider_registry_sha256",
     "approved_at_epoch", "expires_at_epoch",
 })
+
+OWNER_ARTIFACTS = frozenset({"protected_source", "backup_restore", "broker_ledger_exits"})
+OWNER_FIELDS = (FIELDS - {"kind", "artifact_sha256"}) | {"artifacts"}
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,7 @@ class StartupReceiptTrust:
                 or set(ids) != set(REQUIRED)
                 or any(not _identifier(value) for value in ids.values())
                 or len(set(ids.values())) != len(REQUIRED)
-                or set(keys) != RECEIPTS
+                or set(keys) not in STARTUP_RECEIPT_SETS
                 or any(type(value) is not bytes or len(value) != 32 for value in keys.values())
                 or not _positive_number(self.maximum_receipt_age_s)):
             raise ValueError("reviewed_startup_trust_pins_required")
@@ -106,7 +111,7 @@ def verify_startup_receipt_set(
     receipts: Mapping[str, str], trust: StartupReceiptTrust,
     *, clock: Callable[[], float] = time.time,
 ) -> bool:
-    """Authenticate three receipt envelopes without creating providers or proof.
+    """Authenticate the provisioned startup approval without granting order authority.
 
     For protected-root preflight only and the existing binding verifier. This
     authenticates external signatures, not underlying source truth or orders.
@@ -122,12 +127,31 @@ def verify_startup_receipt_set(
     }
     try:
         if (not _runtime_matches(trust) or not isinstance(receipts, Mapping)
-                or set(receipts) != RECEIPTS):
+                or set(receipts) != set(trust.public_keys)):
             return False
         receipts = MappingProxyType(dict(receipts))
         now = clock()
         if not _positive_number(now):
             return False
+        if OWNER_RELEASE in trust.public_keys:
+            expected["contract"] = OWNER_CONTRACT
+            payload = _verified_payload(_receipt(receipts[OWNER_RELEASE]), trust.public_keys[OWNER_RELEASE], OWNER_FIELDS)
+            if any(payload.get(key) != value for key, value in expected.items()):
+                return False
+            artifacts = payload["artifacts"]
+            if (type(artifacts) is not dict or set(artifacts) != OWNER_ARTIFACTS
+                    or any(not _digest(digest) for digest in artifacts.values())
+                    or len(set(artifacts.values())) != len(OWNER_ARTIFACTS)
+                    or not _identifier(payload["evidence_id"])
+                    or not _positive_number(payload["approved_at_epoch"])
+                    or not _positive_number(payload["expires_at_epoch"])):
+                return False
+            finished = clock()
+            return bool(
+                _runtime_matches(trust) and _positive_number(finished)
+                and payload["approved_at_epoch"] <= now <= finished < payload["expires_at_epoch"]
+                and finished - payload["approved_at_epoch"] <= trust.maximum_receipt_age_s
+            )
         evidence_ids = set()
         expiries = []
         issued = []
@@ -152,6 +176,13 @@ def verify_startup_receipt_set(
                     and finished - min(issued) <= trust.maximum_receipt_age_s)
     except Exception:
         return False
+
+
+def approved_source_digest(receipts: Mapping[str, str]) -> str:
+    """Extract the source pin only after the caller authenticates its receipt set."""
+    if OWNER_RELEASE in receipts:
+        return _receipt(receipts[OWNER_RELEASE])["payload"]["artifacts"]["protected_source"]
+    return _receipt(receipts["independent_review"])["payload"]["artifact_sha256"]
 
 
 def make_startup_receipt_verifier(

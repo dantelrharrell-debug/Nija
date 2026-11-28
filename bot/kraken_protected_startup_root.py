@@ -29,7 +29,7 @@ from bot.kraken_startup_evidence_binding import (
     protected_source_import_guard, startup_binding_registration_state,
 )
 from bot.kraken_startup_receipts import (
-    StartupReceiptTrust, _receipt, _unique_object, verify_startup_receipt_set,
+    StartupReceiptTrust, _unique_object, approved_source_digest, verify_startup_receipt_set,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -178,8 +178,7 @@ def register_from_protected_root() -> str:
         stage = "source_read"
         source = _read_protected(SOURCE_NAME, 131072)
         stage = "source_digest"
-        review = _receipt(receipts["independent_review"])["payload"]
-        if review["artifact_sha256"] != hashlib.sha256(source).hexdigest():
+        if approved_source_digest(receipts) != hashlib.sha256(source).hexdigest():
             return "protected_startup_source_digest_denied"
         stage = "source_import"
         with protected_source_import_guard():

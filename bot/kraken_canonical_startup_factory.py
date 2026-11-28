@@ -19,7 +19,7 @@ from bot.kraken_native_four_source_binding import (
     ReviewedNativeFourSources, compose_reviewed_native_four_sources,
 )
 from bot.kraken_six_source_binding_contract_v490 import EXPECTED_OWNERS, validate_six_source_bindings
-from bot.kraken_startup_evidence_binding import RECEIPTS, ReviewedStartupBinding
+from bot.kraken_startup_evidence_binding import STARTUP_RECEIPT_SETS, ReviewedStartupBinding
 from bot.kraken_startup_receipts import StartupReceiptTrust, register_signed_kraken_startup
 
 
@@ -74,7 +74,7 @@ class ReviewedCanonicalKrakenSources:
             if not isinstance(value, Mapping):
                 raise CanonicalKrakenStartupDenied("reviewed_source_maps_required")
             object.__setattr__(self, name, MappingProxyType(dict(value)))
-        if (set(self.receipts) != RECEIPTS
+        if (set(self.receipts) not in STARTUP_RECEIPT_SETS
                 or any(type(value) is not str or not value for value in self.receipts.values())
                 or self.monitoring_category is None):
             raise CanonicalKrakenStartupDenied("complete_live_sources_and_receipts_required")
