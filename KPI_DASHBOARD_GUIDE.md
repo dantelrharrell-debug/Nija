@@ -574,7 +574,7 @@ class MyStrategy(TradingStrategy):
         super().__init__()
         self.tracking_service = get_tracking_service(initial_capital=1000.0)
         self.tracking_service.start()
-    
+
     def on_trade_close(self, trade):
         # Record trade for KPI tracking
         self.tracking_service.record_trade(

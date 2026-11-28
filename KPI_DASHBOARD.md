@@ -529,17 +529,17 @@ class TradingBot:
         self.kpi_tracker = get_kpi_tracker(initial_capital=initial_capital)
         self.performance_tracker = get_performance_tracker()
         self.alarm_system = get_risk_alarm_system()
-        
+
         # Configure performance tracker
         self.performance_tracker.set_account_callbacks(
             account_value_fn=self.get_account_value,
             cash_balance_fn=self.get_cash_balance,
             positions_fn=self.get_positions
         )
-        
+
         # Start automated tracking
         self.performance_tracker.start()
-    
+
     def on_trade_close(self, trade):
         """Called when a trade closes"""
         # Record trade in KPI tracker
@@ -554,26 +554,26 @@ class TradingBot:
             exit_time=trade.exit_time,
             fees=trade.fees
         )
-        
+
         # Check risk alarms
         self.alarm_system.check_all_risks()
-        
+
         # Check for emergency alarms
         active_alarms = self.alarm_system.get_active_alarms()
         emergency_alarms = [a for a in active_alarms if a.level == 'EMERGENCY']
-        
+
         if emergency_alarms:
             logger.critical("🚨 EMERGENCY ALARM - STOPPING BOT")
             self.stop_trading()
-    
+
     def get_account_value(self):
         """Get total account value"""
         return self.broker.get_account_value()
-    
+
     def get_cash_balance(self):
         """Get cash balance"""
         return self.broker.get_cash_balance()
-    
+
     def get_positions(self):
         """Get active positions"""
         return self.broker.get_positions()
@@ -731,7 +731,7 @@ if not status['running']:
     if not status['callbacks_configured']:
         # Configure callbacks first
         tracker.set_account_callbacks(...)
-    
+
     # Then start
     tracker.start()
 ```

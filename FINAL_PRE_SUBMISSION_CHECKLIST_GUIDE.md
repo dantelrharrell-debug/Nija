@@ -139,7 +139,7 @@ FINAL_PRE_SUBMISSION_CHECKLIST_ONE_PAGE.md (188 lines)
 2. **Week 2**: QA team tests using this checklist
 3. **Week 3**: Fix any issues found, re-test critical items
 4. **Week 4**: Final approval meeting, sign-offs
-5. **Submission Day**: 
+5. **Submission Day**:
    - Review checklist one last time
    - Ensure all boxes checked
    - Get final sign-offs

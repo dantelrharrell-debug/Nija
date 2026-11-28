@@ -15,7 +15,7 @@ Every time the bot evaluates a potential trade, it records:
 - **Timestamp**: When the signal was evaluated
 - **Symbol**: Trading pair (e.g., BTC-USD, ETH-USD)
 - **Signal**: BUY or SELL
-- **Action**: 
+- **Action**:
   - `executed` - Trade was placed
   - `vetoed` - Trade was blocked (see veto_reasons)
   - `evaluated` - Signal was analyzed but not acted on
@@ -191,7 +191,7 @@ import React, { useState, useEffect } from 'react';
 
 function LastTradePanel() {
   const [trade, setTrade] = useState(null);
-  
+
   useEffect(() => {
     const fetchTrade = async () => {
       const response = await fetch('http://localhost:5001/api/last-trade');
@@ -200,23 +200,23 @@ function LastTradePanel() {
         setTrade(data.data);
       }
     };
-    
+
     // Fetch every 5 seconds
     const interval = setInterval(fetchTrade, 5000);
     fetchTrade(); // Initial fetch
-    
+
     return () => clearInterval(interval);
   }, []);
-  
+
   if (!trade) return <div>Loading...</div>;
-  
+
   return (
     <div className="last-trade-panel">
       <h3>Last Evaluated Trade</h3>
       <div className="trade-info">
         <p><strong>Symbol:</strong> {trade.symbol}</p>
         <p><strong>Signal:</strong> {trade.signal}</p>
-        <p><strong>Action:</strong> 
+        <p><strong>Action:</strong>
           <span className={trade.action === 'executed' ? 'success' : 'warning'}>
             {trade.action}
           </span>
@@ -252,7 +252,7 @@ export default LastTradePanel;
     <div v-if="trade" class="trade-info">
       <p><strong>Symbol:</strong> {{ trade.symbol }}</p>
       <p><strong>Signal:</strong> {{ trade.signal }}</p>
-      <p><strong>Action:</strong> 
+      <p><strong>Action:</strong>
         <span :class="trade.action === 'executed' ? 'success' : 'warning'">
           {{ trade.action }}
         </span>
