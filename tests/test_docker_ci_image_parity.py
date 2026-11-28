@@ -54,6 +54,15 @@ class DockerCiImageParityTests(unittest.TestCase):
             (ROOT / BUILD_IMAGE).read_text(encoding="utf-8"),
         )
 
+    def test_each_sidecar_has_one_global_setuptools_install_and_keeps_guards(self) -> None:
+        for path in DOCKERFILES[1:]:
+            with self.subTest(path=path):
+                source = (ROOT / path).read_text(encoding="utf-8")
+                self.assertEqual(source.count("/usr/local/bin/python -m pip install"), 1)
+                self.assertIn("m.version('setuptools') == '84.1.0'", source)
+                self.assertIn("jaraco.context-5.3.0.dist-info/METADATA", source)
+                self.assertIn("wheel-0.45.1.dist-info/METADATA", source)
+
     def test_build_workflows_never_forward_unused_gh_token(self) -> None:
         for path in (ARTIFACT_SCAN, BUILD_IMAGE):
             with self.subTest(path=path):
