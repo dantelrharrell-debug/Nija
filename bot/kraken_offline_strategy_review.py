@@ -48,19 +48,53 @@ def _realized_metrics(rows: list[dict]) -> dict:
         }
 
 
-def evaluate(inbox: KrakenShadowOutcomes, scope: str) -> dict:
-    """Use only the latest 200 dated, cost-reconciled lots for shadow recommendations.
+def evaluate(
+    inbox: KrakenShadowOutcomes, scope: str, *, training_through_epoch: int | None = None,
+) -> dict:
+    """Build an isolated report; an explicit cutoff prevents future outcomes entering training.
 
-    An independent offline reader must have admitted each lot. Monetary metrics
-    describe the inbox sample only and are withheld when any lot lacks amounts.
+    The default report flags its recommendations as in-sample. A chronological
+    review fits on at most 200 eligible lots through the supplied cutoff,
+    measures only realized historical outcomes afterward, and never interprets
+    them as counterfactual returns from either the candidate or baseline.
     """
+    if training_through_epoch is not None and (
+        type(training_through_epoch) is not int or not 0 < training_through_epoch < 253402300800
+    ):
+        raise ValueError("invalid offline training cutoff")
     rows = inbox.evaluation_snapshot(scope)
-    digest = _evidence_digest({"evaluation_schema": 1, "scope": scope, "rows": rows})
+    evidence = {"evaluation_schema": 1, "scope": scope, "rows": rows}
     dated = sorted(
         (row for row in rows if row["economics"] is not None),
         key=lambda row: (row["economics"]["closed_at_epoch"], row["lot_id"]),
     )
-    training = dated[-200:]
+    chronology = {
+        "status": "cutoff_not_set",
+        "training_through_epoch": training_through_epoch,
+        "holdout_sample_count": 0,
+        "lots_without_economics": len(rows) - len(dated),
+        "observed_holdout_metrics": None,
+        "candidate_comparison_status": "not_evaluated",
+        "candidate_comparison": None,
+    }
+    if training_through_epoch is None:
+        training = dated[-200:]
+        recommendation_basis = "in_sample_shadow_only"
+    else:
+        evidence.update(evaluation_schema=2, training_through_epoch=training_through_epoch)
+        training = [
+            row for row in dated if row["economics"]["closed_at_epoch"] <= training_through_epoch
+        ][-200:]
+        holdout = [
+            row for row in dated if row["economics"]["closed_at_epoch"] > training_through_epoch
+        ]
+        chronology.update(
+            status="separate_samples" if training and holdout else "insufficient_dated_samples",
+            holdout_sample_count=len(holdout),
+            observed_holdout_metrics=_realized_metrics(holdout) if holdout else None,
+        )
+        recommendation_basis = "training_samples_only"
+    digest = _evidence_digest(evidence)
     with TemporaryDirectory() as folder:
         engine = RegimePerformanceCalibrator(str(Path(folder) / "offline.json"), window=200)
         engine.selection_mode = "shadow"
@@ -81,6 +115,8 @@ def evaluate(inbox: KrakenShadowOutcomes, scope: str) -> dict:
             "learning_sample_count": len(training),
             "metrics": _realized_metrics(rows),
             "recommendations": engine.report_all(),
+            "recommendation_basis": recommendation_basis,
+            "chronological_review": chronology,
             "owner_decisions": inbox.owner_decisions(scope, digest),
             "authorizes_orders": False,
         }
