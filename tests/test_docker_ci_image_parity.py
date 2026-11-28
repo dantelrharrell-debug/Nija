@@ -70,6 +70,22 @@ class DockerCiImageParityTests(unittest.TestCase):
                 self.assertNotIn("--build-arg GH_TOKEN", source)
                 self.assertNotIn("secrets.GH_TOKEN", source)
 
+    def test_trading_image_bakes_git_provenance_without_runtime_git(self) -> None:
+        source = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        metadata, runtime = source.split("FROM ${PYTHON_BASE}\n", maxsplit=1)
+        self.assertIn("AS release-metadata", metadata)
+        self.assertIn("install -y --no-install-recommends git", metadata)
+        self.assertIn("RUN ./inject_git_metadata.sh", metadata)
+        self.assertNotIn("RUN ./inject_git_metadata.sh", runtime)
+        self.assertNotRegex(runtime, r"apt-get install[^\n]*\bgit\b")
+        self.assertIn("! command -v git", runtime)
+        self.assertIn(
+            "COPY --from=release-metadata /app/.env.build /app/.env.build", runtime
+        )
+        self.assertIn(
+            "COPY --from=release-metadata /app/bot/version_info.py /app/bot/version_info.py", runtime
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
