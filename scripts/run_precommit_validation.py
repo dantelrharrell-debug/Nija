@@ -81,6 +81,28 @@ def summarize(output: str, error_output: str = "") -> dict:
     return {"failed_hooks": sorted(failed), "categories": sorted(categories)}
 
 
+def formatting_paths() -> list[str]:
+    """Locate tracked hook edits without copying hook output or file contents."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--no-renames", "-z", "--"],
+            capture_output=True, timeout=15, check=False, shell=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode or result.stdout.count(b"\0") > 250:
+        return []
+    paths = result.stdout.decode("utf-8", errors="replace").split("\0")
+    # Keep unusual names, terminal escape sequences, and private-key files out
+    # of this report. Never consume or forward a filename supplied by a hook.
+    return sorted({
+        path for path in paths
+        if re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\.(?:py|sh|yml|yaml|md|mjs|js|ts|tsx|json|toml|txt|html|css)", path)
+        and not any(part.startswith(".") for part in path.split("/"))
+    })
+
+
 def run(report_path: Path) -> int:
     """Run the unchanged all-file command; findings and runner errors fail closed."""
     report = {"schema_version": 1, "failed_hooks": [], "categories": []}
@@ -92,6 +114,9 @@ def run(report_path: Path) -> int:
         if status == 0 and (report["failed_hooks"] or report["categories"]):
             status = 2
         report["outcome"] = "passed" if status == 0 else "failed"
+        if {"trailing-whitespace", "end-of-file-fixer"} & set(report["failed_hooks"]) \
+                and "hook_modified_files" in report["categories"]:
+            report["tracked_hook_edits"] = formatting_paths()
     except subprocess.TimeoutExpired:
         status = 124
         report.update(outcome="runner_error", categories=["timeout"])
@@ -100,7 +125,8 @@ def run(report_path: Path) -> int:
         report.update(outcome="runner_error", categories=["runner_unavailable"])
     report["exit_code"] = status
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(report, sort_keys=True))
+    console_report = {key: value for key, value in report.items() if key != "tracked_hook_edits"}
+    print(json.dumps(console_report, sort_keys=True))
     return status
 
 

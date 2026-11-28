@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.run_precommit_validation import COMMAND, run, summarize
+from scripts.run_precommit_validation import COMMAND, formatting_paths, run, summarize
 
 
 class PrecommitReportTests(unittest.TestCase):
@@ -20,11 +20,14 @@ class PrecommitReportTests(unittest.TestCase):
                 if failure is not None:
                     execute.side_effect = failure
                 else:
-                    execute.return_value = subprocess.CompletedProcess(COMMAND, code, output, stderr)
+                    execute.side_effect = [
+                        subprocess.CompletedProcess(COMMAND, code, output, stderr),
+                        subprocess.CompletedProcess([], 0, b"", b""),
+                    ]
                 with contextlib.redirect_stdout(stream):
                     status = run(path)
-                kwargs = execute.call_args.kwargs
-                self.assertEqual(execute.call_args.args[0], COMMAND)
+                kwargs = execute.call_args_list[0].kwargs
+                self.assertEqual(execute.call_args_list[0].args[0], COMMAND)
                 self.assertEqual(COMMAND, ["pre-commit", "run", "--all-files", "--show-diff-on-failure"])
                 self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
                 self.assertEqual(kwargs["timeout"], 1200)
@@ -69,6 +72,29 @@ class PrecommitReportTests(unittest.TestCase):
         status, report, _ = self.invoke(code=1, output="- files were modified by this hook")
         self.assertEqual(status, 1)
         self.assertEqual(report["categories"], ["hook_modified_files"])
+
+    def test_formatting_report_locates_tracked_edits_without_printing_paths(self):
+        with patch("scripts.run_precommit_validation.formatting_paths",
+                   return_value=["tests/example.py"]):
+            status, report, output = self.invoke(code=1, output=(
+                "Trim trailing whitespace...Failed\n"
+                "- files were modified by this hook\n"
+                "All changes made by hooks:\n+PRIVATE_SOURCE\n"))
+        self.assertEqual(status, 1)
+        self.assertEqual(report["tracked_hook_edits"], ["tests/example.py"])
+        self.assertNotIn("example.py", output)
+        self.assertNotIn("PRIVATE_SOURCE", json.dumps(report) + output)
+
+    def test_git_reads_names_only_and_ignores_unusual_or_sensitive_paths(self):
+        output = b"docs/sample.md\0tests/unit.py\0.env.json\0private.pem\0strange\nname.py\0"
+        with patch("scripts.run_precommit_validation.subprocess.run") as execute:
+            execute.return_value = subprocess.CompletedProcess([], 0, output, b"PRIVATE_DETAIL")
+            self.assertEqual(formatting_paths(), ["docs/sample.md", "tests/unit.py"])
+            self.assertEqual(execute.call_args.args[0],
+                             ["git", "diff", "--name-only", "--no-renames", "-z", "--"])
+            self.assertFalse(execute.call_args.kwargs["shell"])
+            execute.return_value = subprocess.CompletedProcess([], 1, output, b"PRIVATE_DETAIL")
+            self.assertEqual(formatting_paths(), [])
 
     def test_reported_failure_with_zero_exit_is_rejected(self):
         status, _, _ = self.invoke(output="Detect secrets...Failed\n")
