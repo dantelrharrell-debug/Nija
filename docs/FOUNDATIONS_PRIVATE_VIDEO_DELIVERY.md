@@ -26,10 +26,13 @@ target host, before any release:
 python -c 'from course_private_video import configured_catalog, verify_video_inventory; print("Verified videos:", verify_video_inventory(*configured_catalog()))'
 ```
 
-Require every intended paid file to match and runtime mount to be read-only. The
+Require every intended paid file to match and the portal worker's actual filesystem
+mount to be read-only. Changing POSIX permissions alone is not sufficient. The
+portal rejects writable mount descriptors for the root, manifest, or media file. The
 operator inventory check cryptographically verifies file bytes; runtime rechecks
-the manifest, safe file type and size for each request, and relies on immutable
-storage for same-length changes. Do not enable the route with mutable public storage.
+the pinned manifest, file type, size, and read-only mount flags per request. Keep
+the underlying storage immutable to other writers; a read-only portal bind alone
+does not prevent out-of-band replacement via a different writable mount. Do not enable the route with mutable public storage.
 
 ## Acceptance and rollback
 
