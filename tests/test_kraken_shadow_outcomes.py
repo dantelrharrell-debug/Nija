@@ -141,7 +141,8 @@ class ShadowOutcomesTest(unittest.TestCase):
         self.assertFalse(report["authorizes_orders"])
         self.assertEqual(report["metrics"], {
             "status": "reconciled_sample", "net_realized_pnl_usd": "1", "execution_cost_usd": "2",
-            "realized_drawdown_usd": "1", "profit_factor": "2",
+            "realized_drawdown_usd": "1", "profit_factor": "2", "gross_realized_pnl_usd": "3",
+            "net_win_fraction": "0.5", "mean_net_pnl_usd_per_closed_lot": "0.5",
         })
         decision = OwnerDecision("test:a", "evaluation-1", "owner-fixture", report["snapshot_sha256"], "retain_for_review", 250)
         self.assertEqual(self.inbox.record_owner_decision(decision, authenticate=lambda _: False), "unverified")
@@ -157,6 +158,27 @@ class ShadowOutcomesTest(unittest.TestCase):
         report = evaluate(self.reopen(), "test:a")
         self.assertEqual(report["owner_decisions"], [])
         self.assertEqual(report["metrics"]["net_realized_pnl_usd"], "-1")
+
+    def test_realized_metrics_count_zero_net_as_nonwin_and_do_not_impute_unavailable(self):
+        from bot.kraken_offline_strategy_review import _realized_metrics
+
+        def row(gross, cost):
+            return {"economics": {
+                "gross_pnl_usd": gross, "execution_cost_usd": cost, "closed_at_epoch": 100,
+            }}
+
+        rows = [row("3", "1"), row("1", "1"), row("0", "1")]
+        metrics = _realized_metrics(rows)
+        self.assertEqual(metrics["gross_realized_pnl_usd"], "4")
+        self.assertEqual(metrics["net_win_fraction"], "0.333333")
+        self.assertEqual(metrics["mean_net_pnl_usd_per_closed_lot"], "0.333333")
+        self.assertEqual(metrics["realized_drawdown_usd"], "0")
+        for incomplete in ([], rows + [{"economics": None}]):
+            metrics = _realized_metrics(incomplete)
+            self.assertEqual(metrics["status"], "unavailable")
+            self.assertIsNone(metrics["gross_realized_pnl_usd"])
+            self.assertIsNone(metrics["net_win_fraction"])
+            self.assertIsNone(metrics["mean_net_pnl_usd_per_closed_lot"])
 
     def test_offline_cutoff_keeps_future_and_same_second_lots_out_of_the_wrong_sample(self):
         from bot.kraken_offline_strategy_review import evaluate

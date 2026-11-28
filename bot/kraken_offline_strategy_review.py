@@ -16,6 +16,9 @@ def _realized_metrics(rows: list[dict]) -> dict:
         return {
             "status": "unavailable",
             "net_realized_pnl_usd": None,
+            "gross_realized_pnl_usd": None,
+            "net_win_fraction": None,
+            "mean_net_pnl_usd_per_closed_lot": None,
             "execution_cost_usd": None,
             "realized_drawdown_usd": None,
             "profit_factor": None,
@@ -23,6 +26,7 @@ def _realized_metrics(rows: list[dict]) -> dict:
     # Group simultaneous closes to avoid inventing a within-timestamp sequence.
     closes_by_time: dict[int, Decimal] = {}
     costs = wins = losses = Decimal(0)
+    winning_lots = 0
     with localcontext() as ctx:
         ctx.prec = 256
         for row in rows:
@@ -32,6 +36,7 @@ def _realized_metrics(rows: list[dict]) -> dict:
             stamp = amounts["closed_at_epoch"]
             closes_by_time[stamp] = closes_by_time.get(stamp, Decimal(0)) + pnl
             costs += execution_cost
+            winning_lots += int(pnl > 0)
             wins += max(pnl, Decimal(0))
             losses += max(-pnl, Decimal(0))
         cumulative = peak = drawdown = Decimal(0)
@@ -42,6 +47,11 @@ def _realized_metrics(rows: list[dict]) -> dict:
         return {
             "status": "reconciled_sample",
             "net_realized_pnl_usd": _canonical(cumulative),
+            "gross_realized_pnl_usd": _canonical(cumulative + costs),
+            "net_win_fraction": _canonical((Decimal(winning_lots) / len(rows)).quantize(Decimal("0.000001"))),
+            "mean_net_pnl_usd_per_closed_lot": _canonical(
+                (cumulative / len(rows)).quantize(Decimal("0.000001"))
+            ),
             "execution_cost_usd": _canonical(costs),
             "realized_drawdown_usd": _canonical(drawdown),
             "profit_factor": _canonical((wins / losses).quantize(Decimal("0.000001"))) if losses else None,
