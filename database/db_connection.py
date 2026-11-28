@@ -55,9 +55,7 @@ def get_database_url() -> str:
 
         db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
     else:
-        # Validate that DATABASE_URL contains a password
-        # Format: postgresql://user:password@host:port/database
-        # Check for empty password (e.g., user:@host or user@host)
+        # A PostgreSQL URL with user information must include a password.
         if '://' in db_url:
             # Extract the credentials portion between :// and @
             try:
@@ -66,7 +64,6 @@ def get_database_url() -> str:
                     rest = scheme_and_rest[1]
                     if '@' in rest:
                         credentials = rest.split('@', 1)[0]
-                        # Check if password is present (format: user:password)
                         if ':' in credentials:
                             password = credentials.split(':', 1)[1]
                             if not password:
@@ -78,14 +75,14 @@ def get_database_url() -> str:
                             # No password separator found
                             raise ValueError(
                                 "DATABASE_URL missing password. "
-                                "Format must be: postgresql://user:password@host:port/database"
+                                "Provide a PostgreSQL URL with a username and password."
                             )
             except (IndexError, ValueError) as e:
                 if "DATABASE_URL" in str(e):
                     raise
                 # Re-raise with more context if it's a parsing error
                 raise ValueError(
-                    f"Invalid DATABASE_URL format. Expected: postgresql://user:password@host:port/database"
+                    "Invalid DATABASE_URL format. Provide a PostgreSQL URL with credentials."
                 ) from e
 
     # Handle postgres:// prefix (some platforms use this instead of postgresql://)
