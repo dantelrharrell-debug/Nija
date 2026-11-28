@@ -304,7 +304,11 @@ def test_journal_required_for_strict_capture_and_restore(tmp_path, monkeypatch):
         journal_backup.restore(archive, expected_sha256=report["sha256"])
 
 
-@pytest.mark.parametrize("problem", ["wrong_scope", "orphan_resolution", "missing_order_id", "blank_order_id"])
+@pytest.mark.parametrize("problem", [
+    "wrong_scope", "orphan_resolution", "missing_order_id", "blank_order_id",
+    "nonterminal_status", "early_observation", "future_observation",
+    "invalid_evidence_digest", "trailing_digest_bytes", "valid_terminal",
+])
 def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch, problem):
     from bot.kraken_submission_journal import initialize_journal
 
@@ -315,18 +319,32 @@ def test_strict_backup_checks_journal_scope_and_references(tmp_path, monkeypatch
     initialize_journal(journal, scope)
     if problem != "wrong_scope":
         with sqlite3.connect(journal) as db:
-            if problem == "missing_order_id":
-                db.execute("INSERT INTO submission VALUES (?, ?, ?)", ("intent", 1, None))
-            elif problem == "blank_order_id":
-                db.execute("INSERT INTO submission VALUES (?, ?, ?)", ("intent", 1, " \t"))
+            if problem != "orphan_resolution":
+                order_id = {"missing_order_id": None, "blank_order_id": " \t"}.get(problem, "fixture-order")
+                db.execute("INSERT INTO submission VALUES (?, ?, ?)", ("intent", 1, order_id))
+            observed_at = {"early_observation": 0, "future_observation": 1e20}.get(problem, 1)
+            status = "open" if problem == "nonterminal_status" else "closed"
+            broker_digest = ("g" if problem == "invalid_evidence_digest" else "a") * 64
+            ledger_digest = "b" * 64 + ("\x00invalid" if problem == "trailing_digest_bytes" else "")
             db.execute("INSERT INTO submission_resolution VALUES (?, ?, ?, ?, ?)",
-                       ("intent", 1, "closed", "a" * 64, "b" * 64))
+                       ("intent", observed_at, status, broker_digest, ledger_digest))
     monkeypatch.setenv("NIJA_KRAKEN_SUBMISSION_JOURNAL_PATH", str(journal))
+    if problem == "valid_terminal":
+        archive = journal_backup.capture(source, tmp_path / "strict")
+        assert archive["submission_journal_verified"] is True
+        restored = journal_backup.restore(Path(archive["archive"]), expected_sha256=archive["sha256"])
+        assert restored["submission_journal_verified"] is True
+        return
     expected = {
         "wrong_scope": "account scope mismatch",
         "orphan_resolution": "invalid references",
         "missing_order_id": "terminal evidence without a broker order reference",
         "blank_order_id": "terminal evidence without a broker order reference",
+        "nonterminal_status": "invalid terminal evidence metadata",
+        "early_observation": "invalid terminal evidence metadata",
+        "future_observation": "invalid terminal evidence metadata",
+        "invalid_evidence_digest": "invalid terminal evidence metadata",
+        "trailing_digest_bytes": "invalid terminal evidence metadata",
     }[problem]
     with pytest.raises(ValueError, match=expected):
         journal_backup.capture(source, tmp_path / "strict")
