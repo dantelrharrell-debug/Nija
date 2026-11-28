@@ -320,7 +320,7 @@ STOP_LOSS_EMERGENCY = -0.05   # -5.0% (catastrophic failsafe)
 
    Analyzing BTC-USD on COINBASE...
    💰 P&L: +$5.50 (+2.75%) | Entry: $200.00
-   
+
    💰 PROFIT REALIZATION (MANAGEMENT MODE): BTC-USD
       Current P&L: +2.75%
       Profit target: +2.50%

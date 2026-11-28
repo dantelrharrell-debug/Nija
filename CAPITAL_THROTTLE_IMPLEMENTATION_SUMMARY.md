@@ -114,25 +114,25 @@ throttle = AutomatedCapitalThrottle(initial_capital=balance)
 def execute_trade(signal, balance):
     # Update capital
     throttle.update_capital(balance)
-    
+
     # Check throttle
     if throttle.state.is_throttled:
         logger.warning(f"Throttled: {throttle.state.throttle_reason}")
         return None
-    
+
     # Get max position size (throttled)
     max_pos_pct = throttle.get_max_position_size()
     position_size = balance * max_pos_pct
-    
+
     # Execute trade
     order = place_order(signal, position_size)
-    
+
     # Record outcome
     throttle.record_trade(
         is_winner=order.profit > 0,
         profit_loss=order.profit
     )
-    
+
     return order
 ```
 

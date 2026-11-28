@@ -100,24 +100,24 @@ class MyStrategy:
     def __init__(self):
         # Create optimization stack
         self.optimization_stack = OptimizationStack()
-        
+
         # Enable desired layers
         self.optimization_stack.enable_layer(OptimizationLayer.FAST)
         self.optimization_stack.enable_layer(OptimizationLayer.EMERGENCY)
         self.optimization_stack.enable_layer(OptimizationLayer.STABILITY)
-    
+
     def execute_trade(self, symbol, base_size):
         # Get market data
         market_data = self.get_market_data(symbol)
-        
+
         # Optimize position size
         optimized_size = self.optimization_stack.optimize_position_size(
             symbol, market_data, base_size
         )
-        
+
         # Optimize entry timing
         entry_params = self.optimization_stack.optimize_entry_timing(market_data)
-        
+
         # Execute with optimized parameters
         return self.place_order(symbol, optimized_size, entry_params)
 ```
@@ -469,13 +469,13 @@ stack = create_optimization_stack()
 # Run backtest with optimization
 for bar in historical_data:
     market_data = extract_market_data(bar)
-    
+
     # Optimize entry
     entry_params = stack.optimize_entry_timing(market_data)
-    
+
     # Optimize position size
     size = stack.optimize_position_size(symbol, market_data, base_size)
-    
+
     # Execute trade with optimized parameters
     execute_trade(symbol, size, entry_params)
 

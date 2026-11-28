@@ -37,7 +37,7 @@ NIJA is an automated cryptocurrency trading application that uses algorithmic an
 4. NIJA connects to user's exchange account via API
 5. NIJA executes trades on user's account based on algorithmic analysis
 
-**Important:** 
+**Important:**
 - NIJA **NEVER** holds user funds
 - NIJA **NEVER** has withdrawal permissions
 - Users can revoke API access at any time via their exchange

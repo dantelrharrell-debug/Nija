@@ -88,7 +88,7 @@ Integration Example:
 - Exchange-specific: Kraken $10, Coinbase $2
 - Balance-adaptive: Micro ($3), Small ($5), Medium ($10), Large ($15)
 
-**Impact**: 
+**Impact**:
 - ❌ Blocks fragmentation before it happens
 - ✅ Ensures positions are fee-efficient
 - ✅ Reduces exchange rejection rate
@@ -367,11 +367,11 @@ def validate_order(size, price, symbol, balance, broker):
     # Check kill switch
     if get_kill_switch().is_active():
         return False, "Kill switch active"
-    
+
     # Check minimum notional
     if should_block_order(size, price, broker, balance, symbol):
         return False, "Below minimum notional"
-    
+
     # Check fee ratio
     validator = FeeValidator()
     result = validator.validate_fee_to_position_ratio(
@@ -379,12 +379,12 @@ def validate_order(size, price, symbol, balance, broker):
     )
     if result.level == "ERROR":
         return False, f"Fee check failed: {result.message}"
-    
+
     # Check capital reservation
     can_open, msg, _ = can_open_position(balance, size * price)
     if not can_open:
         return False, msg
-    
+
     return True, "Validation passed"
 ```
 

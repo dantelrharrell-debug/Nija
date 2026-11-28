@@ -157,31 +157,31 @@ class ExecutionEngine:
             stagnation_hours=4.0,
             min_pnl_movement=0.002
         )
-    
+
     def check_position_health(self):
         """Check and close unhealthy positions"""
         positions = self.get_open_positions()
-        
+
         # Identify positions to close
         to_close = self.dust_engine.identify_positions_to_close(
             positions,
             force_to_limit=True
         )
-        
+
         # Close identified positions
         for pos in to_close:
             logger.info(f"🧹 Dust cleanup: Closing {pos['symbol']} - {pos['reason']}")
             self.close_position(pos['symbol'])
-    
+
     def before_new_trade(self, symbol):
         """Check if new trade is allowed"""
         current_count = len(self.get_open_positions())
         allowed, reason = self.dust_engine.should_allow_new_position(current_count)
-        
+
         if not allowed:
             logger.warning(f"❌ Trade blocked: {reason}")
             return False
-        
+
         return True
 ```
 
@@ -191,10 +191,10 @@ class ExecutionEngine:
 def run_trading_cycle():
     # 1. Check and cleanup dust positions
     execution_engine.check_position_health()
-    
+
     # 2. Scan for new opportunities
     signals = scan_market()
-    
+
     # 3. Before taking new trade, check position limit
     for signal in signals:
         if execution_engine.before_new_trade(signal.symbol):
@@ -204,13 +204,13 @@ def run_trading_cycle():
 def check_position_health(self):
     """Check and close unhealthy positions"""
     positions = self.get_open_positions()
-    
+
     # Identify positions to close
     to_close = self.dust_engine.identify_positions_to_close(
         positions,
         force_to_limit=True
     )
-    
+
     # Close identified positions with explicit profit status logging
     for pos in to_close:
         # Log the forced exit
@@ -219,10 +219,10 @@ def check_position_health(self):
             reason=pos['reason'],
             current_pnl_pct=pos['current_pnl']
         )
-        
+
         # Execute the close
         self.close_position(pos['symbol'])
-        
+
         # PROFIT_STATUS = PENDING → CONFIRMED
         # This ensures the trade outcome is immediately recorded
 ```
@@ -242,17 +242,17 @@ class ExecutionEngine:
         self.truth_layer = UserTruthLayer(
             storage_path="/home/runner/work/Nija/Nija/data/user_truth.json"
         )
-    
+
     def close_position(self, symbol, ...):
         """Close position and record truth"""
         # ... existing close logic ...
-        
+
         # Calculate net P&L (after fees)
         net_pnl = self.calculate_pnl(symbol)
-        
+
         # Record truth
         self.truth_layer.record_trade_pnl(net_pnl)
-        
+
         # Get today's truth for logging
         today_truth = self.truth_layer.get_today_truth()
         logger.info(f"💰 {today_truth}")
@@ -263,7 +263,7 @@ class ExecutionEngine:
 # In dashboard or API endpoint
 def get_daily_summary():
     truth = UserTruthLayer()
-    
+
     return {
         'today': truth.get_today_truth(),
         'yesterday': truth.get_yesterday_truth(),
@@ -288,34 +288,34 @@ class TradingBot:
             storage_path="/home/runner/work/Nija/Nija/data/health_metric.json",
             lookback_hours=24
         )
-        
+
         # Store starting balance
         self.daily_starting_balance = None
-    
+
     def daily_health_check(self):
         """Run once per day (or every cycle)"""
         current_balance = get_account_balance()
-        
+
         # If first check of the day, store starting balance
         if self.daily_starting_balance is None:
             self.daily_starting_balance = current_balance
-        
+
         # Record health check
         snapshot = self.health_metric.record_health_check(
             starting_balance=self.daily_starting_balance,
             current_balance=current_balance
         )
-        
+
         # Update starting balance for tomorrow
         if snapshot.timestamp.hour == 0:  # Midnight reset
             self.daily_starting_balance = current_balance
-        
+
         return snapshot
-    
+
     def get_position_size_multiplier(self):
         """Get aggression multiplier for position sizing"""
         return self.health_metric.get_aggression_multiplier()
-    
+
     def should_pause_trading(self):
         """Check if losses are severe enough to pause"""
         return self.health_metric.should_pause_trading()
@@ -327,7 +327,7 @@ def calculate_position_size(base_size):
     # Apply health-based aggression multiplier
     aggression = trading_bot.get_position_size_multiplier()
     actual_size = base_size * aggression
-    
+
     logger.info(f"Position size: ${base_size:.2f} × {aggression:.2f} = ${actual_size:.2f}")
     return actual_size
 

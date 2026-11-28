@@ -106,7 +106,7 @@ def upgrade():
         sa.PrimaryKeyConstraint('id'),
         sa.ForeignKeyConstraint(['user_id'], ['users.id']),
     )
-    
+
     # Create index for performance
     op.create_index('ix_risk_profiles_user_id', 'user_risk_profiles', ['user_id'])
 
@@ -161,7 +161,7 @@ Update Python models, queries, and application logic to work with the new schema
 ```python
 def upgrade():
     op.add_column('trades', sa.Column('slippage_pct', sa.Float(), nullable=True))
-    
+
 def downgrade():
     op.drop_column('trades', 'slippage_pct')
 ```
@@ -180,7 +180,7 @@ def upgrade():
     # Step 1: Backup data if needed
     # Step 2: Remove column
     op.drop_column('trades', 'old_unused_field')
-    
+
 def downgrade():
     # Restore column structure (data will be lost!)
     op.add_column('trades', sa.Column('old_unused_field', sa.String(100), nullable=True))
@@ -199,7 +199,7 @@ def downgrade():
 ```python
 def upgrade():
     op.alter_column('trades', 'old_name', new_column_name='new_name')
-    
+
 def downgrade():
     op.alter_column('trades', 'new_name', new_column_name='old_name')
 ```
@@ -221,7 +221,7 @@ def upgrade():
                     existing_type=sa.Integer(),
                     type_=sa.Float(),
                     postgresql_using='amount::float')
-    
+
 def downgrade():
     # May lose precision
     op.alter_column('trades', 'amount',

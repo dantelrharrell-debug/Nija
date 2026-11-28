@@ -380,14 +380,14 @@ if is_proven:
         'position_rejections': risk_stats['rejected'],
         'total_validations': risk_stats['total_validations'],
     }
-    
+
     report = greenlight.generate_greenlight_report(
         user_id="john_smith",
         current_tier=ScalingTier.MICRO,
         performance_metrics=metrics,
         risk_metrics=risk_metrics
     )
-    
+
     if report.all_criteria_met:
         print("🎉 User ready for tier progression!")
         print(report.to_text_report())

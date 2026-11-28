@@ -68,10 +68,10 @@ When NIJA restarts or reconnects to a user's account, it may find existing open 
 If the user has enabled "Position Adoption" in settings:
 
 1. **Discovery:** NIJA scans the user's account and identifies all open positions
-2. **Classification:** 
+2. **Classification:**
    - Positions opened by NIJA before restart → Re-track as `nija_strategy`
    - All other positions → Mark as `broker_existing` (not managed)
-3. **Optional User Consent:** 
+3. **Optional User Consent:**
    - NIJA can prompt: "Found 5 existing positions. Allow NIJA to manage them?"
    - If user approves → Convert to `nija_strategy` and apply exit logic
    - If user declines → Keep as `broker_existing` (display only)
@@ -135,16 +135,16 @@ Existing Holdings - Not Managed by NIJA (27)
 
 **NIJA-Managed Positions:**
 ```
-ℹ️ These positions were opened by NIJA based on your configured 
-   trading strategy. NIJA actively manages exits, stop-losses, 
+ℹ️ These positions were opened by NIJA based on your configured
+   trading strategy. NIJA actively manages exits, stop-losses,
    and profit targets for these positions.
 ```
 
 **Existing Holdings:**
 ```
-ℹ️ These positions existed in your account before NIJA started 
-   trading, or were manually entered by you. NIJA does NOT 
-   automatically manage or close these positions. You remain 
+ℹ️ These positions existed in your account before NIJA started
+   trading, or were manually entered by you. NIJA does NOT
+   automatically manage or close these positions. You remain
    in full control.
 ```
 
@@ -168,11 +168,11 @@ NIJA clearly distinguishes between two types of holdings in your account:
    • Pre-existing positions from before you activated NIJA
    • Manual positions you entered yourself
    • Positions from other trading tools
-   • NIJA displays these for your information but NEVER 
+   • NIJA displays these for your information but NEVER
      automatically modifies or closes them
 
-IMPORTANT: You maintain full control and visibility over all 
-positions at all times. NIJA only manages positions that IT 
+IMPORTANT: You maintain full control and visibility over all
+positions at all times. NIJA only manages positions that IT
 opened based on your configured strategy.
 ```
 
@@ -295,20 +295,20 @@ POSITION MANAGEMENT POLICY
 
 NIJA distinguishes between two types of positions:
 
-1. NIJA-Managed Positions: Positions opened by NIJA based on 
-   your configured strategy. NIJA has authority to manage exits, 
-   stop-losses, and take-profits for these positions within your 
+1. NIJA-Managed Positions: Positions opened by NIJA based on
+   your configured strategy. NIJA has authority to manage exits,
+   stop-losses, and take-profits for these positions within your
    configured risk parameters.
 
-2. Existing Holdings: Pre-existing positions or manually entered 
-   positions. NIJA does NOT have authority to modify or close 
+2. Existing Holdings: Pre-existing positions or manually entered
+   positions. NIJA does NOT have authority to modify or close
    these positions automatically. You retain full manual control.
 
 By using NIJA, you acknowledge that:
 - You understand the distinction between managed and unmanaged positions
 - You can view position classification at any time in the app
 - You can disable NIJA management of any position at any time
-- NIJA will never silently take control of your existing holdings 
+- NIJA will never silently take control of your existing holdings
   without your explicit consent
 ```
 

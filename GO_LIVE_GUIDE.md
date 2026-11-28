@@ -213,7 +213,7 @@ Monitor these metrics every hour:
 ### 3. Broker Health Check
 **Purpose:** Validates all brokers are operational  
 **Critical:** Yes (failed brokers), Warning (degraded brokers)  
-**Remediation:** 
+**Remediation:**
 - Check broker status pages (Kraken, Coinbase, etc.)
 - Verify API credentials
 - Test connectivity manually

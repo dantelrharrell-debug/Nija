@@ -347,7 +347,7 @@ This means NIJA can:
 
 ## The Honest Assessment
 
-**Current Status:** 
+**Current Status:**
 > NIJA has **institutional-grade technical infrastructure** and is ready to begin accumulating the live track record and operational proof required for full institutional deployment.
 
 **Translation:**

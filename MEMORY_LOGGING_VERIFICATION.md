@@ -34,34 +34,34 @@ The lightweight memory usage logging feature requested in the problem statement 
 def _log_memory_usage():
     """
     Log lightweight memory usage at startup.
-    
+
     Logs RSS (Resident Set Size) and VMS (Virtual Memory Size) in a single line.
     Optionally warns if memory usage exceeds 70% of available system memory.
     """
     try:
         import psutil
-        
+
         # Get current process memory info
         process = psutil.Process(os.getpid())
         mem_info = process.memory_info()
-        
+
         # RSS: Resident Set Size (physical memory used)
         # VMS: Virtual Memory Size (total virtual memory)
         rss_mb = mem_info.rss / (1024 * 1024)  # Convert to MB
         vms_mb = mem_info.vms / (1024 * 1024)  # Convert to MB
-        
+
         # Get system memory for percentage calculation
         system_mem = psutil.virtual_memory()
         total_mb = system_mem.total / (1024 * 1024)
         percent_used = (mem_info.rss / system_mem.total) * 100
-        
+
         # Single line log with RSS and VMS
         logger.info(f"💾 Memory: RSS={rss_mb:.1f}MB, VMS={vms_mb:.1f}MB ({percent_used:.1f}% of {total_mb:.0f}MB system)")
-        
+
         # Optional: warn if memory usage is at 70% of system memory
         if percent_used >= 70.0:
             logger.warning(f"⚠️  High memory usage: {percent_used:.1f}% (threshold: 70%)")
-            
+
     except ImportError:
         # psutil not available - use basic resource module as fallback
         try:
@@ -119,14 +119,14 @@ The memory logging is called at bot startup in the following sequence:
 
 1. **Startup banner** (line 341-349)
    - Logs process ID, Python version, working directory
-   
+
 2. **Memory logging** (line 352) ← **THIS FEATURE**
    - Logs RSS, VMS, and system memory percentage
    - Warns if ≥70% memory used
-   
+
 3. **Signal handlers** (line 355-357)
    - Registers SIGTERM and SIGINT handlers
-   
+
 4. **Health check initialization** (line 361-362)
    - Initializes health check manager
 

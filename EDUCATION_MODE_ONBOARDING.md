@@ -25,7 +25,7 @@ NIJA now features a three-layer onboarding UX that positions the product as an e
 
 **Access**: Automatic - all new users start here
 
-**User Message**: 
+**User Message**:
 > "Learn trading without risking real money"
 
 **No Requirements**:

@@ -11,7 +11,7 @@
 
 LOW_CAPITAL mode and fee-aware adjustments could reduce position sizes below the tier-defined MAX_POSITION_PCT. For the INVESTOR tier ($250-999), the maximum position size should be 22%, and this should act as a FLOOR that adjustments cannot reduce below.
 
-**Core Issue**: 
+**Core Issue**:
 ```python
 # INCORRECT BEHAVIOR:
 # INVESTOR tier has 22% max, but LOW_CAPITAL or quality multipliers
@@ -261,7 +261,7 @@ Returns JSON with complete tier floor data:
 ---
 
 **Implemented by**: GitHub Copilot  
-**Dates**: 
+**Dates**:
 - January 30, 2026: Tier floor enforcement
 - January 31, 2026: Startup logging, metrics emission, assertions, dashboard API
 **PR**: copilot/respect-tier-floor-22-percent

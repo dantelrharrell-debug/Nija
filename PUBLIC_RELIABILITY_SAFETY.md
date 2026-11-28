@@ -47,7 +47,7 @@ A **kill switch** is your emergency brake. One tap stops all trading immediately
 - System fails safely (pauses, doesn't continue)
 - No runaway bot scenarios
 
-**User Control:** 
+**User Control:**
 ```
 ✅ "Pause Trading" button always visible
 ✅ One tap → instant pause (< 1 second)

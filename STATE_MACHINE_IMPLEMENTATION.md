@@ -95,7 +95,7 @@ if new_state in (PositionManagementState.DRAIN, PositionManagementState.NORMAL):
     for idx, position in enumerate(current_positions):
         # Analyze position for exit criteria
         # ...
-        
+
         # Rate limiting between position checks
         if idx < len(current_positions) - 1:
             time.sleep(POSITION_CHECK_DELAY + jitter)

@@ -73,7 +73,7 @@ These warnings were **incorrect** because:
       Platform should always be PRIMARY, users should be SECONDARY
 
    📋 HOW TO FIX:
-   
+
    For KRAKEN Platform account:
    1. Get API credentials from the KRAKEN website
       URL: https://www.kraken.com/u/security/api
@@ -81,7 +81,7 @@ These warnings were **incorrect** because:
       KRAKEN_PLATFORM_API_KEY=<your-api-key>
       KRAKEN_PLATFORM_API_SECRET=<your-api-secret>
    3. Restart the bot
-   
+
    💡 TIP: Once Platform accounts are connected, the warning will disappear
 ======================================================================
 ```
@@ -98,7 +98,7 @@ These warnings were **incorrect** because:
    • Cleaner logs and startup flow
 
    📋 TO CONFIGURE PLATFORM ACCOUNT:
-   
+
    For KRAKEN Platform account:
    1. Get API credentials from the KRAKEN website
       URL: https://www.kraken.com/u/security/api
@@ -106,7 +106,7 @@ These warnings were **incorrect** because:
       KRAKEN_PLATFORM_API_KEY=<your-api-key>
       KRAKEN_PLATFORM_API_SECRET=<your-api-secret>
    3. Restart the bot
-   
+
    Note: Platform and Users all trade independently using same NIJA logic
 ======================================================================
 ```
@@ -123,12 +123,12 @@ These warnings were **incorrect** because:
    ↓ Uses NIJA signals + execution logic
    ↓ Trades with its own capital
    ↓ Makes own decisions based on NIJA strategy
-   
+
 👤 USER ACCOUNT 1 (Independent Trader #2)
    ↓ Uses same NIJA signals + execution logic
    ↓ Trades with their own capital
    ↓ Makes own decisions based on NIJA strategy
-   
+
 👤 USER ACCOUNT 2 (Independent Trader #3)
    ↓ Uses same NIJA signals + execution logic
    ↓ Trades with their own capital
@@ -197,7 +197,7 @@ Expected behavior:
 
 This will cause:
    • ℹ️  Informational recommendation on startup
-   
+
 (Shows how to configure Platform if desired)
 ```
 

@@ -74,12 +74,12 @@ All risk changes require:
 **Startup Banner:**
 ```
 ================================================================================
-                           🔒 RISK FREEZE ACTIVE                              
+                           🔒 RISK FREEZE ACTIVE
 
-                    Configuration: RISK_CONFIG_v1.0.0                        
-                    Changes require versioned approval                       
+                    Configuration: RISK_CONFIG_v1.0.0
+                    Changes require versioned approval
 
-                  See RISK_FREEZE_POLICY.md for details                      
+                  See RISK_FREEZE_POLICY.md for details
 ================================================================================
 
 🔒 RISK FREEZE ACTIVE — Config RISK_CONFIG_v1.0.0 — Changes require versioned approval

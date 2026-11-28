@@ -111,7 +111,7 @@ capital_scaling.record_trade(
 ```
 Position size will NEVER exceed:
   available_balance * max_position_pct
-  
+
 Even if scaling factors suggest a larger size!
 ```
 
@@ -165,7 +165,7 @@ from bot.capital_scaling_integration import (
 class EnhancedApexStrategy(NijaApexStrategyV71):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         # Initialize capital scaling integration
         self.capital_scaling = get_capital_scaling_integration(
             initial_capital=self.config.get('initial_capital', 1000.0),
@@ -173,7 +173,7 @@ class EnhancedApexStrategy(NijaApexStrategyV71):
             enable_autonomous_scaling=True,
             enable_attribution=True
         )
-    
+
     def calculate_position_size_enhanced(
         self,
         account_balance: float,
@@ -188,7 +188,7 @@ class EnhancedApexStrategy(NijaApexStrategyV71):
         # Get current price and volatility
         current_price = self.broker.get_current_price(symbol)
         volatility = self.calculate_volatility(symbol)  # Your method
-        
+
         # Create position sizing params
         params = PositionSizingParams(
             available_balance=account_balance,
@@ -200,27 +200,27 @@ class EnhancedApexStrategy(NijaApexStrategyV71):
             strategy_name="APEX_V71",
             max_position_pct=self.risk_manager.max_position_pct  # 🔒 FROZEN LIMIT
         )
-        
+
         # Calculate optimal position size
         result = self.capital_scaling.calculate_position_size(params)
-        
+
         if not result.can_trade:
             logger.warning(f"Trading halted: {result.reason}")
             return 0.0
-        
+
         logger.info(
             f"Position sized: ${result.position_size_usd:,.2f} "
             f"({result.position_pct_of_capital:.2f}% of capital)"
         )
-        
+
         if result.scaling_factors['frozen_limit_applied']:
             logger.info(
                 f"🔒 Frozen risk limit enforced at "
                 f"{params.max_position_pct*100:.1f}%"
             )
-        
+
         return result.position_size_base
-    
+
     def record_trade_with_attribution(
         self,
         trade_id: str,
@@ -239,7 +239,7 @@ class EnhancedApexStrategy(NijaApexStrategyV71):
         Record trade with full attribution
         """
         new_capital = self.broker.get_account_balance()
-        
+
         # Record in capital scaling system
         self.capital_scaling.record_trade(
             trade_id=trade_id,
@@ -273,10 +273,10 @@ def generate_daily_reports():
     """Generate and save daily reports"""
     # Generate text report
     daily_report = reporting.generate_daily_report(save_to_file=True)
-    
+
     # Export to JSON
     json_file = reporting.export_to_json(report_type="daily")
-    
+
     # Log completion
     logger.info(f"✅ Daily reports generated and saved")
 

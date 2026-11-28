@@ -19,7 +19,7 @@
 if self.safety.is_trading_allowed():
     if not trading_allowed and not user_mode:
         user_mode = True  # Force management-only mode
-        
+
 # Managing-only mode determined by:
 managing_only = user_mode OR entries_blocked OR (positions >= MAX_POSITIONS)
 ```
@@ -94,7 +94,7 @@ if position_tracker:
     pnl_percent = pnl_data['pnl_percent']  # FRACTIONAL format (0.02 = 2%)
     pnl_dollars = pnl_data['pnl_dollars']
     entry_price = pnl_data['entry_price']
-    
+
     # Validation
     assert abs(pnl_percent) < 1.0  # Must be fractional
 ```
@@ -166,7 +166,7 @@ if len(current_positions) > MAX_POSITIONS_ALLOWED:
     # Force-sell weakest positions (sorted by size)
     remaining_positions = [p for p not in positions_to_exit]
     remaining_sorted = sorted(remaining_positions, key=position_value)
-    
+
     positions_needed = (current - MAX) - len(positions_to_exit)
     for pos in remaining_sorted[:positions_needed]:
         positions_to_exit.append({...})
@@ -176,13 +176,13 @@ if len(current_positions) > MAX_POSITIONS_ALLOWED:
 ```python
 if positions_to_exit:
     logger.info(f"🔴 CONCURRENT EXIT: Selling {len(positions_to_exit)} positions NOW")
-    
+
     for pos_data in positions_to_exit:
         symbol = pos_data['symbol']
         quantity = pos_data['quantity']
         reason = pos_data['reason']
         exit_broker = pos_data['broker']
-        
+
         # Execute sell order
         result = exit_broker.place_market_order(
             symbol=symbol,
@@ -190,13 +190,13 @@ if positions_to_exit:
             quantity=quantity,
             force_liquidate=True  # For Coinbase protective exits
         )
-        
+
         # Track results
         if success:
             successful_sells.append(symbol)
         else:
             failed_sells.append(symbol)
-    
+
     # Summary logging
     logger.info(f"✅ Successfully sold: {len(successful_sells)}")
     logger.info(f"❌ Failed to sell: {len(failed_sells)}")

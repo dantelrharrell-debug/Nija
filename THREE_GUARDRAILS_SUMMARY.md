@@ -81,7 +81,7 @@ If 24h net PnL <= -3%:
 ```python
 class NIJAHealthMetric:
     CIRCUIT_BREAKER_PCT = 3.0  # -3% triggers pause
-    
+
     def should_allow_new_entry(self) -> tuple[bool, str]:
         if self.circuit_breaker_active:
             return False, "Circuit breaker active: 24h loss >= 3%, NEW ENTRIES PAUSED"

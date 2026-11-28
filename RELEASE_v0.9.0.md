@@ -281,7 +281,7 @@ Existing code will continue to work. New features are opt-in.
 **Testing**: Comprehensive integration tests
 **Documentation**: Complete guides and summaries
 
-**Philosophy**: 
+**Philosophy**:
 - Intelligence without discipline → Intelligence WITH discipline
 - Honesty-first over profit-first
 - Capital protection over aggressive returns

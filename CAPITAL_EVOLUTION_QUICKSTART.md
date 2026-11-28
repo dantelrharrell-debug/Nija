@@ -55,7 +55,7 @@ else:
     # Calculate position size with evolution risk %
     risk_pct = engine.get_risk_per_trade_pct() / 100.0
     position_size = new_balance * risk_pct
-    
+
     # Open trade with calculated position size
     print(f"Opening position: ${position_size:.2f}")
 ```
@@ -93,27 +93,27 @@ class MyTradingBot:
         self.balance = initial_balance
         self.evolution = get_evolution_engine(initial_capital=initial_balance)
         self.open_positions = []
-    
+
     def can_open_position(self):
         """Check if we can open a new position"""
         max_pos = self.evolution.get_max_positions()
         return len(self.open_positions) < max_pos
-    
+
     def calculate_position_size(self):
         """Calculate position size using evolution risk %"""
         risk_pct = self.evolution.get_risk_per_trade_pct() / 100.0
         return self.balance * risk_pct
-    
+
     def execute_trade(self, symbol, direction):
         """Execute a trade with evolution controls"""
         # Check position limit
         if not self.can_open_position():
             print(f"❌ Position limit reached: {len(self.open_positions)}/{self.evolution.get_max_positions()}")
             return False
-        
+
         # Calculate size
         size = self.calculate_position_size()
-        
+
         # Open position
         position = {
             'symbol': symbol,
@@ -121,24 +121,24 @@ class MyTradingBot:
             'size': size
         }
         self.open_positions.append(position)
-        
+
         print(f"✅ Opened {symbol} {direction}: ${size:.2f}")
         return True
-    
+
     def close_trade(self, position_index, pnl):
         """Close trade and update evolution engine"""
         # Remove position
         position = self.open_positions.pop(position_index)
-        
+
         # Update balance
         self.balance += pnl
-        
+
         # Update evolution engine (checks for mode transitions)
         new_mode = self.evolution.update_capital(self.balance)
-        
+
         if new_mode:
             print(f"🚀 Evolved to: {self.evolution.mode_config.get_display_name()}")
-        
+
         return position
 
 # Example usage
@@ -198,14 +198,14 @@ def update_balance_module(new_balance):
 class TradingStrategy:
     def __init__(self, evolution_engine):
         self.evolution = evolution_engine
-    
+
     def can_trade(self, open_count):
         return open_count < self.evolution.get_max_positions()
 
 class RiskManager:
     def __init__(self, evolution_engine):
         self.evolution = evolution_engine
-    
+
     def get_risk_percent(self):
         return self.evolution.get_risk_per_trade_pct()
 
@@ -260,16 +260,16 @@ def before_opening_trade(engine, open_positions, balance):
     # Check position limit
     if len(open_positions) >= engine.get_max_positions():
         return False, "Position limit reached"
-    
+
     # Calculate size
     risk_pct = engine.get_risk_per_trade_pct() / 100.0
     size = balance * risk_pct
-    
+
     # Check if copy trading should be enabled
     if engine.is_copy_trading_enabled():
         # Replicate to user accounts
         replicate_to_users(size)
-    
+
     return True, size
 ```
 
@@ -279,11 +279,11 @@ def before_opening_trade(engine, open_positions, balance):
 def after_closing_trade(engine, new_balance, pnl):
     # Update engine
     new_mode = engine.update_capital(new_balance)
-    
+
     # Log transition
     if new_mode:
         log_mode_transition(new_mode, new_balance)
-    
+
     # Adjust leverage if enabled
     if engine.is_leverage_enabled():
         enable_leverage_trading()
@@ -296,7 +296,7 @@ def after_closing_trade(engine, new_balance, pnl):
 ```python
 def generate_daily_report(engine):
     status = engine.get_evolution_status()
-    
+
     report = f"""
     Daily Trading Report
     ====================
@@ -308,10 +308,10 @@ def generate_daily_report(engine):
     Copy Trading: {'✅' if status['copy_trading_enabled'] else '❌'}
     Leverage: {'✅' if status['leverage_enabled'] else '❌'}
     """
-    
+
     if status['next_mode']:
         report += f"\nProgress to {status['next_mode']}: {status['progress_to_next_pct']:.0f}%"
-    
+
     return report
 ```
 
@@ -330,7 +330,7 @@ python test_capital_evolution_engine.py
 # ✅ PASS | Progress Tracking
 # ✅ PASS | Integration Example
 # ✅ PASS | Comprehensive Report
-# 
+#
 # 🎉 ALL TESTS PASSED! 🎉
 ```
 

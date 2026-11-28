@@ -8,7 +8,7 @@ This implementation addresses 5 critical issues identified in the problem statem
 
 **Problem**: Position cleanup loop failed to iterate correctly through all user positions, with broker refresh failures causing incomplete cap enforcement.
 
-**Root Cause**: 
+**Root Cause**:
 - No validation of broker responses in position refresh loop
 - Silent failures when `broker.get_positions()` returned None or invalid data
 - Missing diagnostic information when cap enforcement failed
@@ -24,7 +24,7 @@ This implementation addresses 5 critical issues identified in the problem statem
        logger.error(f"❌ {broker_type.value} returned None for positions")
        refresh_failures.append(broker_type.value)
        continue
-       
+
    if not isinstance(positions, list):
        logger.error(f"❌ {broker_type.value} returned invalid positions type")
        refresh_failures.append(broker_type.value)
@@ -44,7 +44,7 @@ This implementation addresses 5 critical issues identified in the problem statem
    - Diagnostic logging when safety violation occurs
    - Specific recommendations based on failure type
 
-**Impact**: 
+**Impact**:
 - ✅ Broker failures no longer silently corrupt cap enforcement
 - ✅ Clear diagnostic information when cleanup fails
 - ✅ Actionable recommendations for operators
@@ -135,7 +135,7 @@ This implementation addresses 5 critical issues identified in the problem statem
        logger.warning("⚠️  ADOPTION MISMATCH:")
        # ... existing logs ...
        logger.warning("📋 FAILURE BREAKDOWN:")
-       
+
        # Group failures by reason
        failure_counts = {}
        for failure in failed_positions:
@@ -143,7 +143,7 @@ This implementation addresses 5 critical issues identified in the problem statem
            if reason not in failure_counts:
                failure_counts[reason] = []
            failure_counts[reason].append(failure)
-       
+
        # Log each failure reason with details
        for reason, failures in failure_counts.items():
            logger.warning(f"❌ {reason}: {len(failures)} position(s)")
@@ -229,10 +229,10 @@ assert cleanup.dry_run == True
            'max_positions': max_positions,
            'excess_count': current_count - max_positions
        }
-       
+
        # Log as JSON for easy parsing by monitoring systems
        logger.error(f"🚨 CAP_VIOLATION_ALERT: {alert_data}")
-       
+
        # Also log human-readable format
        logger.error(f"   User: {user_id}")
        logger.error(f"   Current Positions: {current_count}")
@@ -297,12 +297,12 @@ cleanup._log_cap_violation_alert("test_user", 10, 5)
 
 ```bash
 # Cap violation alert test output
-🚨 CAP_VIOLATION_ALERT: {'timestamp': '2026-02-18T18:57:21.722128', 
-                         'alert_type': 'POSITION_CAP_VIOLATION', 
-                         'severity': 'CRITICAL', 
-                         'user_id': 'test_user', 
-                         'current_count': 3, 
-                         'max_positions': 2, 
+🚨 CAP_VIOLATION_ALERT: {'timestamp': '2026-02-18T18:57:21.722128',
+                         'alert_type': 'POSITION_CAP_VIOLATION',
+                         'severity': 'CRITICAL',
+                         'user_id': 'test_user',
+                         'current_count': 3,
+                         'max_positions': 2,
                          'excess_count': 1}
 ```
 

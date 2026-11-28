@@ -142,22 +142,22 @@ print(f"Active layers: {metrics.active_layers}")
 class MyTradingBot:
     def __init__(self):
         self.stack = create_optimization_stack(enable_all=True)
-    
+
     def execute_trade(self, symbol, account_balance):
         # Get market data
         market_data = self.get_market_data(symbol)
-        
+
         # Optimize entry timing
         entry_params = self.stack.optimize_entry_timing(market_data)
-        
+
         # Calculate base position size
         base_size = account_balance * 0.05
-        
+
         # Optimize position size
         position_size = self.stack.optimize_position_size(
             symbol, market_data, base_size
         )
-        
+
         # Place order with optimized parameters
         return self.place_order(symbol, position_size, entry_params)
 ```

@@ -443,28 +443,28 @@ while True:
     # Get market data
     df = get_market_data()
     indicators = calculate_indicators(df)
-    
+
     # 1. Classify market regime
     classification = system.classify_market_regime(df, indicators)
-    
+
     # 2. Update strategy performance
     for strategy_id, performance in get_strategy_performances().items():
         system.update_strategy_performance(strategy_id, performance)
-    
+
     # 3. Evolve strategies (if needed)
     if system.should_evolve():
         cycle = system.run_evolution_cycle()
-    
+
     # 4. Rebalance capital (if needed)
     if system.should_rebalance():
         plan = system.rebalance_capital()
-    
+
     # 5. Calculate ROI improvement
     roi_improvement = system.calculate_roi_improvement()
-    
+
     # 6. Save state
     system.save_state()
-    
+
     time.sleep(300)  # 5 minutes
 ```
 
@@ -483,14 +483,14 @@ class RegimeAwareStrategy:
             StrategyType.MEAN_REVERSION: MeanReversionStrategy(),
             # ... more strategies
         }
-    
+
     def generate_signal(self, df, indicators):
         # Classify regime
         classification = self.regime_classifier.classify_regime(df, indicators)
-        
+
         # Get appropriate strategy
         strategy = self.strategies[classification.recommended_strategy]
-        
+
         # Generate signal
         return strategy.generate_signal(df, indicators)
 ```
@@ -537,10 +537,10 @@ population = factory.create_initial_population()
 for strategy in population:
     # Convert strategy DNA to your strategy config
     config = strategy_dna_to_config(strategy)
-    
+
     # Backtest
     performance = backtest_your_strategy(config)
-    
+
     # Evaluate
     factory.evaluate_strategy(strategy, performance)
 
@@ -623,7 +623,7 @@ config = {
     'evolution_frequency_hours': 24,
     'regime_check_frequency_minutes': 5,
     'allocation_rebalance_hours': 12,
-    
+
     # Genetic Evolution
     'genetic_config': {
         'population_size': 50,
@@ -635,7 +635,7 @@ config = {
         'min_trades': 20,
         'max_dd_tolerance': 0.25,
     },
-    
+
     # Regime Classification
     'regime_config': {
         'lookback_period': 50,
@@ -643,7 +643,7 @@ config = {
         'regime_persistence': 5,
         'use_ml': True,
     },
-    
+
     # Capital Allocation
     'capital_config': {
         'total_capital': 10000.0,

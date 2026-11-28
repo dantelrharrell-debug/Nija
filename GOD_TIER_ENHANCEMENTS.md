@@ -153,14 +153,14 @@ if can_scale:
         conviction=conviction,
         account_balance=10000.0
     )
-    
+
     # Execute scale-in entry
     new_stop = pyramid.update_stop_loss_on_scale(
         position=current_position,
         scale_entry_price=102.0,
         atr=1.5
     )
-    
+
     print(f"Scale Size: ${scale_info['scale_size_usd']:.2f}")
     print(f"New Stop: ${new_stop:.4f}")
 ```
@@ -244,7 +244,7 @@ quality = msfilter.analyze_market_quality(
 if quality['can_trade']:
     print(f"Quality: {quality['overall_quality']}")
     print(f"Spread: {quality['spread']['spread_bps']:.1f} bps")
-    
+
     # Estimate market impact
     impact = msfilter.estimate_market_impact(
         order_size_usd=50000.0,
@@ -321,7 +321,7 @@ result = detector.detect_transition(
 if result['signal_strength'] in ['strong', 'critical']:
     print(f"⚠️  {result['transition_type'].upper()}")
     print(f"Probability: {result['probability_score']*100:.1f}%")
-    
+
     # Act on recommendations
     for rec in result['recommendations']:
         print(f"  • {rec}")
@@ -416,7 +416,7 @@ position = {
 # In your position monitoring loop
 while position_open:
     current_price = get_current_price()
-    
+
     # Check adaptive profit targets
     should_exit, level, exit_pct = profit_engine.should_exit_at_target(
         current_price=current_price,
@@ -424,10 +424,10 @@ while position_open:
         side=position['side'],
         adaptive_targets=position['adaptive_targets']
     )
-    
+
     if should_exit:
         exit_partial_position(exit_pct, f"Hit {level}")
-    
+
     # Check for scaling opportunity
     can_scale, reason, conviction = pyramid_system.can_scale_position(
         position=position,
@@ -437,7 +437,7 @@ while position_open:
         account_balance=account_balance,
         current_exposure=current_exposure
     )
-    
+
     if can_scale:
         scale_info = pyramid_system.calculate_scale_size(
             position=position,
@@ -445,7 +445,7 @@ while position_open:
             account_balance=account_balance
         )
         execute_scale_entry(scale_info)
-        
+
         # Update stop loss
         new_stop = pyramid_system.update_stop_loss_on_scale(
             position=position,
@@ -453,14 +453,14 @@ while position_open:
             atr=current_atr
         )
         update_stop_loss(new_stop)
-    
+
     # Monitor for regime transitions
     transition = transition_detector.detect_transition(
         df=df,
         indicators=indicators,
         current_regime=current_regime
     )
-    
+
     if transition['signal_strength'] == 'critical':
         # React to imminent regime change
         handle_regime_transition(transition)

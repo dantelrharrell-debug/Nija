@@ -35,11 +35,11 @@ class TradingStrategy:
     def __init__(self, ...):
         # Initialize entry discipline
         self.entry_discipline = InstitutionalEntryDiscipline()
-    
+
     def _evaluate_entry_signal(self, symbol, current_data):
         """
         Evaluate entry signal before execution
-        
+
         This gates ALL entries with institutional discipline
         """
         # Extract signal metrics from current_data
@@ -59,16 +59,16 @@ class TradingStrategy:
             max_correlation=self._calculate_max_correlation(symbol),
             hours_since_news=self._hours_since_last_news(symbol)
         )
-        
+
         # Evaluate against hard criteria
         evaluation = self.entry_discipline.evaluate_entry(symbol, signal_quality)
-        
+
         if evaluation.decision != EntryDecision.APPROVED:
             logger.info(f"🚫 Entry rejected for {symbol}: {evaluation.decision.value}")
             for reason in evaluation.rejection_reasons:
                 logger.info(f"   - {reason}")
             return False, evaluation.rejection_reasons[0] if evaluation.rejection_reasons else "Criteria not met"
-        
+
         logger.info(f"✅ Entry approved for {symbol} (score: {evaluation.overall_score:.2%})")
         return True, "Entry criteria met"
 ```
@@ -81,36 +81,36 @@ Add these helper methods to your TradingStrategy class:
 def _calculate_signal_strength(self, data) -> float:
     """
     Calculate overall signal strength (0-1)
-    
+
     Combines multiple indicators into single strength score
     """
     rsi = self._get_rsi(data)
     macd = self._get_macd(data)
     volume = self._get_volume_indicator(data)
-    
+
     # Example: Weighted combination
     strength = 0.0
-    
+
     # RSI strength (stronger at extremes)
     if rsi < 30:
         strength += 0.4  # Strong oversold
     elif rsi < 40:
         strength += 0.2  # Mild oversold
-    
+
     # MACD confirmation
     if macd > 0 and macd > macd_signal:
         strength += 0.3
-    
+
     # Volume confirmation
     if volume > volume_avg * 1.2:
         strength += 0.3
-    
+
     return min(strength, 1.0)
 
 def _count_confirming_indicators(self, data) -> int:
     """Count how many indicators confirm the signal"""
     confirmations = 0
-    
+
     if self._check_rsi_oversold(data):
         confirmations += 1
     if self._check_trend_alignment(data):
@@ -119,7 +119,7 @@ def _count_confirming_indicators(self, data) -> int:
         confirmations += 1
     if self._check_momentum(data):
         confirmations += 1
-    
+
     return confirmations
 
 def _check_rsi_oversold(self, data) -> bool:
@@ -152,23 +152,23 @@ def _calculate_risk_reward(self, data) -> float:
     entry_price = data['close'].iloc[-1]
     stop_loss = self._calculate_stop_loss(data)
     take_profit = self._calculate_take_profit(data)
-    
+
     risk = abs(entry_price - stop_loss)
     reward = abs(take_profit - entry_price)
-    
+
     return reward / risk if risk > 0 else 0
 
 def _calculate_stop_distance(self, data) -> float:
     """Calculate stop loss distance as percentage"""
     entry_price = data['close'].iloc[-1]
     stop_loss = self._calculate_stop_loss(data)
-    
+
     return abs(entry_price - stop_loss) / entry_price
 
 def _detect_regime(self, data) -> str:
     """
     Detect current market regime
-    
+
     Returns: 'bull', 'bear', or 'sideways'
     """
     # Use existing market_regime_detector if available
@@ -180,7 +180,7 @@ def _detect_regime(self, data) -> str:
         # Fallback: Simple regime detection
         ma_50 = data['close'].rolling(50).mean().iloc[-1]
         ma_200 = data['close'].rolling(200).mean().iloc[-1]
-        
+
         if ma_50 > ma_200 * 1.02:
             return 'bull'
         elif ma_50 < ma_200 * 0.98:
@@ -219,14 +219,14 @@ def _calculate_max_correlation(self, symbol) -> float:
     """Calculate max correlation with existing positions"""
     if not self.open_positions:
         return 0.0
-    
+
     # Compare with each existing position
     max_corr = 0.0
     for pos in self.open_positions:
         if pos.symbol != symbol:
             corr = self._calculate_correlation(symbol, pos.symbol)
             max_corr = max(max_corr, abs(corr))
-    
+
     return max_corr
 
 def _calculate_correlation(self, symbol1, symbol2, periods=30) -> float:
@@ -254,10 +254,10 @@ class TradingStrategy:
     def __init__(self, ...):
         # Layer 1: Market Readiness (global market conditions)
         self.market_readiness = MarketReadinessGate()
-        
+
         # Layer 2: Entry Discipline (per-trade criteria)
         self.entry_discipline = InstitutionalEntryDiscipline()
-    
+
     def should_take_entry(self, symbol, data):
         """
         Two-layer entry gating:
@@ -269,13 +269,13 @@ class TradingStrategy:
         if market_mode == MarketMode.IDLE:
             logger.info("🚫 Entry blocked: Market in IDLE mode")
             return False, "Market not ready"
-        
+
         # Layer 2: Check entry discipline
         eligible, reason = self._evaluate_entry_signal(symbol, data)
         if not eligible:
             logger.info(f"🚫 Entry blocked: {reason}")
             return False, reason
-        
+
         return True, "All criteria met"
 ```
 
@@ -420,36 +420,36 @@ from institutional_entry_discipline import EntryDecision
 def test_entry_discipline_rejects_low_signal():
     """Test that low signal strength is rejected"""
     strategy = TradingStrategy()
-    
+
     # Create data with weak signal
     data = create_weak_signal_data()
-    
+
     eligible, reason = strategy.should_take_entry('BTC-USD', data)
-    
+
     assert not eligible
     assert 'signal strength' in reason.lower()
 
 def test_entry_discipline_rejects_unfavorable_regime():
     """Test that bear market entries are rejected (if configured)"""
     strategy = TradingStrategy()
-    
+
     # Create data in bear market
     data = create_bear_market_data()
-    
+
     eligible, reason = strategy.should_take_entry('BTC-USD', data)
-    
+
     assert not eligible
     assert 'regime' in reason.lower()
 
 def test_entry_discipline_approves_good_signal():
     """Test that good signals are approved"""
     strategy = TradingStrategy()
-    
+
     # Create data with strong signal
     data = create_strong_signal_data()
-    
+
     eligible, reason = strategy.should_take_entry('BTC-USD', data)
-    
+
     assert eligible
 ```
 
@@ -461,22 +461,22 @@ Test with historical data:
 def test_entry_discipline_with_historical_data():
     """Test entry discipline with real historical data"""
     strategy = TradingStrategy()
-    
+
     # Load historical data
     data = load_historical_data('BTC-USD', days=30)
-    
+
     approved_count = 0
     rejected_count = 0
-    
+
     for i in range(len(data) - 50):
         window = data.iloc[i:i+50]
         eligible, reason = strategy.should_take_entry('BTC-USD', window)
-        
+
         if eligible:
             approved_count += 1
         else:
             rejected_count += 1
-    
+
     # Should have reasonable approval rate (10-30%)
     approval_rate = approved_count / (approved_count + rejected_count)
     assert 0.10 <= approval_rate <= 0.30

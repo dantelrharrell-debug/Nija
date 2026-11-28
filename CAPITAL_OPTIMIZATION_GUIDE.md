@@ -224,7 +224,7 @@ if params['can_trade']:
     print(f"Stop Loss: ${params['stop_loss']:.2f}")
     print(f"Profit Target: ${params['profit_target']:.2f}")
     print(f"Risk:Reward = 1:{params['risk_reward_ratio']:.2f}")
-    
+
     # After trade execution, record result
     optimizer.record_trade_result(
         entry_price=params['entry_price'],

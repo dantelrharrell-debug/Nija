@@ -150,12 +150,12 @@ Create `test_websocket.html`:
 
     <script>
         const socket = io('https://your-api-url');
-        
+
         socket.on('connect', () => {
             document.getElementById('status').textContent = 'Connected!';
             console.log('Connected to NIJA');
         });
-        
+
         socket.on('disconnect', () => {
             document.getElementById('status').textContent = 'Disconnected';
         });

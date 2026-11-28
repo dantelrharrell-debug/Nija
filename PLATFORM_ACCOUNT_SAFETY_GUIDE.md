@@ -283,18 +283,18 @@ print(f"Positions sold: {result['sold']}")
 # Graceful degradation pattern
 try:
     price = broker.get_current_price(symbol)
-    
+
     if price is None:
         # Fallback for symbol mismatch
         logger.warning(f"Symbol mismatch for {symbol}, using fallback")
         price = 1.0  # Conservative estimate
-        
+
 except ConnectionError as e:
     # Broker disconnected
     logger.error(f"Broker connection failed: {e}")
     # Continue with other operations
     return None
-    
+
 except Exception as e:
     # Unknown error
     logger.error(f"Unexpected error: {e}")
@@ -520,7 +520,7 @@ logger = logging.getLogger("normalization")
 
 def normalize_all_accounts():
     """Run normalization across all user accounts."""
-    
+
     results = {
         'accounts_processed': 0,
         'total_positions_before': 0,
@@ -529,54 +529,54 @@ def normalize_all_accounts():
         'cap_enforcements': 0,
         'errors': []
     }
-    
+
     # Get all user brokers
     user_brokers = multi_account_broker_manager.user_brokers
-    
+
     logger.info("=" * 70)
     logger.info("ONE-TIME NORMALIZATION - ALL ACCOUNTS")
     logger.info("=" * 70)
-    
+
     for user_id, broker in user_brokers.items():
         try:
             logger.info(f"\nProcessing user: {user_id}")
-            
+
             # Connect to broker
             if not broker.connect():
                 logger.error(f"  Failed to connect broker for {user_id}")
                 results['errors'].append(f"{user_id}: Connection failed")
                 continue
-            
+
             # Get positions before
             positions_before = broker.get_positions()
             results['total_positions_before'] += len(positions_before)
-            
+
             logger.info(f"  Positions before: {len(positions_before)}")
-            
+
             # Run enforcement
             enforcer = PositionCapEnforcer(max_positions=5, broker=broker)
             success, result = enforcer.enforce_cap()
-            
+
             # Record results
             results['accounts_processed'] += 1
             results['total_positions_after'] += result['max_allowed']
-            
+
             if result['excess'] > 0:
                 results['cap_enforcements'] += 1
                 logger.info(f"  Cap enforced: {result['sold']}/{result['excess']} positions sold")
-            
+
             # Check dust blacklist
             blacklist = get_dust_blacklist()
             stats = blacklist.get_stats()
             results['dust_excluded'] += stats['count']
-            
+
             logger.info(f"  Positions after: {result['max_allowed']}")
             logger.info(f"  Dust excluded: {stats['count']}")
-            
+
         except Exception as e:
             logger.error(f"  Error processing {user_id}: {e}")
             results['errors'].append(f"{user_id}: {str(e)}")
-    
+
     # Print summary
     logger.info("\n" + "=" * 70)
     logger.info("NORMALIZATION COMPLETE")
@@ -587,27 +587,27 @@ def normalize_all_accounts():
     logger.info(f"Dust Excluded: {results['dust_excluded']}")
     logger.info(f"Cap Enforcements: {results['cap_enforcements']}")
     logger.info(f"Errors: {len(results['errors'])}")
-    
+
     if results['errors']:
         logger.warning("\nErrors encountered:")
         for error in results['errors']:
             logger.warning(f"  - {error}")
-    
+
     logger.info("=" * 70)
-    
+
     return results
 
 if __name__ == '__main__':
     results = normalize_all_accounts()
-    
+
     # Save results to file
     import json
     from datetime import datetime
-    
+
     filename = f"normalization_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with open(filename, 'w') as f:
         json.dump(results, f, indent=2)
-    
+
     logger.info(f"\nResults saved to: {filename}")
 ```
 

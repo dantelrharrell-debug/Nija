@@ -97,7 +97,7 @@ useEffect(() => {
     const data = await res.json();
     if (data.success) setTrade(data.data);
   };
-  
+
   const interval = setInterval(fetchTrade, 5000);
   fetchTrade();
   return () => clearInterval(interval);

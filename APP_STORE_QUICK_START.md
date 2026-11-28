@@ -118,7 +118,7 @@ EOF
 # ═══════════════════════════════════════════════════════════
 #    Credentials: ✅ CONFIGURED
 #    LIVE_CAPITAL_VERIFIED: ❌ FALSE (safety lock enabled)
-#    
+#
 #    📡 Bot will connect and show data
 #    🚫 NO TRADES will be executed
 ```

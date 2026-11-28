@@ -160,13 +160,13 @@ NIJA enforces **mandatory tier-based position sizing** to ensure appropriate ris
 # Example: Tier-based validation
 if trade_size > tier.max_trade_size:
     REJECT: "Trade size exceeds tier limit"
-    
+
 if open_positions >= tier.max_positions:
     REJECT: "Maximum positions reached for tier"
-    
+
 if trade_size < exchange.minimum_order_size:
     REJECT: "Trade too small for exchange requirements"
-    
+
 if estimated_fees > trade_profit_potential * 0.3:
     REJECT: "Fees would consume >30% of potential profit"
 ```
@@ -204,10 +204,10 @@ Users can graduate to higher tiers through:
 # Automatic position closure triggers
 if position.unrealized_loss_pct > 10%:
     FORCE_CLOSE: "10% loss limit exceeded"
-    
+
 if position.hours_open > 72 and position.pnl < 0:
     WARN: "Stale losing position (>3 days)"
-    
+
 if position.price_change_5min < -5%:
     TIGHTEN_STOP: "Rapid adverse movement detected"
 ```
@@ -225,10 +225,10 @@ if position.price_change_5min < -5%:
 # Account circuit breakers
 if account.total_unrealized_loss_pct > 8%:
     HALT_NEW_POSITIONS: "8% account drawdown - 24hr pause"
-    
+
 if account.daily_loss_pct > 5%:
     REDUCE_SIZES: "Daily loss limit - position sizes halved"
-    
+
 if account.losing_trades_consecutive > 5:
     REVIEW_MODE: "5 consecutive losses - manual review required"
 ```

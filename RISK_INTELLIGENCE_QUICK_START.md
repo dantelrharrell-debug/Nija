@@ -143,7 +143,7 @@ The risk gate checks TWO things:
 def bot_startup():
     protocol = LegacyPositionExitProtocol(...)
     state, _ = protocol.verify_clean_state()
-    
+
     if state != AccountState.CLEAN:
         protocol.run_full_protocol()
 ```
@@ -152,10 +152,10 @@ def bot_startup():
 ```python
 def execute_trade(symbol, size):
     approved, _ = risk_gate.pre_trade_risk_assessment(...)
-    
+
     if not approved:
         return None  # Reject trade
-    
+
     return broker.place_order(...)
 ```
 
@@ -182,7 +182,7 @@ python run_legacy_exit_protocol.py
 **Solution**: Close some correlated positions first, or pick different asset
 
 ### High-exposure alert
-**Solution**: 
+**Solution**:
 - If CRITICAL: Reduce position size immediately
 - If WARNING: Monitor closely, tighten stops
 

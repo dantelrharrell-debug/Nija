@@ -220,18 +220,18 @@ Example:
 All enforcement actions are logged with clear messages:
 
 ```
-⚠️ SOFT LIMIT WARNING for BTC-USD: Position 4.50% exceeds soft limit 4%. 
+⚠️ SOFT LIMIT WARNING for BTC-USD: Position 4.50% exceeds soft limit 4%.
    REDUCING position size by 50% to 2.25%
 
-🚫 HARD LIMIT BLOCK for ETH-USD: Position 6.00% exceeds hard limit 5%. 
+🚫 HARD LIMIT BLOCK for ETH-USD: Position 6.00% exceeds hard limit 5%.
    NO NEW POSITIONS ALLOWED.
 
-⚠️ SOFT SECTOR LIMIT WARNING for ADA-USD (Layer-1 (Alternative)): 
-   Projected 17.0% exceeds soft limit 15%. 
+⚠️ SOFT SECTOR LIMIT WARNING for ADA-USD (Layer-1 (Alternative)):
+   Projected 17.0% exceeds soft limit 15%.
    REDUCING position size by 50%: $700.00 → $350.00
 
-🚫 HARD SECTOR LIMIT BLOCK for AVAX-USD (Layer-1 (Alternative)): 
-   Projected 21.0% exceeds hard limit 20%. 
+🚫 HARD SECTOR LIMIT BLOCK for AVAX-USD (Layer-1 (Alternative)):
+   Projected 21.0% exceeds hard limit 20%.
    NO NEW ENTRIES IN THIS SECTOR.
 ```
 

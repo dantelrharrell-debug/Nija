@@ -108,7 +108,7 @@ from example_legacy_protocol_integration import integrate_with_trading_loop
 cycle_count = 0
 while trading:
     # Trading logic...
-    
+
     cycle_count += 1
     if cycle_count % 10 == 0:
         if not integrate_with_trading_loop():

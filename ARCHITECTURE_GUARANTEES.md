@@ -15,7 +15,7 @@ NIJA's architecture provides two fundamental guarantees that ensure fair, indepe
   - Position sizing is scaled to individual account balances
   - Risk management is applied per account
 
-- **Code Architecture:** 
+- **Code Architecture:**
   - Separate broker dictionaries: `platform_brokers` vs `user_brokers`
   - Account type tagging on every broker instance
   - Independent trading loops per user thread

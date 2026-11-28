@@ -252,7 +252,7 @@ strategy = recommendation.recommended_strategy_id
 position_sizes = recommendation.recommended_position_sizes
 
 # Record trades for learning
-god_mode.record_trade_entry(trade_id, market_data, indicators, 
+god_mode.record_trade_entry(trade_id, market_data, indicators,
                              strategy, entry_price, params)
 god_mode.record_trade_exit(trade_id, market_data, indicators,
                             exit_price, profit_loss, params)
@@ -285,14 +285,14 @@ GOD_MODE_CONFIG = {
     'enable_walk_forward': True,
     'enable_risk_parity': True,
     'enable_live_rl': True,
-    
+
     # Sub-system configs
     'bayesian_config': {...},
     'meta_optimizer_config': {...},
     'walk_forward_config': {...},
     'risk_parity_config': {...},
     'live_rl_config': {...},
-    
+
     # Integration settings
     'use_regime_weighted_params': True,
     'use_ensemble_params': True,

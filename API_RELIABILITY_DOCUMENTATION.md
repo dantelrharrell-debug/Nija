@@ -99,13 +99,13 @@ class BaseBroker(ABC):
     def __init__(self, broker_type, account_type, user_id):
         # ... existing code ...
         self.circuit_breaker = get_circuit_breaker(broker_name)
-    
+
     def get_broker_health_state(self) -> Optional[str]:
         """Get current health state"""
-    
+
     def is_trading_allowed(self) -> bool:
         """Check if trading allowed based on health"""
-    
+
     def _call_with_circuit_breaker(self, func, *args, **kwargs):
         """Execute API call with circuit breaker protection"""
 ```
@@ -151,22 +151,22 @@ status = breaker.get_status()
 ```python
 def enforce_cap(self) -> Tuple[bool, Dict]:
     max_enforcement_cycles = 3
-    
+
     for cycle in range(1, max_enforcement_cycles + 1):
         positions = self.get_current_positions()
         current_count = len(positions)
-        
+
         if current_count <= self.max_positions:
             return True, {'status': 'compliant', ...}
-        
+
         # Liquidate excess
         self._liquidate_smallest_positions(positions, excess)
-        
+
         # Wait for settlement
         time.sleep(3)
-        
+
         # Re-fetch for verification (loop continues)
-    
+
     # Failed after max cycles
     logger.error("🛑 TRADING HALTED until manual intervention")
     return False, {

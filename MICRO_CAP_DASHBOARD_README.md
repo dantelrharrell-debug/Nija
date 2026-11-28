@@ -212,13 +212,13 @@ If these components are not available, the dashboard falls back to mock data for
 
 ### Cannot connect to API
 **Cause**: Dashboard server not running or port conflict
-**Solution**: 
+**Solution**:
 1. Check if server is running
 2. Try a different port: `DASHBOARD_PORT=8080 ./start_micro_cap_dashboard.sh`
 
 ### Metrics not updating
 **Cause**: Auto-refresh failed or connection lost
-**Solution**: 
+**Solution**:
 1. Check network connection indicator (red = disconnected)
 2. Refresh the page manually
 3. Check server logs for errors

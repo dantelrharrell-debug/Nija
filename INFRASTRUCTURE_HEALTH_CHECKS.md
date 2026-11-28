@@ -50,7 +50,7 @@ NIJA now implements a production-ready health check system that properly disting
 
 **Purpose**: Indicates if the service is ready to handle traffic/trades.
 
-**HTTP Status**: 
+**HTTP Status**:
 - `200 OK` - Service is ready
 - `503 Service Unavailable` - Not ready or configuration error
 

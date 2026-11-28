@@ -86,7 +86,7 @@ def get_individual_user_config_loader(hard_fail: bool = None, require_api_keys: 
 
 **Example Production Error:**
 ```
-❌ HARD FAIL: Invalid users: daivon_frazier (Missing API keys in environment), 
+❌ HARD FAIL: Invalid users: daivon_frazier (Missing API keys in environment),
               tania_gilbert (Missing API keys in environment)
 
 REQUIRED ACTIONS:

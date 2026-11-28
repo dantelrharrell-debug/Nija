@@ -26,7 +26,7 @@ Adaptive profit-taking via reward maximization using Q-learning. The system lear
 
 ### Reward Function
 ```
-reward = (realized_profit * scale) 
+reward = (realized_profit * scale)
          - (opportunity_cost * penalty)
          - (early_exit_penalty if applicable)
          + (bonus for avoiding losses)

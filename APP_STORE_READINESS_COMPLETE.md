@@ -48,7 +48,7 @@ NIJA has been prepared for App Store submission with all required legal, complia
 **Key Risk Disclosures:**
 
 ```
-⚠️ Trading involves risk of loss. Past performance does not 
+⚠️ Trading involves risk of loss. Past performance does not
    guarantee future results.
 ```
 

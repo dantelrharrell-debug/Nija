@@ -59,9 +59,9 @@ STEP 4: Guardrail Verification & Status Recording
 
 ```python
 def adopt_existing_positions(
-    self, 
-    broker, 
-    broker_name: str = "UNKNOWN", 
+    self,
+    broker,
+    broker_name: str = "UNKNOWN",
     account_id: str = "PLATFORM"
 ) -> dict
 ```

@@ -227,12 +227,12 @@ namie = NAMIEIntegration()
 # In trading loop
 for symbol in trading_pairs:
     signal = namie.analyze(df, indicators, symbol)
-    
+
     if signal.should_trade:
         size = namie.adjust_position_size(signal, base_size)
         rsi_ranges = namie.get_adaptive_rsi_ranges(signal)
         execute_trade(symbol, size, rsi_ranges)
-        
+
         # After exit
         namie.record_trade_result(signal, entry, exit, side, size, commission)
 ```
@@ -277,12 +277,12 @@ config = {
     'min_regime_confidence': 0.6,   # 60% confidence required
     'min_trend_strength': 40,       # 40/100 trend score required
     'max_chop_score': 60,           # Block if chop > 60
-    
+
     # Strategy switching
     'min_trades_for_switch': 10,
     'switch_threshold_win_rate': 0.45,
     'max_strategy_drawdown': 0.15,
-    
+
     # Integration
     'respect_namie_decisions': True,
     'override_position_sizing': True,

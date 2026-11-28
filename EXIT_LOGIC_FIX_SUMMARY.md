@@ -72,9 +72,9 @@ if not self.apex:
 try:
     # STEP 1: Manage existing positions (check for exits/profit taking)
     logger.info(f"📊 Managing {len(current_positions)} open position(s)...")
-    
+
     # ... all position management logic ...
-    
+
 except Exception as exit_err:
     logger.error("=" * 80)
     logger.error("🚨 POSITION MANAGEMENT ERROR")
@@ -153,13 +153,13 @@ class ContinuousExitEnforcer:
             daemon=True  # Dies when main process exits
         )
         self._monitor_thread.start()
-    
+
     def _monitor_loop(self):
         """Main monitoring loop"""
         while not self._stop_event.is_set():
             # Check positions
             self._check_and_enforce_positions()
-            
+
             # Sleep in small increments for quick shutdown
             time.sleep(sleep_interval)
 ```
@@ -173,7 +173,7 @@ def _enforce_position_cap(self, broker, positions, excess):
         positions,
         key=lambda p: p.get('quantity', 0) * p.get('price', 0)
     )
-    
+
     # Close excess positions
     for pos in sorted_positions[:excess]:
         broker.place_market_order(

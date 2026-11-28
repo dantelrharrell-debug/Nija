@@ -331,33 +331,33 @@ from bot.trade_distribution_stability import TradeDistributionStabilityEngine
 
 class InstitutionalRiskManager(AdaptiveRiskManager):
     """Enhanced risk manager with institutional-grade features"""
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         # Initialize institutional modules
         self.risk_of_ruin = RiskOfRuinEngine()
         self.vol_targeting = VolatilityTargetingEngine()
         self.stability_tester = TradeDistributionStabilityEngine()
-    
+
     def evaluate_strategy_risk(self, strategy_stats):
         """Comprehensive risk evaluation"""
-        
+
         # Risk-of-ruin analysis
         ruin_result = self.risk_of_ruin.analyze()
-        
+
         # Volatility targeting
         vol_result = self.vol_targeting.target_volatility()
-        
+
         # Distribution stability
         stability_result = self.stability_tester.analyze_stability()
-        
+
         # Combine results for position sizing
         recommended_size = min(
             ruin_result.recommended_position_size_pct,
             vol_result.recommended_position_size_pct
         )
-        
+
         return {
             'recommended_position_size': recommended_size,
             'ruin_probability': ruin_result.simulated_ruin_probability,
@@ -371,19 +371,19 @@ class InstitutionalRiskManager(AdaptiveRiskManager):
 ```python
 def monitor_institutional_metrics():
     """Monitor institutional-grade risk metrics"""
-    
+
     # Daily risk-of-ruin check
     if ruin_probability > 0.05:
         send_alert("Risk-of-ruin exceeds 5%")
-    
+
     # Volatility regime monitoring
     if volatility_regime == "extreme_vol":
         reduce_exposure()
-    
+
     # Distribution stability check
     if not distribution_stable:
         send_alert("Strategy distribution unstable - review required")
-    
+
     # Weekly liquidity stress test
     if day_of_week == "Sunday":
         run_liquidity_stress_test()

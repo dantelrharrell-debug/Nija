@@ -293,7 +293,7 @@ from bot.entry_quality_audit import get_entry_quality_scorer
 if is_feature_enabled(FeatureFlag.ENTRY_QUALITY_AUDIT):
     scorer = get_entry_quality_scorer()
     audit = scorer.score_entry(...)
-    
+
     if not audit['passed']:
         logger.info(f"Entry rejected - quality score: {audit['total_score']}/100")
         return  # Skip this entry
@@ -452,7 +452,7 @@ from bot.dynamic_stop_manager import get_dynamic_stop_manager
 # In stop management logic
 if is_feature_enabled(FeatureFlag.DYNAMIC_STOP_EXPANSION):
     manager = get_dynamic_stop_manager()
-    
+
     # On entry
     stop_info = manager.calculate_initial_stop(
         position_id=position_id,
@@ -460,7 +460,7 @@ if is_feature_enabled(FeatureFlag.DYNAMIC_STOP_EXPANSION):
         entry_price=entry_price,
         signal_type=signal_type
     )
-    
+
     # On update
     updated_stop = manager.update_stop(
         position_id=position_id,

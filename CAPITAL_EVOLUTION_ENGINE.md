@@ -210,28 +210,28 @@ evolution_engine = get_singleton_evolution_engine(
 def execute_trade_logic():
     # Get current balance
     current_balance = get_account_balance()
-    
+
     # Update evolution engine
     evolution_engine.update_capital(current_balance)
-    
+
     # Get current configuration
     max_positions = evolution_engine.get_max_positions()
     risk_pct = evolution_engine.get_risk_per_trade_pct()
-    
+
     # Count open positions
     open_positions = get_open_position_count()
-    
+
     # Check if we can open new position
     if open_positions >= max_positions:
         logger.info(f"Position limit reached ({max_positions} at {evolution_engine.current_mode.value})")
         return
-    
+
     # Calculate position size with evolution risk %
     position_size = calculate_position_size(
         balance=current_balance,
         risk_pct=risk_pct
     )
-    
+
     # Execute trade...
 ```
 
@@ -253,7 +253,7 @@ After growth to $500 (ADVANCED MODE)
   - 4% risk per trade (same)
   - Copy trading ENABLED ✅
   - No leverage
-  
+
 After growth to $1000 (ELITE MODE)
   - 6 positions max (+2)
   - 5% risk per trade (+1%)

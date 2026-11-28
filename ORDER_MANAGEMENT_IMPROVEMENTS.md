@@ -316,10 +316,10 @@ Add to status dashboards:
 def print_account_status(account_id):
     order_tracker = get_order_tracker()
     perf_tracker = get_performance_tracker()
-    
+
     stats = order_tracker.get_account_stats(account_id)
     metrics = perf_tracker.get_metrics(account_id)
-    
+
     print(f"\n{account_id} Status:")
     print(f"  Open Orders: {stats.total_open_orders}")
     print(f"  Held Capital: ${stats.total_held_capital:.2f}")
