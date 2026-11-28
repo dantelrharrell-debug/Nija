@@ -10,6 +10,7 @@ import sqlite3
 import stat
 import sys
 from tempfile import TemporaryDirectory
+import time
 
 from scripts import nija_trade_ledger_snapshot_v436 as snapshot
 from scripts.nija_kraken_submission_validation import has_invalid_terminal_metadata
@@ -60,7 +61,7 @@ def _verify_account_journal(archive: Path, *, expected_sha256: str, exercise_res
                    LIMIT 1"""
             ).fetchone() is not None:
                 raise ValueError("submission journal contains terminal evidence without a broker order reference")
-            if has_invalid_terminal_metadata(db):
+            if has_invalid_terminal_metadata(db, now=time.time()):
                 raise ValueError("submission journal contains invalid terminal evidence metadata")
 
 

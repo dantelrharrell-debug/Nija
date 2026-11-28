@@ -1,11 +1,10 @@
 """Read-only validation shared by the submission journal and backup verifier."""
 
 import sqlite3
-import time
 
 
-def has_invalid_terminal_metadata(db: sqlite3.Connection) -> bool:
-    """Check terminal metadata within the caller's consistent database view."""
+def has_invalid_terminal_metadata(db: sqlite3.Connection, *, now: float) -> bool:
+    """Check terminal metadata using the caller's database view and clock."""
     return db.execute(
         """SELECT 1 FROM submission_resolution AS r
            JOIN submission AS s ON s.intent_id=r.intent_id
@@ -26,5 +25,5 @@ def has_invalid_terminal_metadata(db: sqlite3.Connection) -> bool:
                0
            )
            LIMIT 1""",
-        (time.time(),),
+        (now,),
     ).fetchone() is not None

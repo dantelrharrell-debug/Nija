@@ -90,7 +90,7 @@ class KrakenSubmissionJournal:
             raise SubmissionDenied("submission journal contains terminal evidence without a reservation")
         if invalid is not None:
             raise SubmissionDenied("submission journal contains terminal evidence without a broker order reference")
-        if has_invalid_terminal_metadata(db):
+        if has_invalid_terminal_metadata(db, now=time.time()):
             raise SubmissionDenied("submission journal contains invalid terminal evidence metadata")
 
     def _client_order_id(self, intent_id: str) -> str:
